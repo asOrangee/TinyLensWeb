@@ -1,0 +1,169 @@
+schema_version = "system_inspector_golden.v4"
+agent_config = "../agents/system-inspector.toml"
+output_schema = "system-inspector-output.schema.json"
+default_output_root = "../../output/system_inspector_evals"
+
+# These 18 single-deflector cases were reviewed against the production two-panel prompt.
+# Every displayed segmentation not assigned to the lens system is a golden contaminant ID.
+
+[[cases]]
+lens_id = "102018665_NEG570040238507752998"
+source_image = "images/102018665_NEG570040238507752998_2panel.png"
+image = "images/102018665_NEG570040238507752998_2panel.png"
+image_sha256 = "88b5093f0463124d2c0cd0c3d07bd51bf4a682b874c7b63719bd22d22811e34f"
+expected_disposition = "model"
+expected_contaminant_ids = []
+focus = ["preserve the lens-light-blended partial ring"]
+
+[[cases]]
+lens_id = "102018665_NEG576731213511114485"
+source_image = "images/102018665_NEG576731213511114485_2panel.png"
+image = "images/102018665_NEG576731213511114485_2panel.png"
+image_sha256 = "9821d14d8f2daa7213b97803339513b76ee6ad006727c8f645966b03e03b35d7"
+expected_disposition = "model"
+expected_contaminant_ids = [8, 10, 15]
+focus = ["retain the central ring and inventory every displayed non-lens segment"]
+
+[[cases]]
+lens_id = "102018666_NEG579859279508531437"
+source_image = "images/102018666_NEG579859279508531437_2panel.png"
+image = "images/102018666_NEG579859279508531437_2panel.png"
+image_sha256 = "b3c3a957d8a3f2178eeebdb7766e530f66955410800dc59d7c6c4a9b0beb54d5"
+expected_disposition = "model"
+expected_contaminant_ids = [18, 23, 26, 27]
+focus = ["preserve IDs 55 and 56 as lensed images and include every outer non-lens segment"]
+
+[[cases]]
+lens_id = "102018667_NEG587746535508057234"
+source_image = "images/102018667_NEG587746535508057234_2panel.png"
+image = "images/102018667_NEG587746535508057234_2panel.png"
+image_sha256 = "24f769d2b1a238096209aade60d5fe26029921b25a5b4f40f430d111128406b4"
+expected_disposition = "model"
+expected_contaminant_ids = []
+focus = ["recognize a clean near-complete elliptical ring"]
+
+[[cases]]
+lens_id = "102019123_NEG564667438505382529"
+source_image = "images/102019123_NEG564667438505382529_2panel.png"
+image = "images/102019123_NEG564667438505382529_2panel.png"
+image_sha256 = "2e58d18ecfb15d842b9644ae71d2cef321021eb7cf012a9a3d0930a45d2a9d84"
+expected_disposition = "model"
+expected_contaminant_ids = [7, 8, 10, 12, 13, 15, 16, 17, 18, 20, 34, 35, 38]
+focus = ["preserve IDs 37 and 39 as lensed-image structure and inventory all other displayed segments"]
+
+[[cases]]
+lens_id = "102019123_NEG567245233502945885"
+source_image = "images/102019123_NEG567245233502945885_2panel.png"
+image = "images/102019123_NEG567245233502945885_2panel.png"
+image_sha256 = "03b1c0385186f53949ef9590783a2c4550622b318e1e262121a87c8fc93f2527"
+expected_disposition = "model"
+expected_contaminant_ids = [7, 16, 17, 35, 36, 37, 38, 39]
+focus = ["inventory the full off-centre northern source"]
+
+[[cases]]
+lens_id = "102019125_NEG586359480506090347"
+source_image = "images/102019125_NEG586359480506090347_2panel.png"
+image = "images/102019125_NEG586359480506090347_2panel.png"
+image_sha256 = "5c73c5f2abea009c8b4d1a3bbda47925da4f6fe9bff79d21631218189613d041"
+expected_disposition = "model"
+expected_contaminant_ids = [10, 12, 13, 22, 25, 29, 34]
+focus = ["preserve IDs 30 through 33 as lens-system structure and include outer ID 13"]
+
+[[cases]]
+lens_id = "102019126_NEG589666030505609975"
+source_image = "images/102019126_NEG589666030505609975_2panel.png"
+image = "images/102019126_NEG589666030505609975_2panel.png"
+image_sha256 = "7d9946781b693c12d2e509afd3ff2ba0efd98eb1d3065ced6fc382dd7c8f1fa4"
+expected_disposition = "model"
+expected_contaminant_ids = [16, 17, 20, 21, 44, 45, 46]
+focus = ["separate the central rim from the northern stellar structure and include outer ID 16"]
+
+[[cases]]
+lens_id = "102019127_NEG596525941504553950"
+source_image = "images/102019127_NEG596525941504553950_2panel.png"
+image = "images/102019127_NEG596525941504553950_2panel.png"
+image_sha256 = "975efc8b8ad02f35d86a72ed50ca31737b4e715afb9ad0e3f4accfbcef33a9ae"
+expected_disposition = "model"
+expected_contaminant_ids = [16, 19, 20, 23]
+focus = ["retain both sides of the lensed support and include every displayed non-lens segment"]
+
+[[cases]]
+lens_id = "102019127_NEG598523367504401932"
+source_image = "images/102019127_NEG598523367504401932_2panel.png"
+image = "images/102019127_NEG598523367504401932_2panel.png"
+image_sha256 = "35bea7e82f14f3ced12eff6b31faa9c180f5c2307f6683abc3a5e6bf93bc57ce"
+expected_disposition = "model"
+expected_contaminant_ids = [17, 19, 20, 21]
+focus = ["recognize the short lens-light-blended tangential arc and include outer ID 17"]
+
+[[cases]]
+lens_id = "102019128_NEG607555025503027911"
+source_image = "images/102019128_NEG607555025503027911_2panel.png"
+image = "images/102019128_NEG607555025503027911_2panel.png"
+image_sha256 = "f1a9ed412c980ae1fdc5d6cb6c96e66f466d73806d419866340a929f81b5e724"
+expected_disposition = "model"
+expected_contaminant_ids = [13, 15, 16, 17, 23, 24, 25, 40, 41]
+focus = ["retain the partial ring and identify all displayed off-geometry VIS sources"]
+
+[[cases]]
+lens_id = "102019129_NEG617672661504204895"
+source_image = "images/102019129_NEG617672661504204895_2panel.png"
+image = "images/102019129_NEG617672661504204895_2panel.png"
+image_sha256 = "861ebf34e90acd50d12bfc2286a5cc640d259f5445747abac085f8743c2c4829"
+expected_disposition = "model"
+expected_contaminant_ids = [10, 11, 14, 41, 43]
+focus = ["separate the eastern arc from a neighbouring galaxy and include outer ID 14"]
+
+[[cases]]
+lens_id = "102019131_NEG626148898503257561"
+source_image = "images/102019131_NEG626148898503257561_2panel.png"
+image = "images/102019131_NEG626148898503257561_2panel.png"
+image_sha256 = "0779fd843beedf50eadcbd68ce2ee9599d0db657874a7a2cf645b8289b81a66c"
+expected_disposition = "model"
+expected_contaminant_ids = [14, 15, 18, 19, 21, 33, 34, 37]
+focus = ["preserve compatible multi-angle lensed emission"]
+
+[[cases]]
+lens_id = "102019586_NEG564463213499964061"
+source_image = "images/102019586_NEG564463213499964061_2panel.png"
+image = "images/102019586_NEG564463213499964061_2panel.png"
+image_sha256 = "2e3c93973a1a656cd134732a3f6f45e9a472609d1f9f44a7a18ad933a235e670"
+expected_disposition = "model"
+expected_contaminant_ids = [11, 16, 17, 18, 22, 23, 25, 43, 46, 47, 48, 49, 50, 51]
+focus = ["preserve ID 45 as a lensed image and inventory every other displayed segment"]
+
+[[cases]]
+lens_id = "102019588_NEG576940500501085311"
+source_image = "images/102019588_NEG576940500501085311_2panel.png"
+image = "images/102019588_NEG576940500501085311_2panel.png"
+image_sha256 = "5d8674d93d6a775382c34503bf4582800047489c4f8181a8a0a011e0c1332320"
+expected_disposition = "model"
+expected_contaminant_ids = [19]
+focus = ["retain the central support and classify the northwestern source as non-lens"]
+
+[[cases]]
+lens_id = "102019588_NEG579781735502176069"
+source_image = "images/102019588_NEG579781735502176069_2panel.png"
+image = "images/102019588_NEG579781735502176069_2panel.png"
+image_sha256 = "1b3c7ac12dc99ee12d9ce6204729cded5b484902a6802a1d32589e38af3ea7cd"
+expected_disposition = "model"
+expected_contaminant_ids = [14, 16, 29]
+focus = ["reject the compact source exterior to the central image ellipse"]
+
+[[cases]]
+lens_id = "102019588_NEG581189290502362418"
+source_image = "images/102019588_NEG581189290502362418_2panel.png"
+image = "images/102019588_NEG581189290502362418_2panel.png"
+image_sha256 = "5a3fb18c80267837866d0e3f86f194a1fe2bf38dbaf1daedc1c011edd763f8d9"
+expected_disposition = "model"
+expected_contaminant_ids = [9, 12]
+focus = ["preserve the eastern arc and classify IDs 9 and 12 as non-lens"]
+
+[[cases]]
+lens_id = "102019591_NEG601417531499600002"
+source_image = "images/102019591_NEG601417531499600002_2panel.png"
+image = "images/102019591_NEG601417531499600002_2panel.png"
+image_sha256 = "fde747a79b4d5290fc7cee0909cb570dee0aa84c2bcba21231750af1a3acde52"
+expected_disposition = "model"
+expected_contaminant_ids = [17, 20, 21, 24]
+focus = ["preserve ID 34 as the lens galaxy and IDs 18 and 35 as lensed images; include outer ID 24"]

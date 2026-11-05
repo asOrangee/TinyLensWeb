@@ -1,0 +1,11 @@
+# Example for YOUR remote Codex home, not the frontend and not pipeline/.codex.
+# Replace both placeholders before use. Never insert an API key into this file.
+model = "YOUR_MODEL_ID"
+model_provider = "custom"
+model_reasoning_effort = "medium"
+
+[model_providers.custom]
+name = "My AI provider"
+base_url = "https://api.example.invalid/v1"
+env_key = "TINYLENS_API_KEY"
+wire_api = "responses"

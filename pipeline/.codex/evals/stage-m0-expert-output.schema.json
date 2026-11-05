@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Stage M0 source-grid review",
+  "description": "Scientific term semantics are defined only in .codex/skills/lens-model-orchestrator/references/stage-review-glossary.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "stage",
+    "grid_judgment",
+    "visual_findings",
+    "numerical_findings",
+    "reason"
+  ],
+  "properties": {
+    "stage": {"const": "m0"},
+    "grid_judgment": {
+      "type": "string",
+      "enum": ["grid_sufficient", "source_bbox_truncation", "indeterminate"]
+    },
+    "visual_findings": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "numerical_findings": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "reason": {"type": "string", "minLength": 1}
+  }
+}

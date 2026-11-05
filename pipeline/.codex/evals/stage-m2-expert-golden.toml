@@ -1,0 +1,28 @@
+schema_version = "stage_expert_golden.v1"
+agent_config = "../agents/stage-m2-expert.toml"
+output_schema = "stage-m2-expert-output.schema.json"
+contract_fixtures = "stage-expert-contract-cases.json"
+
+[[cases]]
+name = "m2_accept_uniform_like"
+stage = "m2"
+expected_decision = "accept"
+expected_blockers = []
+expected_warnings = ["uniform_like_regularization"]
+repair_target = ""
+
+[[cases]]
+name = "m2_retry_under_regularized"
+stage = "m2"
+expected_decision = "retry"
+expected_blockers = ["regularization_pathology"]
+expected_warnings = []
+repair_target = "adaptive_reg_rho_prior_max"
+
+[[cases]]
+name = "m2_human_over_smoothed"
+stage = "m2"
+expected_decision = "human_review"
+expected_blockers = ["regularization_pathology"]
+expected_warnings = []
+repair_target = ""

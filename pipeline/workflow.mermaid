@@ -1,0 +1,50 @@
+graph LR
+    %% Define styles
+    classDef decision fill:#f9f2f4,stroke:#dbb1c1,stroke-width:2px;
+    classDef action fill:#e1f5fe,stroke:#c5cae9,stroke-width:2px;
+    classDef aiAgent fill:#fff3e0,stroke:#9fa8da,stroke-width:2px;
+    classDef terminal fill:#e8f5e9,stroke:#a5d6a7,stroke-width:2px;
+    classDef error fill:#ffebee,stroke:#ffcdd2,stroke-width:2px;
+
+    Start([开始: lens-agent preflight]) --> Preflight
+
+    subgraph phase1 ["1. 预检阶段 (Preflight)"]
+        Preflight[Preflight Decision<br/>读取 FITS 图像进行基础校验]:::action
+        Preflight_Decision{是否为简单系统?<br/>Is Simple System?}:::decision
+
+        Preflight --> Preflight_Decision
+    end
+
+    Preflight_Decision -->|否 - 复杂或不确定| HumanReview[Human Review<br/>人工审查]:::error
+    Preflight_Decision -->|是| Delegate[Thin Orchestrator<br/>按固定顺序委派完整 stage loop]:::action
+
+    subgraph phase2 ["2. 独立 Stage Loop (Expert 负责 A/B/M1/M2/M3；Orchestrator 机械运行 M0)"]
+        Delegate --> Prepare[Stage Owner<br/>Attempt Preparation]:::action
+        Prepare --> Execute[Stage Owner<br/>通过 lens-agent stage 运行建模]:::action
+        Execute --> Summarize[Python<br/>收集指标与评估 Hard Gates]:::action
+
+        Summarize --> HardGateCheck{Hard Gate<br/>状态}:::decision
+        HardGateCheck --> Review[Stage Expert Scientific Review<br/>A / B / M1 / M2 / M3<br/>M0 不进行 AI 审核]:::aiAgent
+
+        Review --> Validate[Python Stage Adjudication<br/>校验并登记机械决策]:::action
+
+        Validate --> FinalDecision{Decision<br/>结果}:::decision
+
+        FinalDecision -->|RETRY<br/>生成并验证提议| TunerProposal[Attempt Preparation<br/>应用一个白名单参数修改]:::action
+        TunerProposal -->|进入下一次 Attempt| Prepare
+    end
+
+    FinalDecision -->|HUMAN_REVIEW<br/>无法修复或重试上限| HumanReview
+    HardGateCheck -.->|不可忽略的失败| Validate
+
+    FinalDecision -->|ACCEPT| Promote[Stage Owner<br/>Promotion]:::action
+    Promote --> Verify[Thin Orchestrator<br/>核对 Accepted Stage Head]:::action
+    Verify --> NextStageCheck{是否有<br/>下一阶段?}:::decision
+
+    NextStageCheck -->|是| Delegate
+    NextStageCheck -->|否| Finalize
+
+    subgraph phase3 ["3. 收尾阶段 (Termination)"]
+        HumanReview --> Finalize[Finalize<br/>整理结果与科学输出]:::action
+        Finalize --> Terminal([结束: 产出 summary.csv]):::terminal
+    end

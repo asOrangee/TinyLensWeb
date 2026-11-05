@@ -1,0 +1,103 @@
+{
+  "schema_version": "stage_m0_expert_contract.v1",
+  "cases": [
+    {
+      "name": "m0_accept_interior_source",
+      "review": {
+        "stage": "m0",
+        "grid_judgment": "grid_sufficient",
+        "visual_findings": ["The coherent source emission is separated from every grid edge."],
+        "numerical_findings": ["The outer two-pixel ring contains no material coherent source flux."],
+        "reason": "The current footprint contains the reconstructed source."
+      }
+    },
+    {
+      "name": "m0_accept_isolated_edge_noise",
+      "review": {
+        "stage": "m0",
+        "grid_judgment": "grid_sufficient",
+        "visual_findings": ["Only isolated sign-changing pixels touch one edge, without continuous interior emission."],
+        "numerical_findings": ["The edge statistic is nonzero but is not spatially coherent."],
+        "reason": "Isolated edge noise does not support grid enlargement."
+      }
+    },
+    {
+      "name": "m0_accept_boundary_only_pathology",
+      "review": {
+        "stage": "m0",
+        "grid_judgment": "grid_sufficient",
+        "visual_findings": ["A boundary-only feature has no corresponding coherent source structure in the interior."],
+        "numerical_findings": ["The positive edge flux is confined to the pathological boundary feature."],
+        "reason": "Grid enlargement is not supported by boundary-only pathology."
+      }
+    },
+    {
+      "name": "m0_accept_asinh_only_smooth_pedestal",
+      "review": {
+        "stage": "m0",
+        "grid_judgment": "grid_sufficient",
+        "visual_findings": ["stage_m0_source_grid.png: the signed linear panel contains the principal source well inside the grid; only a faint smooth pedestal emphasized by the positive asinh panel reaches the left and bottom edges."],
+        "numerical_findings": ["Nonzero asymmetric positive edge-flux fractions support the presence of the pedestal, not material clipping in the linear panel."],
+        "reason": "The linear view supports grid sufficiency. The faint pedestal's origin remains unresolved; asinh-only edge support does not require enlargement or an indeterminate judgment."
+      }
+    },
+    {
+      "name": "m0_retry_coherent_edge_truncation",
+      "review": {
+        "stage": "m0",
+        "grid_judgment": "source_bbox_truncation",
+        "visual_findings": ["stage_m0_source_grid.png: in the signed linear panel, the same coherent extended source structure continues from the interior to the right edge with material brightness relative to the principal source and visibly terminates at that boundary."],
+        "numerical_findings": ["Material positive flux occupies a connected segment of the outer two-pixel ring."],
+        "reason": "The source footprint is genuinely truncated at the current grid boundary."
+      }
+    },
+    {
+      "name": "m0_accept_ambiguous_edge_structure",
+      "review": {
+        "stage": "m0",
+        "grid_judgment": "grid_sufficient",
+        "visual_findings": ["stage_m0_source_grid.png: material edge structure is visible in the signed linear panel, but its connection to the interior source is ambiguous, preventing a distinction between clipping and boundary-only pathology."],
+        "numerical_findings": ["Edge-flux support is material but inconclusive without a defensible morphology classification."],
+        "reason": "The readable linear panel does not establish clear clipping. The ambiguous interior connection does not support enlargement; grid acceptance does not rule out truncation or validate the source morphology."
+      }
+    },
+    {
+      "name": "m0_human_unreadable_linear_diagnostic",
+      "review": {
+        "stage": "m0",
+        "grid_judgment": "indeterminate",
+        "visual_findings": ["stage_m0_source_grid.png: the supplied signed linear panel is corrupted and cannot be read; no equivalent readable linear source diagnostic is available in the review evidence."],
+        "numerical_findings": ["Edge-flux metrics are available but cannot replace the missing visual evidence of clipping."],
+        "reason": "Essential linear diagnostic evidence is unreadable, so source-grid sufficiency cannot be assessed."
+      }
+    },
+    {
+      "name": "m0_accept_after_enlargement",
+      "context": {
+        "grid_level": 1,
+        "preceding_grid_judgment": "source_bbox_truncation"
+      },
+      "review": {
+        "stage": "m0",
+        "grid_judgment": "grid_sufficient",
+        "visual_findings": ["The formerly clipped coherent structure is now separated from the enlarged boundary."],
+        "numerical_findings": ["Outer-ring flux no longer traces a continuation of the principal interior source."],
+        "reason": "The enlarged footprint now contains the reconstructed source."
+      }
+    },
+    {
+      "name": "m0_maximum_grid_still_truncated",
+      "context": {
+        "grid_level": 2,
+        "half_width_arcsec": 1.2
+      },
+      "review": {
+        "stage": "m0",
+        "grid_judgment": "source_bbox_truncation",
+        "visual_findings": ["stage_m0_source_grid.png: the signed linear panel shows coherent extended emission retaining material brightness from the interior into a visibly clipped edge at the maximum footprint."],
+        "numerical_findings": ["Connected positive outer-ring flux supports the same interior structure."],
+        "reason": "The source remains genuinely truncated at the maximum grid level."
+      }
+    }
+  ]
+}

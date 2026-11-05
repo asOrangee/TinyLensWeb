@@ -1,0 +1,17 @@
+.parameter-card-groups { padding:0 15px 15px; }
+.parameter-card-group + .parameter-card-group { margin-top:22px; }
+.parameter-card-group-title { margin:0 0 10px;padding:12px 0 9px;border-bottom:1px solid var(--line);font-size:12px;font-weight:650;letter-spacing:.02em;color:var(--ink); }
+.parameter-card-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px; }
+.parameter-card { min-width:0;display:flex;flex-direction:column;gap:11px;padding:13px 12px 9px;border:1px solid var(--line);border-radius:8px;background:var(--panel); }
+.parameter-card-value { min-height:82px;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:5px;color:var(--ink);font-family:var(--mono);font-size:18px;font-weight:500;line-height:1.2; }
+.parameter-card-formula { display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;min-width:0;max-width:100%;font:inherit; }
+.parameter-card-symbol { flex-shrink:0;border:0;padding:0;background:transparent;color:inherit;font:inherit;font-size:24px;line-height:1.2;cursor:pointer; }
+.parameter-card-symbol:hover { color:var(--green); }
+.parameter-card-symbol:focus-visible { outline:2px solid var(--green);outline-offset:4px;border-radius:2px; }
+.parameter-card-value .parameter-estimate { flex-wrap:wrap;justify-content:center;min-width:0;max-width:100%;white-space:normal; }
+.parameter-card-value .parameter-central { min-width:0;text-align:center;overflow-wrap:normal; }
+.parameter-card-unit { font-size:9px;color:var(--muted);white-space:nowrap; }
+.parameter-card-value :is(.parameter-estimate,.parameter-card-unit) { transform:translateY(5px); }
+.parameter-card-posterior { flex:1;min-width:0;min-height:128px;display:flex;align-items:center;justify-content:center; }
+.parameter-card-posterior svg { display:block;width:100%;height:auto;overflow:visible; }
+.parameter-card-empty { color:var(--muted);font-size:14px; }

@@ -1,0 +1,28 @@
+schema_version = "stage_expert_golden.v1"
+agent_config = "../agents/stage-a-expert.toml"
+output_schema = "stage-a-expert-output.schema.json"
+contract_fixtures = "stage-expert-contract-cases.json"
+
+[[cases]]
+name = "a_accept_local_residual"
+stage = "a"
+expected_decision = "accept"
+expected_blockers = []
+expected_warnings = ["model_limited_residual"]
+repair_target = ""
+
+[[cases]]
+name = "a_retry_sampling"
+stage = "a"
+expected_decision = "retry"
+expected_blockers = ["sampling_pathology"]
+expected_warnings = []
+repair_target = "stage_a_n_eff"
+
+[[cases]]
+name = "a_human_missing_image"
+stage = "a"
+expected_decision = "human_review"
+expected_blockers = ["structural_image_family_failure"]
+expected_warnings = []
+repair_target = ""

@@ -1,0 +1,3 @@
+# Three stage decisions and a minimal hard gate
+
+Each completed stage is decided as `accept`, `retry`, or `human_review`; warning acceptance and arbitrary rollback are removed. The deterministic hard-gate facts live in `stage_result.json`, rather than a separate report, and permit scientific review only when execution and required outputs succeeded, numerical outputs are finite, and the M0 regularization optimum is interior to its fine evidence grid. Posterior boundaries, sampler health, residual morphology, arc coverage, and source plausibility remain reviewer evidence rather than automatic warnings or overrides.

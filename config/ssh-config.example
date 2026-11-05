@@ -1,0 +1,5 @@
+Host tinylens-gpu
+    HostName YOUR_GPU_HOST
+    User YOUR_USERNAME
+    Port 22
+    IdentityFile ~/.ssh/YOUR_PRIVATE_KEY

@@ -1,0 +1,23 @@
+{
+  "schema": "tinylens.demo-scale-arrays.v1",
+  "planes": {
+    "observation": {
+      "offset": 0,
+      "src": "/demo/observation.png",
+      "image_sha256": "494b5c1c34c9e30d88fdf771ab258ab45e8fe64d8f7ac15bcd415fe494566834",
+      "values_sha256": "4af015a9763c633f7ae1cb4b43521a9df7ace12ea5bae4b04cba1a90bfbf734b"
+    },
+    "model": {
+      "offset": 2097152,
+      "src": "/demo/model.png",
+      "image_sha256": "23c9eb41e915ec4151665b68fc00318676e53c21af675871e43572e70e243e8f",
+      "values_sha256": "15fa8933e020ddfa024d3b0d0af28d48a1b0f8480ad35ecf76f09213b2299363"
+    },
+    "source-lensed": {
+      "offset": 4194304,
+      "src": "/demo/source-lensed.png",
+      "image_sha256": "8cfcc79fe1dd406503743ec6c48085f699d20d62c9b7a7903d9cd334506c7577",
+      "values_sha256": "4a438387e618a1637bfa48ec14b9aebe48f9d6b8eb75caa4b8275ad0459c17f7"
+    }
+  }
+}

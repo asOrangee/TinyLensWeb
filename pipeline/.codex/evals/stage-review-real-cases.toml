@@ -1,0 +1,33 @@
+schema_version = "stage_review_golden.v1"
+default_output_root = "/srv/TinyLensWeb/pipeline/lens_run_prompt_evals"
+
+# Evaluation labels are held by the parent runner, never included in expert input.
+# These two Stage-A progression targets were supplied by the user in the review discussion.
+[[cases]]
+id = "102019594_NEG620978815501656388_a0"
+stage = "a"
+attempt_dir = "/srv/TinyLensWeb/pipeline/lens_run/102019594_NEG620978815501656388/attempts/a/0"
+expected_outcome = "continue"
+evidence = ["review-context.json", "stage-result.json", "diagnostics/stage_a_model.png", "artifacts/stage_a_predicted_image_family.json"]
+upstream_evidence = ["/srv/TinyLensWeb/pipeline/lens_run/102019594_NEG620978815501656388/preflight/inspector.json"]
+
+[[cases]]
+id = "102020528_NEG554976975487853956_a0"
+stage = "a"
+attempt_dir = "/srv/TinyLensWeb/pipeline/lens_run/102020528_NEG554976975487853956/attempts/a/0"
+expected_outcome = "continue"
+evidence = ["review-context.json", "stage-result.json", "diagnostics/stage_a_model.png", "artifacts/stage_a_predicted_image_family.json"]
+upstream_evidence = ["/srv/TinyLensWeb/pipeline/lens_run/102020528_NEG554976975487853956/preflight/inspector.json"]
+
+# Existing human-reviewed M1 regression, retained as a historical morphology test.
+[[cases]]
+id = "102018665_NEG570040238507752998_m1_0"
+stage = "m1"
+attempt_dir = "/srv/TinyLensWeb/pipeline/bak/output_0/102018665_NEG570040238507752998/attempts/m1/0"
+expected_outcome = "continue"
+evidence = ["review-context.json", "stage-result.json", "diagnostics/stage_m1_model.png"]
+upstream_evidence = [
+  "/srv/TinyLensWeb/pipeline/bak/output_0/102018665_NEG570040238507752998/attempts/a/0/stage-result.json",
+  "/srv/TinyLensWeb/pipeline/bak/output_0/102018665_NEG570040238507752998/attempts/a/0/diagnostics/stage_a_model.png",
+]
+fixture_note = "This is a historical Stage-M1 artifact from an EPL+shear fit with a sampled gamma and its recorded source-grid footprint. Assess the recorded model and grid as supplied; do not reinterpret gamma as a current SIE parameter or infer a missing grid seal from the older artifact format. This evidence-only assessment does not test current-release execution or source-grid sealing."

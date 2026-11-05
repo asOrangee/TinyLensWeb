@@ -1,0 +1,13 @@
+---
+status: accepted
+---
+
+# Construct the Stage-B arc mask only inside the valid modeling domain
+
+Stage B first excludes every pixel outside the fixed 4″ modeling circle and every exact preflight-selected Non-Lens Segment, then finds and area-filters above-threshold connected islands only in the remaining Valid Modeling Domain. Surviving islands are Arc Seeds; closing and dilation may include adjacent lower-S/N pixels only while remaining inside that domain, so an excluded source can never seed mask pixels across its boundary. This preserves useful PSF wings without allowing masked contaminants or the circular exterior to leak into the Arc Mask.
+
+The Modeling Mask is a permanent morphology barrier rather than a final clipping stencil: neither closing nor dilation may jump across an excluded region. Square dilation therefore propagates one neighboring pixel at a time and reapplies the Valid Modeling Domain after every step; closing uses that constrained dilation before erosion. Existing square-footprint parameter meanings, including even-sized footprints, and the closing-then-dilation order remain unchanged away from the barrier. Multiple Arc Seeds may merge into one Arc Component, whose evidence records its complete seed lineage; an arc-contaminant merge that cannot be removed as a whole requires a parameter repair or Human Review rather than pixel-level selection.
+
+An Arc Component Selection may remove unrelated candidate components even when every Stage-A predicted image is already covered. Parameter and selection refinements remain separate retries, and a proposed selection is invalid before execution if it would uncover any currently covered predicted image. Every regenerated or selected mask must re-establish predicted-image coverage before acceptance. This supersedes ADR 0026's requirement that a selection retry contain a `supported_uncovered` predicted image.
+
+Stage-B evidence records each component's Arc Seed IDs and seed-pixel count, excluded above-threshold pixel counts, the Valid Modeling Domain boundary, and whether every component satisfies the seed-lineage invariant. The component catalog identifies its Stage Attempt and image shape, and seals the exact component-label FITS and Morphology Audit with SHA-256 hashes; a selection retry validates these bindings, the catalog geometry, the Stage-A predicted-image coordinate grid, and predicted-image coverage before execution. These behavior and artifact-contract changes require a new Pipeline Release and new Stage-B artifact schema versions without changing the configuration schema. Existing Lens Runs remain immutable and require a Full Lens Rerun under the new release.

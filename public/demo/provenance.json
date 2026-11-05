@@ -1,0 +1,44 @@
+{
+  "kind": "synthetic-demo",
+  "seed": 107,
+  "generator": "scripts/generate_demo.py",
+  "description": "Illustrative isothermal-potential ray tracing, not an inference result or real observation.",
+  "image_extent_arcsec": [
+    -4,
+    4,
+    -4,
+    4
+  ],
+  "source_extent_arcsec": [
+    -0.8,
+    0.8,
+    -0.8,
+    0.8
+  ],
+  "image_shape": [
+    512,
+    512
+  ],
+  "display_units": "arbitrary",
+  "residual_range_sigma": [
+    -3,
+    3
+  ],
+  "noise_sigma_arbitrary_units": 0.0065,
+  "same_data_model_stretch": true,
+  "intensity_colormap": "magma",
+  "residual_colormap": "blue-white-red",
+  "chi_square_colormap": "blue-white-red",
+  "chi_square_display_range": [
+    0.0,
+    9.0
+  ],
+  "science_display_manifest": "science-display.json",
+  "preflight": {
+    "manifest": "preflight/manifest.json",
+    "numerical_inputs": "preflight/inputs.npz",
+    "noise_kind": "1-sigma RMS",
+    "snr": "data / noise_rms",
+    "psf_sum": 1.0000000000000004
+  }
+}

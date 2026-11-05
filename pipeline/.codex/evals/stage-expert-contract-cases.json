@@ -1,0 +1,515 @@
+{
+  "schema_version": "stage_expert_contract.v1",
+  "cases": [
+    {
+      "name": "a_accept_local_residual",
+      "budget_remaining": true,
+      "expected_decision": "accept",
+      "review": {
+        "stage": "a",
+        "visual_findings": [
+          "stage_a_model.png: every principal arc has a modeled counterpart; local arc residual remains"
+        ],
+        "numerical_findings": [
+          "stage_a_result.json: eligible_for_review=true and posterior sampling is healthy"
+        ],
+        "progression_blockers": [],
+        "handoff_warnings": [
+          {
+            "kind": "model_limited_residual",
+            "evidence": [
+              "stage_a_model.png: localized brightness mismatch within the captured image family"
+            ],
+            "impact": "monitor after pixelized-source modeling",
+            "expected_resolution_stage": "m1"
+          }
+        ],
+        "upstream_warning_updates": [],
+        "retry_repair": null,
+        "reason": "The coarse topology is usable for progression despite a local parametric-model residual.",
+        "development_recommendation": null
+      }
+    },
+    {
+      "name": "a_retry_sampling",
+      "budget_remaining": true,
+      "expected_decision": "retry",
+      "review": {
+        "stage": "a",
+        "visual_findings": [
+          "stage_a_model.png: the principal image family is captured"
+        ],
+        "numerical_findings": [
+          "stage-result.json: effective sample size is too low for stable downstream initialization"
+        ],
+        "progression_blockers": [
+          {
+            "kind": "sampling_pathology",
+            "evidence": [
+              "stage-result.json: posterior support is unstable at the current sampling budget"
+            ],
+            "impact": "the coarse posterior is unsafe as downstream initialization"
+          }
+        ],
+        "handoff_warnings": [],
+        "upstream_warning_updates": [],
+        "retry_repair": {
+          "hypothesis": {
+            "blocker_kind": "sampling_pathology",
+            "expected_improvement": "posterior sampling stabilizes while preserving the image family"
+          },
+          "proposal": {
+            "base_config": "attempts/a/0/effective-config.json",
+            "parameter": "stage_a_n_eff",
+            "old_value": 800,
+            "new_value": 1200
+          }
+        },
+        "reason": "One concrete Stage-A sampling change can test the instability.",
+        "development_recommendation": null
+      }
+    },
+    {
+      "name": "a_human_missing_image",
+      "budget_remaining": true,
+      "expected_decision": "human_review",
+      "review": {
+        "stage": "a",
+        "visual_findings": [
+          "stage_a_model.png: a principal counterimage has no modeled counterpart"
+        ],
+        "numerical_findings": [
+          "stage_a_result.json: the hard gate passes but topology evidence is unsupported"
+        ],
+        "progression_blockers": [
+          {
+            "kind": "structural_image_family_failure",
+            "evidence": [
+              "stage_a_model.png: observed counterimage is absent from the model"
+            ],
+            "impact": "downstream stages would inherit the wrong topology"
+          }
+        ],
+        "handoff_warnings": [],
+        "upstream_warning_updates": [],
+        "retry_repair": null,
+        "reason": "The missing principal image has no credible one-setting repair.",
+        "development_recommendation": null
+      }
+    },
+    {
+      "name": "m1_accept_canonical_source_sign",
+      "budget_remaining": true,
+      "expected_decision": "accept",
+      "review": {
+        "stage": "m1",
+        "visual_findings": [
+          "stage_m1_model.png: the principal image family and global arc morphology are captured by a coherent clumpy source"
+        ],
+        "numerical_findings": [
+          "derived source-sign snapshot: negative pixel fraction=0.3667, negative/positive flux=0.1752, negative/positive peak=0.1337, no non-finite values"
+        ],
+        "progression_blockers": [],
+        "handoff_warnings": [
+          {
+            "kind": "model_limited_residual",
+            "evidence": [
+              "stage_m1_model.png: localized arc residual remains within modeled support"
+            ],
+            "impact": "monitor whether M3 changes the mass interpretation",
+            "expected_resolution_stage": "m3"
+          },
+          {
+            "kind": "source_sign_structure",
+            "evidence": [
+              "negative flux is non-dominant in integrated flux and peak amplitude"
+            ],
+            "impact": "monitor morphology under adaptive regularization",
+            "expected_resolution_stage": "m2"
+          }
+        ],
+        "upstream_warning_updates": [],
+        "retry_repair": null,
+        "scientific_uncertainty": null,
+        "reason": "Canonical M1 advances with local-residual and non-dominant source-sign warnings.",
+        "development_recommendation": null
+      }
+    },
+    {
+      "name": "m1_human_source_bbox",
+      "budget_remaining": true,
+      "expected_decision": "human_review",
+      "review": {
+        "stage": "m1",
+        "visual_findings": [
+          "stage_m1_model.png: coherent principal source emission is clipped at the source edge"
+        ],
+        "numerical_findings": [
+          "source-sign diagnostics report material positive edge flux"
+        ],
+        "progression_blockers": [
+          {
+            "kind": "source_bbox_truncation",
+            "evidence": [
+              "source reconstruction contacts the bbox along a coherent bright structure"
+            ],
+            "impact": "the M2/M3 source template is truncated"
+          }
+        ],
+        "handoff_warnings": [],
+        "upstream_warning_updates": [],
+        "retry_repair": null,
+        "scientific_uncertainty": null,
+        "reason": "The fixed M0-Sealed Source Grid has no M1-local repair.",
+        "development_recommendation": null
+      }
+    },
+    {
+      "name": "m1_retry_sampling",
+      "budget_remaining": true,
+      "expected_decision": "retry",
+      "review": {
+        "stage": "m1",
+        "visual_findings": [
+          "stage_m1_model.png: the principal image family and coherent source are present"
+        ],
+        "numerical_findings": [
+          "stage-result.json: the effective sample size is insufficient for stable SIE+shear posterior quantiles"
+        ],
+        "progression_blockers": [
+          {
+            "kind": "sampling_pathology",
+            "evidence": [
+              "stage-result.json: posterior support is unstable at the current sampling budget"
+            ],
+            "impact": "the M1 mass posterior is unsafe for M2 and M3"
+          }
+        ],
+        "handoff_warnings": [],
+        "upstream_warning_updates": [],
+        "retry_repair": {
+          "hypothesis": {
+            "blocker_kind": "sampling_pathology",
+            "expected_improvement": "SIE+shear posterior quantiles stabilize"
+          },
+          "proposal": {
+            "base_config": "attempts/m1/0/effective-config.json",
+            "parameter": "stage_m1_n_eff",
+            "old_value": 600,
+            "new_value": 1000
+          }
+        },
+        "scientific_uncertainty": null,
+        "reason": "One authorized sampling-budget change can test the instability.",
+        "development_recommendation": null
+      }
+    },
+    {
+      "name": "m1_human_image_plane_copy",
+      "budget_remaining": true,
+      "expected_decision": "human_review",
+      "review": {
+        "stage": "m1",
+        "visual_findings": [
+          "stage_m1_model.png: the source is a demagnified copy of the image-plane arcs"
+        ],
+        "numerical_findings": [
+          "sampling is healthy, so the morphology is a scientific rather than operational failure"
+        ],
+        "progression_blockers": [
+          {
+            "kind": "pathological_source_reconstruction",
+            "evidence": [
+              "source morphology repeats the observed arc configuration"
+            ],
+            "impact": "the source template is not physically interpretable"
+          }
+        ],
+        "handoff_warnings": [],
+        "upstream_warning_updates": [],
+        "retry_repair": null,
+        "scientific_uncertainty": null,
+        "reason": "The image-plane copy has no credible one-setting repair in the simple workflow.",
+        "development_recommendation": null
+      }
+    },
+    {
+      "name": "m1_human_ambiguous_grid_sufficiency",
+      "budget_remaining": true,
+      "expected_decision": "human_review",
+      "review": {
+        "stage": "m1",
+        "visual_findings": [
+          "stage_m1_model.png: an edge feature cannot be distinguished from boundary-only pathology"
+        ],
+        "numerical_findings": [
+          "edge flux is material but is not decisive evidence of coherent truncation"
+        ],
+        "progression_blockers": [],
+        "handoff_warnings": [],
+        "upstream_warning_updates": [],
+        "retry_repair": null,
+        "scientific_uncertainty": {
+          "kind": "source_grid_sufficiency",
+          "evidence": [
+            "the available views do not establish whether interior emission continues to the boundary"
+          ],
+          "impact": "the M0-Sealed Source Grid cannot be declared safe for downstream use"
+        },
+        "reason": "Grid sufficiency requires human scientific judgment.",
+        "development_recommendation": null
+      }
+    },
+    {
+      "name": "m2_accept_uniform_like",
+      "budget_remaining": true,
+      "expected_decision": "accept",
+      "review": {
+        "stage": "m2",
+        "visual_findings": [
+          "stage_m2_model.png: coherent M1 source structure is preserved"
+        ],
+        "numerical_findings": [
+          "adaptive_reg_rho is near zero but finite and interior enough for calibration use"
+        ],
+        "progression_blockers": [],
+        "handoff_warnings": [
+          {
+            "kind": "uniform_like_regularization",
+            "evidence": [
+              "regularization map is nearly uniform"
+            ],
+            "impact": "adaptive calibration provides limited added structure",
+            "expected_resolution_stage": "m3"
+          }
+        ],
+        "upstream_warning_updates": [],
+        "retry_repair": null,
+        "reason": "Uniform-like calibration is a warning, not a reason to retry M2.",
+        "development_recommendation": null
+      }
+    },
+    {
+      "name": "m2_retry_under_regularized",
+      "budget_remaining": true,
+      "expected_decision": "retry",
+      "review": {
+        "stage": "m2",
+        "visual_findings": [
+          "stage_m2_model.png: source is dominated by pixel-scale noise"
+        ],
+        "numerical_findings": [
+          "regularization map is finite but the rho prior materially truncates the needed range"
+        ],
+        "progression_blockers": [
+          {
+            "kind": "regularization_pathology",
+            "evidence": [
+              "source loses coherent structure to pixel-scale fluctuations"
+            ],
+            "impact": "calibrated hyperparameters are unusable for M3"
+          }
+        ],
+        "handoff_warnings": [],
+        "upstream_warning_updates": [],
+        "retry_repair": {
+          "hypothesis": {
+            "blocker_kind": "regularization_pathology",
+            "expected_improvement": "coherent source structure returns without changing fixed mass geometry"
+          },
+          "proposal": {
+            "base_config": "attempts/m2/0/effective-config.json",
+            "parameter": "adaptive_reg_rho_prior_max",
+            "old_value": 8.0,
+            "new_value": 12.0
+          }
+        },
+        "reason": "One M2 hyperprior setting provides a credible repair.",
+        "development_recommendation": null
+      }
+    },
+    {
+      "name": "m2_human_over_smoothed",
+      "budget_remaining": true,
+      "expected_decision": "human_review",
+      "review": {
+        "stage": "m2",
+        "visual_findings": [
+          "stage_m2_model.png: adaptive smoothing erases principal source emission"
+        ],
+        "numerical_findings": [
+          "the map is finite but no single allowed target explains the failure"
+        ],
+        "progression_blockers": [
+          {
+            "kind": "regularization_pathology",
+            "evidence": [
+              "principal M1 emission disappears under the M2 map"
+            ],
+            "impact": "M3 would inherit a pathological fixed calibration"
+          }
+        ],
+        "handoff_warnings": [],
+        "upstream_warning_updates": [],
+        "retry_repair": null,
+        "reason": "The smoothing pathology lacks a credible one-setting repair.",
+        "development_recommendation": null
+      }
+    },
+    {
+      "name": "m3_accept_local_limitation",
+      "budget_remaining": true,
+      "expected_decision": "accept",
+      "review": {
+        "stage": "m3",
+        "visual_findings": [
+          "stage_m3_model.png: all principal images and global topology are captured; one local residual remains"
+        ],
+        "numerical_findings": [
+          "mass posteriors are healthy and M1-to-M3 drift is observation-supported"
+        ],
+        "progression_blockers": [],
+        "handoff_warnings": [
+          {
+            "kind": "model_limited_residual",
+            "evidence": [
+              "localized residual does not alter critical curves or mass interpretation"
+            ],
+            "impact": "record as a final simple-model limitation",
+            "expected_resolution_stage": "final"
+          }
+        ],
+        "upstream_warning_updates": [],
+        "retry_repair": null,
+        "scientific_uncertainty": null,
+        "reason": "The final result is credible without requiring pixelwise white noise.",
+        "development_recommendation": null
+      }
+    },
+    {
+      "name": "m3_retry_sampling",
+      "budget_remaining": true,
+      "expected_decision": "retry",
+      "review": {
+        "stage": "m3",
+        "visual_findings": [
+          "stage_m3_model.png: global topology is credible"
+        ],
+        "numerical_findings": [
+          "stage-result.json: effective sample size is too low for a stable final posterior"
+        ],
+        "progression_blockers": [
+          {
+            "kind": "sampling_pathology",
+            "evidence": [
+              "stage-result.json: posterior support changes materially across sampling diagnostics"
+            ],
+            "impact": "the final mass posterior is unreliable"
+          }
+        ],
+        "handoff_warnings": [],
+        "upstream_warning_updates": [],
+        "retry_repair": {
+          "hypothesis": {
+            "blocker_kind": "sampling_pathology",
+            "expected_improvement": "the final posterior becomes stable without altering the model"
+          },
+          "proposal": {
+            "base_config": "attempts/m3/0/effective-config.json",
+            "parameter": "stage_m3_n_eff",
+            "old_value": 600,
+            "new_value": 1000
+          }
+        },
+        "scientific_uncertainty": null,
+        "reason": "One concrete M3 sampling change can test the instability.",
+        "development_recommendation": null
+      }
+    },
+    {
+      "name": "m3_human_global_topology",
+      "budget_remaining": true,
+      "expected_decision": "human_review",
+      "review": {
+        "stage": "m3",
+        "visual_findings": [
+          "stage_m3_model.png: a principal image remains unsupported and critical-curve topology is wrong"
+        ],
+        "numerical_findings": [
+          "sampling is healthy, so the mismatch is not operational"
+        ],
+        "progression_blockers": [
+          {
+            "kind": "structural_image_family_failure",
+            "evidence": [
+              "global image family cannot be represented by the simple EPL+shear model"
+            ],
+            "impact": "the final mass interpretation is unreliable"
+          }
+        ],
+        "handoff_warnings": [],
+        "upstream_warning_updates": [],
+        "retry_repair": null,
+        "scientific_uncertainty": null,
+        "reason": "The simple model family cannot support the observed topology.",
+        "development_recommendation": null
+      }
+    },
+    {
+      "name": "m3_human_ambiguous_grid_sufficiency",
+      "budget_remaining": true,
+      "expected_decision": "human_review",
+      "review": {
+        "stage": "m3",
+        "visual_findings": [
+          "stage_m3_model.png: final edge structure is ambiguous between clipping and a boundary pathology"
+        ],
+        "numerical_findings": [
+          "continuous edge-flux evidence is material but inconclusive"
+        ],
+        "progression_blockers": [],
+        "handoff_warnings": [],
+        "upstream_warning_updates": [],
+        "retry_repair": null,
+        "scientific_uncertainty": {
+          "kind": "source_grid_sufficiency",
+          "evidence": [
+            "signed and positive-asinh views support incompatible interpretations"
+          ],
+          "impact": "the final source and mass result cannot be accepted safely"
+        },
+        "reason": "Final grid sufficiency requires human scientific judgment.",
+        "development_recommendation": null
+      }
+    },
+    {
+      "name": "m3_human_confirmed_new_grid_truncation",
+      "budget_remaining": true,
+      "expected_decision": "human_review",
+      "review": {
+        "stage": "m3",
+        "visual_findings": [
+          "stage_m3_model.png: coherent extended emission newly continues from the interior into a visibly clipped edge"
+        ],
+        "numerical_findings": [
+          "connected positive edge flux supports the same interior source structure"
+        ],
+        "progression_blockers": [
+          {
+            "kind": "source_bbox_truncation",
+            "evidence": [
+              "the M3 source is visibly clipped on the fixed M0-Sealed Source Grid"
+            ],
+            "impact": "the final source and mass interpretation cannot be accepted"
+          }
+        ],
+        "handoff_warnings": [],
+        "upstream_warning_updates": [],
+        "retry_repair": null,
+        "scientific_uncertainty": null,
+        "reason": "Confirmed new truncation requires Human Review and cannot resize the sealed grid.",
+        "development_recommendation": null
+      }
+    }
+  ]
+}

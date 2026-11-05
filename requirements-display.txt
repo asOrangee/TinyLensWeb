@@ -1,0 +1,6 @@
+# Install on the GPU server in the SAME environment as TinyLensGpu and pipeline.
+# The frontend machine needs Node/pnpm only (Python is optional for local tests).
+numpy>=1.24,<2
+astropy>=5
+matplotlib>=3.5
+Pillow>=10

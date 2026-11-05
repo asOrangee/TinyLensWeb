@@ -1,0 +1,85 @@
+/* A quiet conversation pane, with its own history and a separate composer. */
+.app-shell[data-design]{--conversation-width:352px;--chat-surface:#fbfcfd;--chat-input:#fff;--chat-soft:#f0f3f7;--chat-accent:var(--green);--chat-ink:var(--ink);--chat-muted:var(--muted)}
+.app-shell[data-design="observatory"]{--chat-surface:#141c28;--chat-input:#1b2533;--chat-soft:#202d3e}
+.app-shell[data-design="paper"]{--chat-surface:#f6f1e8;--chat-input:#fffdf7;--chat-soft:#eae3d8}
+.app-shell[data-design="studio"]{--chat-surface:#f8f9fb;--chat-input:#fff;--chat-soft:#edf0f5}
+.app-shell[data-design] .insight-rail.conversation-rail{display:flex;flex-direction:column;gap:0;padding:0;background:var(--chat-input);color:var(--chat-ink);border:0;border-left:1px solid var(--line);border-radius:0;overflow:hidden;min-width:0;box-shadow:none;align-items:stretch}
+.conversation-rail .conversation-stream{display:flex;flex:1;flex-direction:column;min-height:0;overflow:visible}
+.conversation-topbar{display:flex;align-items:center;flex:0 0 auto;min-width:0;padding:10px var(--conversation-history-inset) 14px;border:0;overflow:hidden;border-radius:calc(var(--studio-frame-radius,10px) - 1px) calc(var(--studio-frame-radius,10px) - 1px) 0 0}
+
+.conversation-rail{--conversation-font:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;--conversation-history-inset:16px;--message-user-bg:#7d9dc3;--message-assistant-bg:#f2f2f2;--message-assistant-ink:#202123}
+/* Extend the scroll surface, not the fade into the original clear viewport.
+   Matching extra padding preserves content positions and scroll distance. */
+.conversation-log{overflow-y:auto;overscroll-behavior:contain;overflow-anchor:none;scrollbar-width:thin;flex:1;min-height:0;margin-block:-5px;padding:25px var(--conversation-history-inset);overflow-wrap:anywhere;background:var(--chat-input);mask-image:linear-gradient(to bottom,transparent,#000 5px,#000 calc(100% - 5px),transparent)}
+.app-shell[data-design="observatory"] .conversation-rail{--message-assistant-bg:#263242;--message-assistant-ink:#ecf0f5;--message-user-bg:#5279a7}
+.app-shell[data-design="paper"] .conversation-rail{--message-assistant-bg:#efede8;--message-assistant-ink:var(--chat-ink)}
+
+/* Message bubbles follow the supplied Codex reference; the composer stays separate. */
+.conversation-log .conversation-message,.conversation-agent-badge{position:relative;width:fit-content;max-width:94%;min-width:0;margin:0 auto 14px 0;padding:11px 15px;border:0;border-radius:20px;background:var(--message-assistant-bg);color:var(--message-assistant-ink);box-shadow:none;font-family:var(--conversation-font);font-size:14px;font-weight:400;line-height:1.6;text-align:left}
+.conversation-agent-badge{display:flex;align-items:center;justify-content:center;height:18px;padding:0 15px;margin:0;line-height:16px;text-align:center;white-space:nowrap}
+.conversation-log .conversation-message.is-user{max-width:88%;margin-left:auto;margin-right:0;background:var(--message-user-bg);color:#fff}
+.conversation-log .conversation-message:last-child{margin-bottom:0}
+.conversation-log .conversation-message[hidden]{display:none}
+.conversation-typing{display:flex;align-items:center;gap:5px;width:fit-content;margin:0 auto 0 0;padding:17px 16px;border-radius:20px;background:var(--message-assistant-bg);color:var(--message-assistant-ink)}
+.conversation-typing-dot{width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.45;animation:conversation-typing-bounce 1.25s ease-in-out infinite}
+.conversation-typing-dot:nth-child(2){animation-delay:.16s}.conversation-typing-dot:nth-child(3){animation-delay:.32s}
+@keyframes conversation-typing-bounce{0%,60%,100%{transform:translateY(0);opacity:.35}30%{transform:translateY(-3px);opacity:.8}}
+/* Keep speaker/intent text available to assistive technology, without a visual heading. */
+.conversation-log .conversation-message-meta{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}
+.conversation-log .conversation-message>p,.conversation-log .conversation-long-message p{margin:0;padding:0;border:0;border-radius:0;background:transparent;color:inherit;font:inherit;white-space:pre-wrap}
+.assistant-reply-fragment{animation:assistant-reply-reveal 360ms ease-in-out both}
+@keyframes assistant-reply-reveal{from{opacity:.35}to{opacity:1}}
+.conversation-log .conversation-long-message{min-width:0;color:inherit;font:inherit}
+.conversation-log .conversation-long-message summary{cursor:pointer;white-space:pre-wrap;padding:0;border:0;border-radius:0;color:inherit;font:inherit}
+.conversation-log .conversation-long-message summary:focus-visible{outline:2px solid currentColor;outline-offset:4px;border-radius:4px}
+.conversation-log .conversation-long-message p{margin-top:10px}
+.conversation-log .conversation-message-stages{display:flex;flex-wrap:wrap;gap:5px;margin-top:10px}
+.conversation-log .conversation-message-stages span{font:10px var(--mono);color:inherit;padding:3px 6px;border:1px solid color-mix(in srgb,currentColor 30%,transparent);border-radius:6px}
+.conversation-log .conversation-message-note{display:block;font-size:10px;line-height:1.5;color:inherit;opacity:.85;margin-top:7px}
+.conversation-rail .conversation-composer{flex-shrink:0;overflow-y:auto;overscroll-behavior:contain;padding:14px 14px 13px;border:0;background:var(--chat-input)}
+.conversation-composer form{margin:0}
+
+.conversation-input-shell{border:1px solid var(--line);background:var(--chat-input);border-radius:10px;overflow:hidden;transition:border-color .12s}.conversation-input-shell:focus-within{border-color:color-mix(in srgb,var(--chat-accent) 60%,var(--line));box-shadow:0 0 0 2px color-mix(in srgb,var(--chat-accent) 7%,transparent)}
+.conversation-input-body{position:relative;display:flex;flex:1 1 0;min-height:0;margin:10px 8px 0 0}
+/* The native editor gains the same outward band; padding keeps its clear area
+   and the 125–225px auto-height measurement unchanged. */
+.app-shell[data-design] .conversation-input-shell textarea{position:absolute;top:-5px;display:block;width:100%;height:calc(100% + 10px);min-height:0;max-height:none;margin:0;padding:5px 8px 5px 12px;border:0;resize:none;outline:0;box-shadow:none;background:transparent;color:var(--chat-ink);font-family:var(--conversation-font);font-size:14px;font-weight:400;line-height:1.6;border-radius:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--chat-muted) 65%,transparent) transparent;mask-image:linear-gradient(to bottom,transparent,#000 5px,#000 calc(100% - 5px),transparent)}
+.conversation-input-shell textarea::-webkit-scrollbar{width:10px}
+.conversation-input-shell textarea::-webkit-scrollbar-track{background:transparent}
+.conversation-input-shell textarea::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--chat-muted) 65%,transparent);border:2px solid transparent;border-radius:5px;background-clip:padding-box}
+.conversation-input-shell textarea::placeholder{color:var(--chat-muted);opacity:.75}
+.conversation-input-actions{display:flex;align-items:center;justify-content:space-between;padding:7px 9px 9px;gap:8px}
+.conversation-send{margin-left:auto;display:grid;place-items:center;width:29px;height:29px;padding:0;border:1px solid var(--chat-accent);border-radius:50%;background:var(--chat-accent);color:#fff}.conversation-send:disabled{opacity:.25}.conversation-send:not(:disabled):hover{filter:brightness(.92)}
+.conversation-composer-note{font-size:9px;line-height:1.7;min-height:16px;color:var(--chat-muted);margin:8px 2px 0;overflow-wrap:anywhere}
+.conversation-attention{margin-top:4px}.conversation-attention .agent-question-deck{display:flex;flex-direction:column;gap:14px;margin:0;padding:0;min-width:0}
+.conversation-attention .agent-question-alert{padding:11px;gap:8px;border-radius:7px;align-items:flex-start}.conversation-attention .agent-question-alert>svg{width:15px}.conversation-attention .agent-question-alert strong{font-size:11px}.conversation-attention .agent-question-alert div>span{font-size:10px;line-height:1.7}
+.conversation-attention .agent-question-card{padding:13px;border-radius:8px;box-shadow:none}.conversation-attention .agent-question-card h2{font-size:13px}.conversation-attention .agent-question-heading{flex-wrap:wrap;gap:6px}.conversation-attention .agent-question-options>label{padding:9px;gap:7px}.conversation-attention .agent-question-options strong{font-size:11px}.conversation-attention .agent-question-footer{flex-wrap:wrap}.conversation-attention .agent-question-footer>span{width:100%}.conversation-attention .agent-question-footer>button{width:100%}.conversation-attention pre{white-space:pre-wrap;overflow-wrap:anywhere}.conversation-attention :is(article,section,fieldset){min-width:0;max-width:100%}
+/* Labels appear with the same hover/focus expansion as the lens list. */
+.lens-sidebar .lens-shortcuts button{display:flex;align-items:center;justify-content:flex-start;padding:9px;width:100%;gap:13px;overflow:hidden}.lens-sidebar .lens-shortcuts svg{flex-shrink:0}.lens-shortcut-label{white-space:nowrap;visibility:hidden;opacity:0;font-size:12px;font-weight:500}.lens-sidebar[data-expanded="true"] .lens-shortcut-label{visibility:visible;opacity:1}
+/* Stage labels remain independently selectable. */
+.app-shell[data-design] .stage-nav-item{position:relative;flex:1;min-width:110px;display:flex;align-items:stretch}.app-shell[data-design] .stage-nav-item .stage-step{width:100%;min-width:0;gap:6px}.app-shell[data-design] .stage-nav-item .stage-step>span:nth-child(2){min-width:0}.app-shell[data-design] .stage-nav-item .stage-step strong{font-size:11px}.app-shell[data-design] .stage-nav-item .stage-step small{max-width:none;font-size:9px;overflow:hidden;text-overflow:ellipsis}
+.demo-workspace .stage-workspace>.content-tabs:first-child{margin-top:0}
+@media(min-width:1051px){
+ .app-shell.demo-workspace[data-design] .workspace,.app-shell.live-workbench[data-design] .workspace{margin-right:var(--conversation-width);width:auto;min-width:0;flex:1}
+ .app-shell.demo-workspace[data-design] .workbench-grid,.app-shell.live-workbench[data-design] .workbench-grid{grid-template-columns:minmax(0,1fr)}
+ .app-shell[data-design] .insight-rail.conversation-rail{position:fixed;inset:0 0 0 auto;width:var(--conversation-width);height:100dvh;max-height:none;z-index:12}
+ .app-shell.demo-workspace[data-design="paper"] .stage-nav-item{flex:auto;min-width:0;width:100%}
+}
+@media(min-width:1051px) and (max-width:1350px){.app-shell[data-design]{--conversation-width:320px}}
+@media(max-width:1050px){.app-shell[data-design] .insight-rail.conversation-rail{position:relative;inset:auto;width:100%;height:700px;max-height:90dvh;border:1px solid var(--line);border-radius:9px;margin-top:16px;grid-column:1/-1}}
+@media(max-width:760px){.conversation-rail{--conversation-history-inset:14px}.conversation-rail .conversation-composer{padding:12px}.conversation-rail .conversation-log{padding-block:19px}.app-shell[data-design] .stage-nav-item{min-width:132px}.conversation-rail .conversation-send{width:33px;height:33px}}
+@media(prefers-reduced-motion:reduce){.conversation-input-shell{transition:none}.assistant-reply-fragment{animation:none}.conversation-typing-dot{animation:none;opacity:.6}}
+
+@media(min-width:761px){.app-shell.demo-workspace[data-design]:not([data-design="paper"]) .stage-nav-item:first-child{flex:1.2;min-width:142px}.app-shell.demo-workspace[data-design] .stage-nav-item:first-child .stage-step strong{white-space:nowrap}}
+
+.app-shell.demo-workspace[data-design]:not([data-design="paper"]) .stage-track{overflow-x:auto;scrollbar-width:thin}
+.app-shell.demo-workspace[data-design]:not([data-design="paper"]) .stage-nav-item .stage-step{padding:8px 22px 8px 7px;gap:5px}
+.app-shell.demo-workspace[data-design]:not([data-design="paper"]) .stage-nav-item .step-dot{width:16px;height:16px;min-width:16px;flex-shrink:0}
+.app-shell.demo-workspace[data-design]:not([data-design="paper"]) .stage-nav-item .stage-step strong{white-space:nowrap;font-size:10.5px}
+/* The divider changes the single width variable shared by the pane and main area. */
+.app-shell[data-design] .conversation-resize-handle{position:absolute;inset:0 auto 0 0;width:8px;display:block;z-index:5;cursor:col-resize;touch-action:none;outline:none}
+.conversation-resize-handle:before{content:"";position:absolute;top:calc(50% - 18px);left:1px;width:2px;height:36px;border-radius:2px;background:var(--line)}
+.conversation-resize-handle:after{content:"";position:absolute;inset:0 auto 0 0;width:2px;background:transparent;transition:background .12s}
+.conversation-resize-handle:hover:after,.conversation-resize-handle:focus-visible:after,.conversation-resize-handle[data-resizing="true"]:after{background:var(--green)}
+.conversation-resize-handle:focus-visible{box-shadow:inset 0 0 0 1px var(--green)}
+@media(max-width:1050px){.app-shell[data-design] .conversation-resize-handle{display:none}}

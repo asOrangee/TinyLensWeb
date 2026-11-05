@@ -1,0 +1,44 @@
+schema_version = "stage_expert_golden.v1"
+agent_config = "../agents/stage-m3-expert.toml"
+output_schema = "stage-m3-expert-output.schema.json"
+contract_fixtures = "stage-expert-contract-cases.json"
+
+[[cases]]
+name = "m3_accept_local_limitation"
+stage = "m3"
+expected_decision = "accept"
+expected_blockers = []
+expected_warnings = ["model_limited_residual"]
+repair_target = ""
+
+[[cases]]
+name = "m3_retry_sampling"
+stage = "m3"
+expected_decision = "retry"
+expected_blockers = ["sampling_pathology"]
+expected_warnings = []
+repair_target = "stage_m3_n_eff"
+
+[[cases]]
+name = "m3_human_global_topology"
+stage = "m3"
+expected_decision = "human_review"
+expected_blockers = ["structural_image_family_failure"]
+expected_warnings = []
+repair_target = ""
+
+[[cases]]
+name = "m3_human_ambiguous_grid_sufficiency"
+stage = "m3"
+expected_decision = "human_review"
+expected_blockers = []
+expected_warnings = []
+repair_target = ""
+
+[[cases]]
+name = "m3_human_confirmed_new_grid_truncation"
+stage = "m3"
+expected_decision = "human_review"
+expected_blockers = ["source_bbox_truncation"]
+expected_warnings = []
+repair_target = ""

@@ -1,0 +1,39 @@
+schema_version = "stage_expert_golden.v1"
+agent_config = "../agents/stage-m0-expert.toml"
+output_schema = "stage-m0-expert-output.schema.json"
+
+[[cases]]
+name = "m0_accept_interior_source"
+expected_grid_judgment = "grid_sufficient"
+
+[[cases]]
+name = "m0_accept_isolated_edge_noise"
+expected_grid_judgment = "grid_sufficient"
+
+[[cases]]
+name = "m0_accept_boundary_only_pathology"
+expected_grid_judgment = "grid_sufficient"
+
+[[cases]]
+name = "m0_accept_asinh_only_smooth_pedestal"
+expected_grid_judgment = "grid_sufficient"
+
+[[cases]]
+name = "m0_retry_coherent_edge_truncation"
+expected_grid_judgment = "source_bbox_truncation"
+
+[[cases]]
+name = "m0_accept_ambiguous_edge_structure"
+expected_grid_judgment = "grid_sufficient"
+
+[[cases]]
+name = "m0_human_unreadable_linear_diagnostic"
+expected_grid_judgment = "indeterminate"
+
+[[cases]]
+name = "m0_accept_after_enlargement"
+expected_grid_judgment = "grid_sufficient"
+
+[[cases]]
+name = "m0_maximum_grid_still_truncated"
+expected_grid_judgment = "source_bbox_truncation"

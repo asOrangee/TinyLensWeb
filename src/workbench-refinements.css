@@ -1,0 +1,59 @@
+/* Sidebar menus share the workbench surfaces, borders and accent colors. */
+.lens-sidebar .sidebar-menu-trigger .sidebar-menu-chevron{margin-left:2px;opacity:0;visibility:hidden}
+.lens-sidebar[data-expanded="true"] .sidebar-menu-trigger .sidebar-menu-chevron{opacity:.6;visibility:visible}
+.sidebar-select-menu{--menu-bg:#fff;--menu-ink:#42556d;--menu-muted:#8190a3;--menu-line:#dce3ed;--menu-active:#edf3fe;--menu-accent:#2f6ac2;position:fixed;z-index:85;width:232px;padding:6px;overflow-y:auto;border:1px solid var(--menu-line);border-radius:9px;background:var(--menu-bg);color:var(--menu-ink);box-shadow:0 8px 32px #17294324;font:12px/1.5 -apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif}
+.sidebar-select-menu[data-design="classic"]{--menu-ink:#2e4d45;--menu-line:#dbe5df;--menu-muted:#7d9188;--menu-active:#eaf3ef;--menu-accent:#277d68}
+.sidebar-select-menu[data-design="observatory"]{--menu-bg:#1b2533;--menu-ink:#d0dbea;--menu-muted:#91a0b5;--menu-line:#344359;--menu-active:#352e25;--menu-accent:#efbf7f}
+.sidebar-select-menu[data-design="paper"]{--menu-bg:#fffaf1;--menu-ink:#66503e;--menu-muted:#a39280;--menu-line:#ded2c0;--menu-active:#efe4d6;--menu-accent:#994e38}
+.sidebar-menu-heading{padding:6px 9px 8px;font-size:10px;color:var(--menu-muted)}
+.sidebar-select-menu>button{display:flex;align-items:center;gap:10px;width:100%;min-height:35px;padding:7px 9px;border:0;border-radius:5px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.sidebar-select-menu>button>span:not(.sidebar-option-swatches){flex:1}
+.sidebar-select-menu>button[aria-checked="true"]{background:var(--menu-active);color:var(--menu-accent)}
+.sidebar-select-menu>button:hover,.sidebar-select-menu>button:focus-visible{background:var(--menu-active);outline:1px solid color-mix(in srgb,var(--menu-accent) 35%,transparent);outline-offset:-1px}
+.sidebar-option-swatches{display:flex;gap:2px;padding:3px;border:1px solid var(--menu-line);border-radius:5px}
+.sidebar-option-swatches i{display:block;width:8px;height:15px;border-radius:2px}
+.app-shell.demo-workspace[data-design] .sidebar.lens-sidebar{padding-top:12px}
+.lens-sidebar .lens-shortcuts{gap:4px;padding-bottom:12px}
+.lens-sidebar .lens-shortcuts button{height:38px;min-height:38px}
+.lens-sidebar .lens-collection{padding-top:9px}
+.lens-collection-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;min-height:38px;flex-shrink:0}
+.lens-sidebar .lens-collection-heading .lens-section-title{display:none;margin:0 0 0 7px}
+.lens-sidebar[data-expanded="true"] .lens-collection-heading .lens-section-title{display:block}
+.lens-sidebar .lens-new-task{display:flex;align-items:center;gap:8px;min-width:42px;height:38px;padding:8px 9px;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--lens-nav-ink);overflow:hidden;cursor:pointer}
+.lens-sidebar .lens-new-task>svg{flex-shrink:0}
+.lens-sidebar .lens-new-task:hover{background:var(--lens-nav-active);color:var(--lens-nav-accent)}
+.lens-sidebar .lens-new-task .lens-shortcut-label{display:none;font-size:10px}
+.lens-sidebar[data-expanded="true"] .lens-new-task .lens-shortcut-label{display:inline}
+.lens-sidebar .lens-task-placeholder{display:grid;place-items:center;background:color-mix(in srgb,var(--lens-nav-ink) 6%,var(--lens-nav-bg));border-color:var(--lens-nav-line);color:var(--lens-nav-ink)}
+
+/* One quiet header holds the lens identity and the compact stage navigation. */
+.app-shell.demo-workspace[data-design] .main-content{padding:12px 18px 18px}
+.app-shell.demo-workspace[data-design] .workbench-heading{gap:12px;padding:5px 10px;margin-bottom:8px;border:1px solid var(--line);border-radius:8px;background:var(--panel);box-shadow:none}
+.app-shell.demo-workspace[data-design] .lens-identity{flex-basis:145px}
+.app-shell.demo-workspace[data-design] .lens-identity h1{font-size:20px}
+.app-shell.demo-workspace[data-design] .lens-version{margin-top:1px}
+.app-shell.demo-workspace[data-design] .workbench-heading .stage-track{padding:0;border:0;border-radius:0;background:transparent;box-shadow:none}
+.app-shell.demo-workspace[data-design] .workbench-heading .stage-nav-item{min-height:48px;padding-top:6px;padding-bottom:6px}
+.app-shell.demo-workspace[data-design] .workbench-heading .stage-nav-item:has(.stage-step.current){background:var(--green-soft);box-shadow:none}
+.app-shell.demo-workspace[data-design] .workbench-heading .stage-nav-item .stage-name-line .stage-step small{top:23px}
+.app-shell.demo-workspace[data-design] .stage-workspace{padding:10px 14px 14px}
+.app-shell.demo-workspace[data-design] .stage-workspace>.content-tabs{margin:0 0 10px;gap:20px}
+.app-shell.demo-workspace[data-design] .content-tabs>button{min-height:34px;padding-top:5px;padding-bottom:7px}
+.app-shell.demo-workspace[data-design] .tab-panel>.science-viewer{padding:10px}
+.app-shell.demo-workspace[data-design] .science-toolbar{margin-bottom:8px}
+.demo-existing-workbench[hidden]{display:none}
+.blank-task-workspace{min-height:calc(100dvh - 30px);display:flex;flex-direction:column;color:var(--ink)}
+.blank-task-heading{padding:8px 12px}
+.app-shell.demo-workspace[data-design] .blank-task-heading input{max-width:100%;width:100%;margin:0;padding:2px 0 7px;background:transparent;border:0;border-bottom:1px solid transparent;border-radius:0;outline:none;box-shadow:none;color:var(--ink);font-size:20px;font-weight:600;line-height:1.5}
+.app-shell.demo-workspace[data-design] .blank-task-heading input:focus{border-bottom-color:var(--line)}
+.blank-task-heading input::placeholder{color:var(--muted)}
+.blank-task-placeholder{display:flex;flex:1;flex-direction:column;align-items:center;justify-content:center;padding:0 20px 55px;color:var(--muted);text-align:center}
+.blank-task-placeholder svg{opacity:.4}.blank-task-placeholder p{margin-top:15px;font-size:12px}
+
+/* A single surface holds the history and its inset composer. */
+.conversation-rail .conversation-composer{flex:0 0 auto;height:125px;min-height:125px;max-height:225px;padding:10px 14px 14px;border-top:0}
+.conversation-composer form{display:flex;flex-direction:column;height:100%;min-height:0}
+.conversation-composer .conversation-input-shell{display:flex;flex:1 1 0;min-height:0;flex-direction:column}
+.conversation-input-actions,.conversation-composer-note,.conversation-interrupt{flex-shrink:0}
+/* Keep the desktop frame stable when stage content gains a page scrollbar. */
+html{overflow-y:scroll;scrollbar-gutter:stable}

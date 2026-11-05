@@ -1,0 +1,56 @@
+.mask-editor { background: #fff; border: 1px solid #e5e8ed; border-radius: 12px; overflow: hidden; color: #344054; }
+.mask-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 20px 20px 16px; }
+.mask-heading h3 { margin: 0 0 5px; font-size: 14px; font-weight: 650; color: #1b2738; }
+.mask-heading p { margin: 0; font-size: 12px; line-height: 1.7; color: #87909d; }
+.mask-local-badge { font-size: 10px; white-space: nowrap; padding: 4px 7px; border: 1px solid #cbe8dd; border-radius: 4px; background: #f3faf7; color: #488e76; }
+.mask-toolbar { min-height: 47px; display: flex; flex-wrap: wrap; align-items: center; gap: 3px; border-top: 1px solid #eef0f3; border-bottom: 1px solid #e5e8ed; padding: 7px 13px; background: #f9fafb; }
+.mask-toolbar button, .mask-reset { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 31px; padding: 0 9px; border: 1px solid transparent; border-radius: 5px; color: #697586; font-size: 11px; font-family: inherit; background: transparent; cursor: pointer; transition: background .12s, color .12s; }
+.mask-toolbar button:hover:not(:disabled) { background: #edf2f5; color: #27394c; }
+.mask-toolbar button.mask-selected { background: #e8f3f0; border-color: #d8eae4; color: #277762; }
+.mask-toolbar button:disabled, .mask-reset:disabled { cursor: default; opacity: .35; }
+.mask-toolbar button:focus-visible, .mask-reset:focus-visible, .mask-overlay-button:focus-visible { outline: 2px solid #459d88; outline-offset: 2px; }
+.mask-toolgroup { display: inline-flex; gap: 2px; }
+.mask-toolbar-divider { width: 1px; height: 18px; margin: 0 5px; background: #e2e6eb; }
+.mask-history-tools { display: inline-flex; margin-left: auto; gap: 1px; }
+.mask-workarea { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 3fr); gap: 0; place-items: center; padding: 20px; }
+.mask-figure { margin: 0; width: 100%; max-width: 470px; justify-self: center; }
+.mask-image-area { aspect-ratio: 1; position: relative; overflow: hidden; border-radius: 6px; background: #080b12; isolation: isolate; }
+.mask-background, .mask-canvas { display: block; position: absolute; inset: 0; width: 100%; height: 100%; image-rendering: pixelated; image-rendering: crisp-edges; }
+.mask-background { object-fit: contain; user-select: none; }
+.mask-canvas { touch-action: none; z-index: 2; outline-offset: -3px; }
+.mask-canvas:focus-visible { outline: 2px solid #5bc4a6; }
+.mask-tool-paint, .mask-tool-erase { cursor: crosshair; }
+.mask-disabled .mask-canvas { cursor: default; }
+.mask-domain-boundary { position: absolute; inset: .5%; border: 1px dashed rgba(223,233,245,.25); border-radius: 50%; pointer-events: none; z-index: 3; }
+.mask-brush-cursor { position: absolute; transform: translate(-50%, -50%); border: 1px solid rgba(135,255,212,.95); border-radius: 50%; background: rgba(104,233,188,.14); pointer-events: none; z-index: 4; box-sizing: border-box; }
+.mask-brush-erase { border-color: #ffb09d; background: #ffb09d15; }
+.mask-image-label { position: absolute; top: 11px; left: 12px; color: #a4acbb; font-size: 9px; letter-spacing: .3px; z-index: 3; pointer-events: none; }
+.mask-scalebar { position: absolute; width: 12.5%; right: 13px; bottom: 15px; border-bottom: 2px solid #ccd7e0; padding-bottom: 4px; text-align: center; font-size: 10px; color: #dce4ec; z-index: 3; pointer-events: none; }
+.mask-overlay-button { position: absolute; bottom: 12px; left: 12px; border: 1px solid #ffffff22; background: #101822c9; border-radius: 5px; width: 29px; height: 29px; display: grid; place-items: center; color: #b5d4ca; z-index: 5; cursor: pointer; }
+.mask-figure figcaption { display: flex; align-items: center; justify-content: space-between; margin-top: 9px; color: #8a94a3; font-size: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.mask-inspector { min-width: 0; width: 100%; max-width: 220px; justify-self: center; align-self: center; text-align: center; }
+.mask-inspector .mask-brush-value, .mask-inspector .mask-coverage, .mask-inspector .mask-legend p { justify-content: center; }
+.mask-inspector-section { margin-bottom: 23px; }
+.mask-field-label { color: #8691a0; font-size: 10px; display: block; margin-bottom: 10px; letter-spacing: .2px; }
+.mask-brush-value { display: flex; align-items: baseline; gap: 6px; margin-bottom: 8px; }
+.mask-brush-value strong { font-weight: 500; font-size: 23px; line-height: 1; color: #344054; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.mask-brush-value > span { color: #939dac; font-size: 10px; }
+.mask-inspector input[type=range] { width: 100%; margin: 6px 0; height: 4px; accent-color: #3f9c81; cursor: pointer; }
+.mask-inspector input[type=range]:disabled { cursor: default; opacity: .4; }
+.mask-range-labels { display: flex; justify-content: space-between; font-size: 9px; color: #9aa3af; margin-top: 5px; }
+.mask-coverage { display: flex; align-items: baseline; justify-content: space-between; gap: 5px; }
+.mask-coverage strong { font-size: 24px; font-weight: 500; color: #2e846d; line-height: 1.1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.mask-coverage small { font-size: 12px; padding-left: 2px; }
+.mask-coverage > span { color: #98a1ad; font-size: 9px; white-space: nowrap; }
+.mask-coverage-track { height: 4px; background: #edf1f2; border-radius: 3px; margin-top: 13px; overflow: hidden; }
+.mask-coverage-track > span { display: block; height: 100%; background: #60b99c; border-radius: inherit; }
+.mask-pixel-count { color: #969fac; font-size: 9px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 7px; }
+.mask-legend { padding-top: 12px; border-top: 1px solid #edf0f3; }
+.mask-legend p { display: flex; align-items: center; gap: 8px; font-size: 10px; color: #7c8796; margin: 10px 0; }
+.mask-legend i { display: block; width: 9px; height: 9px; border-radius: 2px; flex: 0 0 auto; }
+.mask-legend-included { background: #51c59d; box-shadow: inset 0 0 0 1px #369b7a; }
+.mask-legend-excluded { background: #f2f3f6; border: 1px solid #d9dfe5; }
+.mask-legend .mask-legend-boundary { border: 1px dashed #a8b2c0; border-radius: 50%; }
+.mask-help { font-size: 10px; line-height: 1.8; color: #98a2af; margin: 15px 0; }
+.mask-reset { border: 1px solid #e4e8ec; font-size: 12px; font-weight: 500; height: 40px; min-height: 40px; width: 100%; margin-top: 8px; gap: 8px; border-radius: 6px; }
+.mask-reset:hover:not(:disabled) { background: #f7f9fa; color: #465264; }

@@ -1,0 +1,347 @@
+# Strong Lens Modeling Workflow
+
+This context describes the vocabulary for a Codex-orchestrated strong-lens modeling run. It distinguishes orchestration decisions from deterministic modeling operations.
+
+## Language
+
+**Lens Orchestrator**:
+The skill-driven controller of a modeling batch: it owns lens and stage ordering, delegates the three independent preflight inspections, their text-only synthesis, and each subjective stage loop, verifies authoritative evidence, and produces the Batch Summary.
+_Avoid_: Python workflow, Python state machine
+
+**Stage Expert**:
+The persistent scientific and operational owner of exactly one `lens × stage` loop for A, B, M0, M1, M2, or M3; it runs the fixed Packaged Pipeline, reviews eligible evidence, proposes allowed local repairs, and continues until acceptance or Human Review.
+_Avoid_: cross-stage reviewer, workflow state holder, pipeline developer
+
+**Stage Adjudication**:
+The stateless deterministic registration of one completed Stage Attempt Record and, when required, one Stage Expert review: it enforces the Hard Gate, review, repair, warning-lineage, and retry-budget contracts and the mechanical `accept`, `retry`, or `human_review` mapping before saving canonical review and decision evidence.
+_Avoid_: scientific review, retry counter, Python workflow state machine
+
+**Batch Output Directory**:
+The caller-selected directory containing the current Lens Result Directory for each requested lens, the `_archive/` directory of Archived Lens Runs, and the Batch Summary.
+_Avoid_: Lens Result Directory, single run root
+
+**Archive Directory**:
+The real, non-symbolic-link `_archive/` directory directly below a Batch Output Directory. Its direct `<lens_id>_old_<integer>` children are Archived Lens Runs and are never valid output paths for workflow commands that write lens results. Non-archive entries are retained but ignored.
+_Avoid_: Lens Result Directory, alternate Batch Output Directory
+
+**Lens Result Directory**:
+The canonical directory named by its lens ID directly below the Batch Output Directory; it contains the current Lens Run for that lens.
+_Avoid_: Batch Output Directory, archived run
+
+**Lens Run**:
+One isolated execution of a lens workflow beginning at preflight and ending in accepted M3 or Human Review, with its own manifest, masks, attempts, reviews, decisions, and accepted heads.
+_Avoid_: stage retry, modeling batch
+
+**Lens Run Manifest**:
+The `run-manifest.json` identity record for a Lens Run. Automatic archiving accepts it only when `schema_version` is supported and `pipeline_release_id` is non-empty; its release need not equal the current release because a Full Lens Rerun creates a separate Lens Run.
+_Avoid_: pipeline compatibility proof, reusable configuration
+
+**Archived Lens Run**:
+A previous current Lens Run preserved as `_archive/<lens_id>_old_<integer>` after a Full Lens Rerun and excluded from the Batch Summary. That suffix has no special meaning for a current Lens Result Directory outside `_archive/`.
+_Avoid_: current result, resumable run, Historical Result Root
+
+**Full Lens Rerun**:
+An explicit request using “重新分析”, “重跑”, or “从头开始” to archive one current Lens Run and start that lens again from preflight without reusing its masks, attempts, reviews, accepted heads, retry budgets, or Pipeline Release; other lenses in the batch are unaffected.
+_Avoid_: resume, retry, batch rerun
+
+**Lens Resume**:
+An explicit request using “继续” or “恢复” to continue the current Lens Run from its Accepted Stage Heads without archiving it or rerunning an accepted stage.
+_Avoid_: Full Lens Rerun, fresh analysis
+
+**Historical Result Root**:
+An output root containing the earlier `pipeline.py`, shared `cache/`, or `reviews/` layout, regardless of whether a Lens Run Manifest is present; its evidence remains read-only and cannot resume or be archived automatically under the current workflow.
+_Avoid_: migration source, compatible resume root, partially upgraded run
+
+**Lens Cache**:
+The immutable accepted stage outputs for one lens, reached through Accepted Stage Heads and reused when the Lens Orchestrator resumes an interrupted modeling run with the same modeling mask and Pipeline Release.
+_Avoid_: state-machine checkpoint, run state
+
+**Accepted Stage Head**:
+The sole promotion authority from one stage to its accepted immutable Stage Attempt Record, Effective Configuration Snapshot, and Attempt Artifact Manifest; an attempt-local accept decision is necessary evidence but does not itself advance the head.
+_Avoid_: mutable cache directory, copied accepted artifacts, workflow checkpoint
+
+**Accepted Configuration Snapshot**:
+The complete, immutable lens-local configuration currently accepted for modeling; it contains every effective setting, including settings that Automatic Parameter Tuning cannot change.
+_Avoid_: mutable pipeline copy, sparse override, accumulated retry patch
+
+**Candidate Configuration Snapshot**:
+The complete, immutable configuration generated by applying one valid Retry Repair Proposal to its immediate parent configuration for a specific stage attempt; it becomes accepted only after that attempt passes the Hard Gate and scientific review.
+_Avoid_: candidate pipeline, partial config, mutable work copy
+
+**Candidate Configuration Chain**:
+The ordered, stage-local sequence of eligible Candidate Configuration Snapshots created across scientific retries. Each proposal advances from the preceding candidate, while only final stage acceptance advances the Accepted Configuration Snapshot.
+_Avoid_: accumulated accepted patches, independent retry candidates, partially promoted config
+
+**Packaged Pipeline**:
+The immutable modeling implementation shared by all lenses and executed with an Effective Configuration Snapshot; external classic-pipeline code is a development reference, not a runtime dependency.
+_Avoid_: Pipeline Template, lens-local pipeline, mutable baseline
+
+**GPU Lease**:
+The temporary exclusive assignment of exactly one locally visible GPU to one stage attempt's physical execution; it starts before computation and ends with that stage process.
+_Avoid_: lens-wide GPU reservation, multi-GPU visibility
+
+**GPU Stage Runner**:
+The deterministic operational owner of GPU Lease acquisition and physical execution for A, B, M0, M1, M2, and M3.
+_Avoid_: Stage Expert GPU selection, scientific scheduler
+
+**Stage-A Process Timeout**:
+The fixed maximum wall-clock duration of the complete Stage-A physical process after its GPU Lease is acquired; GPU waiting time is outside this duration.
+_Avoid_: sampler timeout, GPU wait timeout
+
+**Pipeline Release**:
+The immutable identity binding the Packaged Pipeline, Configuration Schema, Tunable Catalog, and stage artifact contract for one modeling run; every configuration snapshot in that run belongs to it and the run cannot switch releases.
+_Avoid_: model recipe, runtime upgrade, mutable environment label
+
+**Effective Configuration Snapshot**:
+The complete, immutable set of pipeline settings actually used by one stage attempt, independent of the sparse proposal that produced it.
+_Avoid_: config overlay, agent response, implicit defaults
+
+**Tunable Catalog**:
+The authoritative, default-deny machine policy that individually authorizes evidence-supported configuration leaves for Automatic Parameter Tuning and binds each to its owning stage and role, repairable blockers, value constraints, and invalidation scope. Agent schemas, runtime validation inputs, and human-readable allowlists are derived from it; wildcard field families confer no authority.
+_Avoid_: Configuration Schema, wildcard allowlist, every configuration field
+
+**Tuning Safety Envelope**:
+The minimal type, physical, resource, ownership, and state-consistency constraints within which a reviewer freely chooses an absolute replacement value; it contains no prescribed step size, ladder, or recommended value.
+_Avoid_: tuning recipe, parameter ladder, Python-selected next value
+
+**Preflight Disposition**:
+The Preflight Synthesis's binary routing decision: `model` permits the fixed single-deflector workflow to run, while `human_review` stops it and supplies a diagnostic reason. A `model` disposition does not assert that the preflight morphology has a unique interpretation; if every physical stage is accepted, M3 remains the final modeled result.
+_Avoid_: confidence threshold, complexity score, provisional model
+
+**System Inspector Vote**:
+One of exactly three independent, non-authoritative visual judgments of the same Preflight Inspector Prompt. Each vote is produced in isolation by a separate System Inspector and preserved even when it is the minority judgment.
+_Avoid_: retry, synthesis decision, Stage Review
+
+**Preflight Synthesis Expert**:
+The dedicated text-only expert that always receives exactly three valid System Inspector Votes, receives no preflight image, and produces the final structured synthesis from those reports. It summarizes visual evidence reported by the inspectors but contributes no independent visual observation or image fact.
+_Avoid_: fourth inspector, vote counter, Stage Adjudication
+
+**Preflight Synthesis**:
+The authoritative structured result produced by the Preflight Synthesis Expert from three System Inspector Votes. Its `disposition` and each `contaminant_ids` membership follow the two-of-three majority, and it is the sole preflight judgment submitted for canonical mask materialization.
+_Avoid_: independent image review, fourth visual opinion, Stage Adjudication
+
+**Preflight Synthesis Validation**:
+The deterministic check that a proposed Preflight Synthesis obeys the three-vote majority, closed hint provenance, fixed lens identity, and strict output contract. It rejects violations for response correction but never generates or silently rewrites the synthesis.
+_Avoid_: vote generation, scientific review, Stage Adjudication
+
+**Visual Einstein-Radius Hint**:
+The System Inspector's approximate estimate of the Stage-A SIE Einstein-radius scale from the visible deflector-centred image geometry; it guides numerical search but is neither an independent measurement nor a fixed model parameter. A `model` disposition always includes the estimate, its plausible range, confidence, and geometric basis, while `human_review` may leave it absent. The confidence is the Inspector's ordinary visual judgment rather than a mechanically calibrated morphology class.
+_Avoid_: measured Einstein radius, arc radius, fixed theta_E
+
+**Visual Deflector Centre**:
+The System Inspector's image-plane estimate of the dominant deflector's visible centre, used to define the geometry behind the Visual Einstein-Radius Hint but not, by itself, to change the Stage-A mass-centre prior.
+_Avoid_: nominal modeling centre, fitted mass centre
+
+**Visual-Guided Stage-A Prior**:
+The empirical Stage-A `theta_E` prior deterministically derived from an eligible Visual Einstein-Radius Hint, combining an informative truncated-normal core with a uniform escape component over the baseline search support. Low-confidence or unsupported hints retain the baseline uniform prior without changing the Preflight Disposition. The escape component preserves non-zero prior density across the support but does not guarantee that finite sampling recovers the correct region.
+_Avoid_: independent external prior, fixed theta_E, visual hard gate, guaranteed recovery
+
+**Visual-Prior Provenance**:
+The immutable attempt-local record linking a Visual Einstein-Radius Hint and a versioned derivation rule to the effective Stage-A `theta_E` prior and any uniform-fallback reason.
+_Avoid_: mutable inspector input, implicit prior default
+
+**Visual-Prior Conflict**:
+A diagnostic disagreement between the Stage-A posterior and the informative core or plausible range of the Visual Einstein-Radius Hint; it is evidence for scientific review, not by itself a retry instruction or Progression Blocker.
+_Avoid_: prior-boundary contact, automatic uniform rerun, failed hard gate
+
+**Stage-A Predicted Image Family**:
+The immutable set of image-plane positions predicted from the accepted Stage-A posterior-median mass and source model; it is shared evidence for downstream topology and mask review, not independent observational confirmation that every predicted image is detected.
+_Avoid_: observed image positions, confirmed multiple images, Stage-B detections
+
+
+**3-Sigma Preflight Segmentation**:
+The single authoritative preflight segmentation formed from deblended positive VIS detections containing at least five connected pixels at or above three times the background-noise scale. Its pixels and IDs are used unchanged in both preflight figures and for inspector-selected masking.
+_Avoid_: Core-Seeded Segmentation, detection core, Segmentation Display Tier, strong segment, weak segment
+
+**Non-Lens Segment**:
+Any region in the right-hand preflight segmentation panel that the final Preflight Synthesis does not assign to the dominant lens galaxy or plausible lensed images, regardless of whether that region lies inside or affects the fixed 4″ modeling circle. The canonical `contaminant_ids` field contains every Non-Lens Segment ID selected by that synthesis.
+_Avoid_: only aperture contaminant, Boundary-Crossing Segment
+
+**Modeling Mask**:
+The FITS mask used by every modeling stage, where `1` excludes pixels outside the fixed 4″ modeling circle and pixels belonging to inspector-selected Non-Lens Segments.
+_Avoid_: dilated contaminant mask, implicit exclusion
+
+**Valid Modeling Domain**:
+The immutable complement of the Modeling Mask: the only image pixels eligible to seed, expand, or remain in a Stage-B Arc Mask.
+_Avoid_: cropped image, modified observation, display-only aperture
+
+
+**Preflight Inspector Prompt**:
+The central two-panel visual that is the System Inspector's sole image evidence for morphology, Non-Lens Segment classification, routing, and the Visual Einstein-Radius Hint. Its left panel is an unlabelled J/Y/VIS colour composite; its right panel overlays the authoritative VIS segmentation with semantically neutral, single-colour contours and exact IDs. It retains one pixel (normally 0.1″) beyond the fixed 4″ circle on every edge so the Inspector can inventory every displayed segment.
+_Avoid_: six-panel prompt, human audit image
+
+**Preflight Human Audit**:
+The retained six-panel visual that supports later human inspection but is never supplied to the System Inspector.
+_Avoid_: model input, Inspector prompt
+
+**Stage Attempt Record**:
+The numbered, immutable, attempt-local Effective Configuration Snapshot, execution marker, stage outputs, diagnostic images, review, decision, and lineage evidence for one stage attempt, retained whether accepted or rejected. Physical execution seals it by writing `stage-execution.json` before modeling starts; deterministic operations use the records to reconstruct retry counts and configuration ancestry without Python workflow state.
+_Avoid_: state-machine attempt, retry counter
+
+**Attempt Preparation**:
+The deterministic, non-modeling operation that materializes an initial Stage Attempt Record from the current accepted configuration or validates one Retry Repair Proposal and materializes the next attempt; it never makes a workflow or scientific decision.
+_Avoid_: agent-edited full config, stage execution, Python workflow transition
+
+**Attempt Artifact Manifest**:
+The immutable inventory that binds every stage-generated scientific artifact and diagnostic image in a Stage Attempt Record to its attempt-local path, scientific role, and media type.
+_Avoid_: shared-cache listing, mutable artifact path, file-size or content-hash inventory
+
+**Stage Review**:
+The stage-specific scientific assessment of a completed non-B attempt, submitted atomically by its Stage Expert so Stage Adjudication can derive the decision deterministically. M0 reviews only Source Grid Sufficiency and has a dedicated M0 Grid Enlargement outcome; other reviewed stages report Progression Blockers, Handoff Warnings, and any allowed Retry Repair.
+_Avoid_: second decision-maker review, free-form quality verdict
+
+**Stage Review Context**:
+The bounded, stage-scoped view derived from the current Effective Configuration Snapshot, relevant settings, immutable attempt evidence, compact retry lineage, and unresolved upstream warnings for one Stage Review.
+_Avoid_: full pipeline source, complete run history, reviewer-owned state
+
+**Terminal Stage Decision**:
+A stage-attempt decision that ends modeling for one lens as `human_review`; its diagnostic reason is authoritative for the Batch Summary and prevents that lens from resuming.
+_Avoid_: failed M3 decision, generic missing-result fallback
+
+**Human Review**:
+Terminal routing under the single `human_review` status for a specific unresolved Progression Blocker, Scientific Uncertainty that cannot be resolved from the available evidence, or an operational failure that prevents a valid stage attempt; the recorded reason must preserve which kind occurred.
+_Avoid_: imperfect result, Handoff Warning, generic missing-result fallback
+
+**Hard Gate**:
+The deterministic prerequisite for a stage result to be eligible for scientific review: successful execution, required readable artifacts, finite numerical outputs, and an interior M0 regularization optimum.
+_Avoid_: scientific-quality score, reviewer warning
+
+**Progression Acceptance**:
+Acceptance of an A–M2 stage result because it provides scientifically credible upstream information for the next stage, even when model-limited residuals or provisional source structure remain.
+_Avoid_: final-quality acceptance, clean reconstruction
+
+**Final Scientific Acceptance**:
+Acceptance of an M3 result as the terminal modeled result after applying the workflow's strictest residual, source-plausibility, posterior, and sampling review.
+_Avoid_: command success, Progression Acceptance
+
+**Model-Limited Residual**:
+Coherent residual structure within or immediately adjacent to an otherwise captured lensed-image family, attributable to the current stage's deliberately limited lens-light, source-light, mass, or regularization model.
+_Avoid_: missing image, automatic retry condition
+
+**Structural Image-Family Failure**:
+A progression-blocking mismatch in which a credible arc or counterimage lacks a modeled counterpart, the model predicts an unsupported image, or the inferred correspondence is dominated by lens-light residuals rather than a consistent lensed-image family.
+_Avoid_: local residual, imperfect brightness fit
+
+**Coherent Pixelized Source**:
+A progression-credible source reconstruction containing one or more spatially organized emission regions consistent with the modeled lensed-image family; it may be clumpy, asymmetric, and accompanied by negative pixels.
+_Avoid_: necessarily smooth source, necessarily single-component source
+
+**M0-Sealed Source Grid**:
+The square pixelized-source coordinate grid centred immutably on the Stage-A source centre, sized at a fixed source-pixel scale through symmetric bounded Stage-M0 enlargement, and held unchanged after M0 acceptance through M3.
+_Avoid_: stage-local source grid, ray-traced adaptive bounding box
+
+**Source Grid Footprint**:
+The square source-plane area covered by all source pixels, expressed by its outer cell edges rather than the centres of its outermost pixels.
+_Avoid_: outermost-pixel-centre range, source display range
+
+**Source Grid Sufficiency**:
+A Stage-M0 review judgment that coherent interior source emission is not visibly clipped by the current Source Grid Footprint. Insufficiency requires the same coherent extended brightness distribution to continue visibly from the interior into a clipped edge; boundary contact or edge flux alone is insufficient.
+_Avoid_: source plausibility review, edge-flux threshold, empty grid margin requirement
+
+**M0 Grid Enlargement**:
+A bounded Stage-M0 retry that moves symmetrically from an insufficient Source Grid Footprint to the next predetermined larger footprint, preserves the Stage-A centre and fixed source-pixel scale, and repeats the complete regularization calibration.
+_Avoid_: Automatic Parameter Tuning, reviewer-selected padding, free retry
+
+**Source Grid Specification**:
+The authoritative Stage-M0 artifact recording the Stage-A anchor centre, grid-policy level, Source Grid Footprint, pixel-centre coordinate range, source-pixel scale, and pixel count used by one attempt; promotion of its attempt makes it the M0-Sealed Source Grid.
+_Avoid_: Stage-A bbox metadata, duplicated pickle metadata, display extent
+
+**Scientific Uncertainty**:
+Terminal Human Review routing when an eligible Stage Expert cannot distinguish scientifically consequential alternatives from the available evidence without asserting that either alternative is established.
+_Avoid_: Progression Blocker, operational failure, low-confidence warning
+
+**Pathological Source Reconstruction**:
+A Stage-M1 or Stage-M3 progression blocker in which the source is dominated by unstructured pixel-scale noise, resembles a de-magnified image-plane copy, or contains bright pixels only at the reconstruction-grid boundary with no corresponding coherent interior emission. The canonical classification criteria are defined in [Stage Review Scientific Glossary](.codex/skills/lens-model-orchestrator/references/stage-review-glossary.md).
+_Avoid_: clumpy source, source-sign structure, extended interior emission clipped at the source boundary
+
+**Source-Sign Diagnostics**:
+Amplitude- and morphology-aware evidence describing negative pixelized-source values, including negative-to-positive flux, negative peak amplitude, and coherent negative structure; source sign is warning-only and never independently creates a Progression Blocker.
+_Avoid_: negative-pixel veto, negative-pixel-count threshold
+
+**Prior Boundary Contact**:
+Posterior support near a configured prior limit without evidence that support continues beyond an artificial boundary and materially affects the current or downstream scientific interpretation.
+_Avoid_: automatic retry condition, Material Prior Truncation
+
+**Material Prior Truncation**:
+Boundary-seeking posterior support cut off by a safely extendable artificial prior limit strongly enough to affect the current or downstream scientific interpretation; the canonical evidence requirements are defined in [Stage Review Scientific Glossary](.codex/skills/lens-model-orchestrator/references/stage-review-glossary.md).
+_Avoid_: any boundary contact, physical-limit override
+
+**Progression Blocker**:
+A review finding that represents a structural modeling failure rather than an expected stage limitation, making an A–M2 result unsafe for downstream use or preventing Final Scientific Acceptance at M3.
+_Avoid_: issue, imperfection, warning
+
+**Handoff Warning**:
+A non-blocking review finding preserved for downstream stages, or as an M3 scientific limitation, because it does not invalidate progression or the final mass interpretation.
+_Avoid_: retry reason, failed criterion
+
+**Retry Repair Hypothesis**:
+A stage-local causal claim linking one Progression Blocker to one pre-approved setting and to the specific evidence expected to improve on rerun.
+_Avoid_: concrete parameter edit, blind rerun, general residual cleanup
+
+**Retry Repair Proposal**:
+The Stage Expert's concrete absolute replacement of one pre-approved parameter leaf for testing one Retry Repair Hypothesis. It is bound to the immediate parent configuration reference and old value; a valid proposal is required before consuming a scientific retry and is applied by deterministic Attempt Preparation.
+_Avoid_: model-tuner patch, arbitrary pipeline diff, multi-setting repair
+
+**Response Correction**:
+A session-local, non-modeling turn in which the same Stage Expert repairs a schema or proposal-contract violation using structured validation feedback; it neither creates a Stage Attempt Record nor consumes a scientific retry.
+_Avoid_: scientific retry, stage rerun, corrected modeling result
+
+**Automatic Parameter Tuning**:
+A stage-local adjustment of one pre-approved modeling setting during an active run, proposed directly by the Stage Expert and applied without changing the model family or executable pipeline behavior.
+_Avoid_: pipeline editing, model evolution, arbitrary code change
+
+**Model and Code Evolution**:
+An out-of-run development activity that changes a model family, parameterization, algorithm, or executable pipeline behavior; it is outside the current workflow scope and reserved for future planning.
+_Avoid_: automatic parameter tuning, in-run repair
+
+**Development Recommendation**:
+A non-executable Stage Expert note describing model or code evolution worth investigating after a Lens Run reaches Human Review because no allowed stage-local repair is credible.
+_Avoid_: Retry Repair Proposal, automatic patch, in-run pipeline edit
+
+**Arc Mask Refinement**:
+The persistent Stage-B scientific decision loop in which one Stage-B Expert repeatedly accepts a candidate arc mask, proposes a deterministic refinement, or routes an uncertain case to human review while owning every resulting Stage-B execution.
+_Avoid_: expert-edited mask, autonomous mask mutation
+
+**Stage-B Morphology Audit**:
+The attempt-specific comparison of the Stage-A Predicted Image Family with the current lens-light-subtracted signal and Arc Mask, presenting the coverage evidence that the Stage-B Expert must assess for every predicted position.
+_Avoid_: automatic arc detection, forced position mask, Stage-A model review
+
+**Threshold Island**:
+An 8-connected group of pixels inside the Valid Modeling Domain and above the current Stage-B S/N threshold before the small-island filter, identified only for morphology evidence and never addressable by Arc Component Selection.
+_Avoid_: Arc Component, candidate component, selectable component
+
+**Arc Seed**:
+A Threshold Island that survives the current Stage-B small-island filter and therefore may generate one part of the Arc Mask.
+_Avoid_: masked high-S/N island, final Arc Component, model-predicted image
+
+**Constrained Arc Expansion**:
+The optional closing and dilation of Arc Seeds that may include adjacent lower-S/N pixels but may neither enter nor cross the Modeling Mask, which acts as a permanent propagation barrier.
+_Avoid_: unconstrained morphology, contaminant-mask dilation, threshold-free component
+
+**Arc Mask Construction**:
+The single deterministic transformation from a lens-light-subtracted S/N map, the Valid Modeling Domain, and one Effective Configuration Snapshot to an Arc Mask and its complete morphology evidence trace. Every resulting candidate component must descend from at least one Arc Seed.
+_Avoid_: duplicated audit reconstruction, expert-drawn mask, Arc Mask Refinement
+
+**Arc Component**:
+An 8-connected region in the candidate Arc Mask after Constrained Arc Expansion, traceable to one or more Arc Seeds and addressable as a whole by Arc Component Selection.
+_Avoid_: Threshold Island, Arc Seed, pixel-level selection
+
+**Predicted-Image Coverage Disposition**:
+The Stage-B Expert's required classification of one Stage-A predicted position as covered and consistent, observation-supported but uncovered, unsupported by the observation, or indeterminate. It constrains scientific acceptance without treating a model-predicted position as observed truth.
+_Avoid_: pixel threshold result, automatic mask inclusion, optional coverage comment
+
+**Arc Component Selection**:
+The complete set of unrelated Stage-B candidate components excluded for one specific component-catalog reference; it may refine an otherwise fully covered predicted-image family, is independent of Effective Configuration, and becomes invalid whenever mask parameters regenerate the catalog.
+_Avoid_: arc_drop_component_ids config, cross-catalog component IDs, incremental selection patch
+
+**Stage-B Expert**:
+The Stage Expert specializing in one lens's entire Arc Mask Refinement; it owns Stage-B execution and scientific assessment, while Stage Adjudication derives the canonical decision from its structured refinement evidence.
+_Avoid_: Arc Mask Expert, generic stage reviewer, pixel-level mask editor
+
+**Stage-B Retry Budget**:
+The ten retries available after the initial Stage-B attempt for expert-requested parameter or component-selection refinements. It is independent of the retry budget shared by the physical-modeling stages.
+_Avoid_: arc-expert retry budget, mask-only retry allowance
+
+**Batch Summary**:
+The single CSV table at the selected output root that reports each requested lens's terminal status, diagnosis, mass posterior summaries, and result directory.
+_Avoid_: per-lens final manifest, stateful batch result

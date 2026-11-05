@@ -1,0 +1,370 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Stage subhalo expert review",
+  "description": "Scientific term semantics are defined only in .codex/skills/lens-model-orchestrator/references/stage-review-glossary.md.",
+  "$defs": {
+    "blocker_kind": {
+      "type": "string",
+      "enum": [
+        "structural_image_family_failure",
+        "material_prior_truncation",
+        "sampling_pathology",
+        "pathological_source_reconstruction",
+        "source_bbox_truncation",
+        "unsupported_stage_drift"
+      ]
+    },
+    "proposal": {
+      "oneOf": [
+        {
+          "x-stage": "subhalo",
+          "x-role": "stage_subhalo_expert",
+          "x-blockers": [
+            "sampling_pathology"
+          ],
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "base_config",
+            "parameter",
+            "old_value",
+            "new_value"
+          ],
+          "properties": {
+            "base_config": {
+              "type": "string",
+              "pattern": "^attempts/subhalo/[0-9]+/effective-config\\.json$"
+            },
+            "parameter": {
+              "const": "stage_subhalo_n_live"
+            },
+            "old_value": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5000
+            },
+            "new_value": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5000
+            }
+          }
+        },
+        {
+          "x-stage": "subhalo",
+          "x-role": "stage_subhalo_expert",
+          "x-blockers": [
+            "sampling_pathology"
+          ],
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "base_config",
+            "parameter",
+            "old_value",
+            "new_value"
+          ],
+          "properties": {
+            "base_config": {
+              "type": "string",
+              "pattern": "^attempts/subhalo/[0-9]+/effective-config\\.json$"
+            },
+            "parameter": {
+              "const": "stage_subhalo_n_eff"
+            },
+            "old_value": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            },
+            "new_value": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            }
+          }
+        }
+      ]
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "stage",
+    "visual_findings",
+    "numerical_findings",
+    "progression_blockers",
+    "handoff_warnings",
+    "upstream_warning_updates",
+    "retry_repair",
+    "reason",
+    "development_recommendation",
+    "scientific_uncertainty",
+    "residual_improved"
+  ],
+  "properties": {
+    "stage": {
+      "const": "subhalo"
+    },
+    "visual_findings": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "numerical_findings": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "progression_blockers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "evidence",
+          "impact"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/$defs/blocker_kind"
+          },
+          "evidence": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "impact": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "handoff_warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "evidence",
+          "impact",
+          "expected_resolution_stage"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "model_limited_residual",
+              "prior_boundary_contact",
+              "source_sign_structure",
+              "source_clumpiness",
+              "supported_stage_drift",
+              "uniform_like_regularization",
+              "visual_prior_conflict",
+              "unclassified_warning"
+            ]
+          },
+          "evidence": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "impact": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expected_resolution_stage": {
+            "type": "string",
+            "enum": [
+              "m0",
+              "m1",
+              "m2",
+              "m3",
+              "final"
+            ]
+          }
+        }
+      }
+    },
+    "upstream_warning_updates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "warning_ref",
+          "status",
+          "evidence"
+        ],
+        "properties": {
+          "warning_ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "resolved",
+              "persisted",
+              "worsened"
+            ]
+          },
+          "evidence": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "retry_repair": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "hypothesis",
+            "proposal"
+          ],
+          "properties": {
+            "hypothesis": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "blocker_kind",
+                "expected_improvement"
+              ],
+              "properties": {
+                "blocker_kind": {
+                  "$ref": "#/$defs/blocker_kind"
+                },
+                "expected_improvement": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "proposal": {
+              "$ref": "#/$defs/proposal"
+            }
+          }
+        }
+      ]
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "development_recommendation": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "minLength": 1
+        }
+      ]
+    },
+    "scientific_uncertainty": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "evidence",
+            "impact"
+          ],
+          "properties": {
+            "kind": {
+              "const": "source_grid_sufficiency"
+            },
+            "evidence": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "impact": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    },
+    "residual_improved": {
+      "type": "boolean"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "retry_repair": {
+            "type": "object",
+            "required": [
+              "proposal"
+            ],
+            "properties": {
+              "proposal": {
+                "type": "object",
+                "required": [
+                  "parameter"
+                ],
+                "properties": {
+                  "parameter": {
+                    "enum": [
+                      "stage_subhalo_n_live",
+                      "stage_subhalo_n_eff"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "retry_repair": {
+            "properties": {
+              "hypothesis": {
+                "properties": {
+                  "blocker_kind": {
+                    "const": "sampling_pathology"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

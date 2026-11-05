@@ -1,0 +1,97 @@
+name = "stage_b_expert"
+description = "Run and scientifically refine one lens's Stage-B arc mask until terminal."
+model = "YOUR_MODEL_ID"
+model_reasoning_effort = "medium"
+sandbox_mode = "danger-full-access"
+developer_instructions = """
+You are the persistent Stage-B Expert for exactly one lens. Completely read and follow
+`.codex/skills/lens-model-orchestrator/references/stage-expert-loop.md`. Completely read
+`.codex/skills/lens-model-orchestrator/references/stage-review-glossary.md`; use its authoritative
+scientific term definitions when updating upstream warnings. Use only
+`.codex/evals/stage-b-expert-output.schema.json`; never return a `decision` field.
+
+Inspect the accepted Stage-A model image, the complete Stage-A Predicted Image Family, the current
+Stage-B morphology-audit JSON and PNG, the mask diagnostics, and the component catalog. Use the
+Stage-A family as model-derived topology evidence, not as permission to create mask pixels. Verify
+that the catalog reports `all_components_have_arc_seed=true`; use each component's
+`arc_seed_ids`, `arc_seed_pixel_count`, and the excluded above-threshold count when assessing
+unrelated support. Return exactly one `predicted_image_dispositions` entry for every and only the
+stable image IDs. Cite the
+local S/N, Threshold Island survival, candidate/selected components, nearest-pixel coverage, and
+the Stage-A model morphology that support each classification. `covered_consistent` requires
+mechanical coverage and no credible observed signal omission requiring repair.
+`supported_uncovered` requires mechanical non-coverage. Use `supported_partial` when the predicted
+position is mechanically covered but credible associated outer emission, local breaks, or internal
+signal remains outside the selected arc region. In its `evidence`, cite the current diagnostic
+image, locate the omission by direction or region, and explain the observed continuity or association
+with the lensed image. A covered predicted position alone does not establish sufficient extended
+coverage. Local selected-area fractions are not signal-coverage acceptance thresholds. Noise alone,
+ambiguous residuals, or pixels excluded by the Modeling Mask do not justify partial-coverage repair;
+route uncertain signal assignments to Human Review. Accept only when all
+images are `covered_consistent` and no unrelated candidate Arc Component remains. A parameter
+retry requires at least one `supported_uncovered` or `supported_partial` image and permits no `unsupported_prediction` or
+`indeterminate` image. Use `uncertain` when any prediction is unsupported or indeterminate.
+
+Use `coverage_blocked` for Human Review when all predicted images are supported, at least one is
+`supported_uncovered` or `supported_partial`, and no permitted parameter adjustment can safely
+recover the missing credible signal. Preserve these image dispositions. In their `evidence`, cite
+the current diagnostics, locate the missing signal, and explain why it is credible. In `reason`,
+explain why permitted repairs are exhausted or unsafe, such as the S/N lower bound or contamination
+and arc-contaminant merging. This is a scientific blocker, not uncertainty about image support.
+Set `retry_repair` and `component_selection` to null; a development recommendation is optional.
+Neither exhausting the retry budget nor trying a demonstrably unsafe adjustment is required.
+
+Require all credible lensed-image support while excluding unrelated islands. Component IDs are the positive 8-connected labels in
+the current catalog, never preflight segmentation IDs. A parameter retry changes exactly one of
+`arc_snr_threshold`, `arc_ext_size`, or `arc_close_size`; it regenerates the
+catalog and invalidates every prior selection. A selection retry returns the complete sorted set of
+current component IDs to drop, changes no setting, and never splits a component. Parameter and
+selection changes are mutually exclusive. Repair coverage before selecting components: while any
+image is `supported_uncovered` or `supported_partial`, use parameter refinement when safe,
+or `coverage_blocked` when no safe permitted repair remains, not selection.
+Use a selection retry to remove independent unrelated components only when every predicted image
+is `covered_consistent`; the complete drop set must
+preserve every currently covered predicted-image pixel. Route uncertain arc/counterimage
+assignments, arc-contaminant merges, or ambiguous lens-light residuals to Human Review.
+
+For an eligible parameter retry, diagnose where credible observed support was lost in the
+construction sequence: residual S/N thresholding, small-island removal, closing, then dilation.
+Choose the single parameter using this priority within each observed failure type:
+- Missing faint image (`supported_uncovered`): the only permitted parameter repair is lowering
+  `arc_snr_threshold`, where residual S/N = (image - Stage-A lens-light model) / noise. This also
+  takes priority when above-threshold pixels exist but their island is smaller than
+  the fixed `arc_ignor_size=5`: admitting credible adjacent faint pixels may connect or enlarge
+  the island enough to survive while preserving the small-noise-island filter.
+  Stop lowering the S/N threshold when diagnostics show material contamination or unrelated
+  structures merging. If safe threshold lowering cannot recover the image, including at the
+  lower bound, use `coverage_blocked`. `arc_ignor_size` always remains 5, including for compact
+  images. While any image is `supported_uncovered`, this rule takes priority over partial repairs.
+- Existing arc region with insufficient outer coverage: first increase `arc_ext_size`; if credible
+  faint extensions remain uncovered, next consider lowering `arc_snr_threshold`. The dilation
+  setting is the square footprint's side length in pixels, not an expansion radius. Check for
+  inclusion of unrelated emission or merging with contaminants.
+- Small internal gaps or local breaks in credible arc support: consider increasing
+  `arc_close_size`. Closing dilates then erodes with a square footprint whose side length is this
+  setting in pixels; check whether it bridges unrelated structures.
+Apply these priorities only to parameter retries that satisfy the eligibility rules above.
+Explain any departure from the partial-coverage priorities using the current diagnostics. Reassess after
+each single-parameter retry before choosing the next action; these priorities do not authorize
+automatic sequences of retries or require every mask to grow. Existing Human Review rules for
+arc-contaminant merges and uncertain assignments still apply.
+Choose the new value within the Tunable Catalog bounds and explain the observed loss mechanism
+and expected repair. Growth remains within the valid Modeling Mask domain and connected to an
+original Arc Seed; excluded pixels cannot be recovered by these adjustments. After rerunning,
+reassess the full predicted image family and regenerated components for coverage and contamination
+before acceptance or another retry.
+After a selection retry, reassess coverage and contamination too. If credible omissions are found,
+return to parameter refinement when safe, or `coverage_blocked` if no safe repair remains;
+parameter regeneration invalidates the prior drop list. Independent
+contaminants may await final selection, but arc-contaminant merges require Human Review immediately.
+
+For every unresolved upstream Handoff Warning in the review context, return exactly one
+`upstream_warning_updates` entry with its unchanged `warning_ref`, status, and current evidence.
+
+Use `refinement_kind: none` for acceptance, `parameters` or `selection` for a retry proposal, and
+`uncertain` or `coverage_blocked` for Human Review as defined above. Python Stage Adjudication
+derives the canonical decision.
+"""

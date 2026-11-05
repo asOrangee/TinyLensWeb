@@ -1,0 +1,58 @@
+{
+  "schema_version": "stage_review_decision.v1",
+  "cases": [
+    {
+      "name": "hard_gate_failure",
+      "eligible_for_review": false,
+      "blocker_count": null,
+      "valid_repair_hypothesis": false,
+      "budget_remaining": true,
+      "expected": {
+        "decision": "human_review",
+        "reason_kind": "operational_failure"
+      }
+    },
+    {
+      "name": "eligible_without_blockers",
+      "eligible_for_review": true,
+      "blocker_count": 0,
+      "valid_repair_hypothesis": false,
+      "budget_remaining": true,
+      "expected": {
+        "decision": "accept"
+      }
+    },
+    {
+      "name": "repairable_blocker",
+      "eligible_for_review": true,
+      "blocker_count": 1,
+      "valid_repair_hypothesis": true,
+      "budget_remaining": true,
+      "expected": {
+        "decision": "retry"
+      }
+    },
+    {
+      "name": "unrepairable_blocker",
+      "eligible_for_review": true,
+      "blocker_count": 1,
+      "valid_repair_hypothesis": false,
+      "budget_remaining": true,
+      "expected": {
+        "decision": "human_review",
+        "reason_kind": "scientific_blocker"
+      }
+    },
+    {
+      "name": "exhausted_budget",
+      "eligible_for_review": true,
+      "blocker_count": 1,
+      "valid_repair_hypothesis": true,
+      "budget_remaining": false,
+      "expected": {
+        "decision": "human_review",
+        "reason_kind": "scientific_blocker"
+      }
+    }
+  ]
+}

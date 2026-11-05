@@ -1,0 +1,15 @@
+.parameter-estimate { display:inline-flex;align-items:center;gap:3px;white-space:nowrap;font-family:var(--mono);font-variant-numeric:tabular-nums; }
+.parameter-notation { font:inherit;line-height:inherit;white-space:nowrap; }
+.parameter-notation :is(sub,sup) { font-size:.65em;line-height:0; }
+.parameter-errors { display:inline-grid;grid-template-rows:auto auto;gap:1px;font-size:.72em;line-height:1.05; }
+.parameter-errors :is(sup,sub) { position:static;top:auto;bottom:auto;font-size:inherit;line-height:inherit;vertical-align:baseline; }
+.parameter-table tbody.parameter-group .parameter-group-heading th { padding:11px 13px 8px;background:var(--green-soft);color:var(--ink);font-size:11px;font-weight:650;text-align:left;letter-spacing:.02em;border-bottom:1px solid var(--line); }
+.parameter-table .number-cell { min-width:158px; }
+.parameter-table .parameter-unit { color:var(--muted);font-size:10px; }
+.posterior-group-heading { grid-column:1/-1;font-size:12px;font-weight:650;color:var(--ink);margin:6px 0 0;padding-bottom:6px;border-bottom:1px solid var(--line); }
+.plot-estimate > .parameter-estimate { font-size:11px;color:inherit;margin:0; }
+.plot-estimate .parameter-estimate :is(.parameter-central,.parameter-errors) { margin:0;color:inherit; }
+.plot-estimate .parameter-errors { font-size:.72em; }
+.plot-estimate .parameter-central { font-size:inherit; }
+.definition-value > strong .parameter-errors { font-size:.55em; }
+.parameter-detail .definition-value > strong { margin-top:0; }

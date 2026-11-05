@@ -1,0 +1,20 @@
+/* Status colors are independent of the current selection and visual theme. */
+.stage-step[data-stage-status]{--stage-status-bg:#eef0f3;--stage-status-border:#c8ced6;--stage-status-ink:#6d7888}
+.stage-step[data-stage-status="completed"]{--stage-status-bg:#eaf1fc;--stage-status-border:#b4cbed;--stage-status-ink:#356bbd}
+.stage-step[data-stage-status="blocked"]{--stage-status-bg:#fff3cc;--stage-status-border:#e3c76f;--stage-status-ink:#8d7130}
+.stage-step[data-stage-status="failed"]{--stage-status-bg:#fbe4e3;--stage-status-border:#dfaba8;--stage-status-ink:#a54f4a}
+.app-shell.demo-workspace[data-design] .workbench-heading .stage-nav-item .stage-name-line .stage-step[data-stage-status] .stage-initial{position:relative;isolation:isolate;background:var(--stage-status-bg);border-color:var(--stage-status-border);color:var(--stage-status-ink);border-radius:50%;box-shadow:none}
+.stage-step[data-stage-status="running"] .stage-initial:after{content:"";position:absolute;inset:-4px;border:2px solid #d9dfe4;border-top-color:#54a57c;border-right-color:#54a57c;border-radius:50%;animation:stage-status-spin 1.1s linear infinite;pointer-events:none}
+@keyframes stage-status-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.stage-step[data-stage-status="running"] .stage-initial:after{animation:none}}
+
+/* The bottom bar spans navigation, science workspace and conversation. */
+.app-shell.demo-workspace[data-design]{--workbench-status-height:26px;padding-bottom:var(--workbench-status-height)}
+.app-shell.demo-workspace[data-design] .sidebar.lens-sidebar{bottom:var(--workbench-status-height);height:calc(100dvh - var(--workbench-status-height))}
+.app-shell.demo-workspace[data-design] .workbench-status-bar{position:fixed;inset:auto 0 0;height:var(--workbench-status-height);display:flex;align-items:center;padding:0 12px;border-top:1px solid var(--line);background:var(--panel);color:var(--muted);font-size:10px;line-height:1.4;z-index:40}
+.workbench-connection{display:inline-flex;align-items:center;gap:6px;color:#c45353}
+.workbench-connection[data-connected="true"]{color:#2f855d}
+.workbench-connection i{display:block;width:7px;height:7px;border-radius:50%;background:currentColor}
+.app-shell.demo-workspace[data-design="observatory"] .workbench-connection{color:#e99696}
+.app-shell.demo-workspace[data-design="observatory"] .workbench-connection[data-connected="true"]{color:#8cd4ae}
+@media(min-width:1051px){.app-shell.demo-workspace[data-design] .insight-rail.conversation-rail{bottom:var(--workbench-status-height);height:calc(100dvh - var(--workbench-status-height))}}

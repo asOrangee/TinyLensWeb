@@ -1,0 +1,4 @@
+.app-shell[data-design] .science-viewer :is(.science-coordinate-readout,.science-coordinate-readout span,.science-coordinate-readout b,.science-mapped-marker small){color:#fff}
+.app-shell[data-design] .science-viewer .science-mapped-marker{border-color:#fff}
+.app-shell[data-design] .science-viewer .science-mapped-marker::before,.app-shell[data-design] .science-viewer .science-mapped-marker::after{background:#fff}
+.app-shell[data-design] .science-viewer .science-crosshair :is(i,b){border-color:#fff}

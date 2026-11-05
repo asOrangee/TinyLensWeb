@@ -1,0 +1,4 @@
+interface:
+  display_name: "Lens Model Orchestrator"
+  short_description: "Run stage-gated strong-lens modeling"
+  default_prompt: "Use $lens-model-orchestrator to process a lens system by delegating complete stage loops to independent Stage Experts."

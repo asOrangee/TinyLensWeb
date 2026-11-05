@@ -1,0 +1,403 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Upstream scientific term semantics are defined only in .codex/skills/lens-model-orchestrator/references/stage-review-glossary.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "stage",
+    "refinement_kind",
+    "predicted_image_dispositions",
+    "upstream_warning_updates",
+    "retry_repair",
+    "component_selection",
+    "reason",
+    "development_recommendation"
+  ],
+  "properties": {
+    "stage": {
+      "const": "b"
+    },
+    "refinement_kind": {
+      "enum": [
+        "none",
+        "parameters",
+        "selection",
+        "uncertain",
+        "coverage_blocked"
+      ]
+    },
+    "predicted_image_dispositions": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["image_id", "disposition", "evidence"],
+        "properties": {
+          "image_id": {"type": "string", "minLength": 1},
+          "disposition": {
+            "enum": [
+              "covered_consistent",
+              "supported_uncovered",
+              "supported_partial",
+              "unsupported_prediction",
+              "indeterminate"
+            ]
+          },
+          "evidence": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    },
+    "upstream_warning_updates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "warning_ref",
+          "status",
+          "evidence"
+        ],
+        "properties": {
+          "warning_ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "enum": [
+              "resolved",
+              "persisted",
+              "worsened"
+            ]
+          },
+          "evidence": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "retry_repair": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "hypothesis",
+            "proposal"
+          ],
+          "properties": {
+            "hypothesis": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "blocker_kind",
+                "expected_improvement"
+              ],
+              "properties": {
+                "blocker_kind": {
+                  "const": "arc_mask"
+                },
+                "expected_improvement": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "proposal": {
+              "oneOf": [
+                {
+                  "x-stage": "b",
+                  "x-role": "stage_b_expert",
+                  "x-blockers": [
+                    "arc_mask"
+                  ],
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "base_config",
+                    "parameter",
+                    "old_value",
+                    "new_value"
+                  ],
+                  "properties": {
+                    "base_config": {
+                      "type": "string",
+                      "pattern": "^attempts/b/[0-9]+/effective-config\\.json$"
+                    },
+                    "parameter": {
+                      "const": "arc_snr_threshold"
+                    },
+                    "old_value": {
+                      "type": "number",
+                      "minimum": 1.0,
+                      "maximum": 10.0
+                    },
+                    "new_value": {
+                      "type": "number",
+                      "minimum": 1.0,
+                      "maximum": 10.0
+                    }
+                  }
+                },
+                {
+                  "x-stage": "b",
+                  "x-role": "stage_b_expert",
+                  "x-blockers": [
+                    "arc_mask"
+                  ],
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "base_config",
+                    "parameter",
+                    "old_value",
+                    "new_value"
+                  ],
+                  "properties": {
+                    "base_config": {
+                      "type": "string",
+                      "pattern": "^attempts/b/[0-9]+/effective-config\\.json$"
+                    },
+                    "parameter": {
+                      "enum": [
+                        "arc_ext_size",
+                        "arc_close_size"
+                      ]
+                    },
+                    "old_value": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 10000
+                    },
+                    "new_value": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 10000
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "component_selection": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "component_catalog",
+            "drop_component_ids"
+          ],
+          "properties": {
+            "component_catalog": {
+              "type": "string",
+              "pattern": "^attempts/b/[0-9]+/artifacts/stage_b_components\\.json$"
+            },
+            "drop_component_ids": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "uniqueItems": true
+            }
+          }
+        }
+      ]
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "development_recommendation": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "minLength": 1
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "refinement_kind": {"const": "coverage_blocked"}
+        },
+        "required": ["refinement_kind"]
+      },
+      "then": {
+        "properties": {
+          "retry_repair": {"type": "null"},
+          "component_selection": {"type": "null"},
+          "predicted_image_dispositions": {
+            "contains": {
+              "properties": {
+                "disposition": {"enum": ["supported_uncovered", "supported_partial"]}
+              },
+              "required": ["disposition"]
+            },
+            "items": {
+              "properties": {
+                "disposition": {
+                  "enum": ["covered_consistent", "supported_uncovered", "supported_partial"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "refinement_kind": {
+            "const": "parameters"
+          }
+        },
+        "required": [
+          "refinement_kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "retry_repair": {
+            "type": "object"
+          },
+          "component_selection": {
+            "type": "null"
+          },
+          "development_recommendation": {
+            "type": "null"
+          },
+          "predicted_image_dispositions": {
+            "contains": {
+              "properties": {"disposition": {"enum": ["supported_uncovered", "supported_partial"]}},
+              "required": ["disposition"]
+            },
+            "items": {
+              "properties": {
+                "disposition": {"enum": ["covered_consistent", "supported_uncovered", "supported_partial"]}
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "refinement_kind": {
+            "const": "selection"
+          }
+        },
+        "required": [
+          "refinement_kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "retry_repair": {
+            "type": "null"
+          },
+          "component_selection": {
+            "type": "object"
+          },
+          "development_recommendation": {
+            "type": "null"
+          },
+          "predicted_image_dispositions": {
+            "items": {
+              "properties": {
+                "disposition": {"const": "covered_consistent"}
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "refinement_kind": {
+            "const": "none"
+          }
+        },
+        "required": [
+          "refinement_kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "retry_repair": {
+            "type": "null"
+          },
+          "component_selection": {
+            "type": "null"
+          },
+          "development_recommendation": {
+            "type": "null"
+          },
+          "predicted_image_dispositions": {
+            "items": {
+              "properties": {"disposition": {"const": "covered_consistent"}}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "refinement_kind": {
+            "const": "uncertain"
+          }
+        },
+        "required": [
+          "refinement_kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "retry_repair": {
+            "type": "null"
+          },
+          "component_selection": {
+            "type": "null"
+          },
+          "predicted_image_dispositions": {
+            "contains": {
+              "properties": {
+                "disposition": {"enum": ["unsupported_prediction", "indeterminate"]}
+              },
+              "required": ["disposition"]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "title": "Stage B Expert arc-mask review"
+}

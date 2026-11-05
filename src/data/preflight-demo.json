@@ -1,0 +1,141 @@
+{
+  "schema": "tinylens-preflight-demo.v1",
+  "synthetic": true,
+  "generator": "scripts/generate_demo.py --preflight-only",
+  "astropy_version": "8.0.2",
+  "log_a": 1000.0,
+  "colormap": "magma",
+  "zscale": {
+    "n_samples": 1000,
+    "contrast": 0.25
+  },
+  "snr_definition": "data / noise_rms",
+  "noise_definition": "constant 1-sigma RMS",
+  "psf_definition": "Normalized separable Gaussian kernel used by blur(..., 1.05).",
+  "pixel_scale_arcsec": 0.015655577299412915,
+  "x_direction": "increasing",
+  "y_direction": "decreasing",
+  "coordinates": "Local x/y; pixel-edge bounds, not celestial RA/Dec.",
+  "planes": [
+    {
+      "id": "data",
+      "shape": [
+        512,
+        512
+      ],
+      "constant": false,
+      "half_extent_arcsec": 4.007827788649706,
+      "scale_bar_arcsec": 1.0,
+      "variants": {
+        "linear": {
+          "src": "/demo/preflight/data-linear.png",
+          "vmin": -0.027944574426568117,
+          "vmax": 1.1026510757211527,
+          "sha256": "0e528c5ce4f5734a57c34f09edd1c12cb3330e4e22f0f4ded8c33e66d45c1720"
+        },
+        "log": {
+          "src": "/demo/preflight/data-log.png",
+          "vmin": -0.027944574426568117,
+          "vmax": 1.1026510757211527,
+          "sha256": "0806f3a118aadc41cf01811552093f30881a9561a373c2b84d04e181f6521820"
+        },
+        "zscale": {
+          "src": "/demo/preflight/data-zscale.png",
+          "vmin": -0.021623891780309486,
+          "vmax": 0.07506386821750341,
+          "sha256": "e63303408b8e9929e5ddf90ce604ab83127b349369dab453e020fe038ddbc648"
+        }
+      }
+    },
+    {
+      "id": "noise",
+      "shape": [
+        512,
+        512
+      ],
+      "constant": true,
+      "half_extent_arcsec": 4.007827788649706,
+      "scale_bar_arcsec": 1.0,
+      "variants": {
+        "linear": {
+          "src": "/demo/preflight/noise-linear.png",
+          "vmin": 0.0065,
+          "vmax": 0.0065,
+          "sha256": "8cd43e49c8f1d50c3e9284faebf06afd1f127563c4fddd9e71ad0e0917344bc9"
+        },
+        "log": {
+          "src": "/demo/preflight/noise-log.png",
+          "vmin": 0.0065,
+          "vmax": 0.0065,
+          "sha256": "8cd43e49c8f1d50c3e9284faebf06afd1f127563c4fddd9e71ad0e0917344bc9"
+        },
+        "zscale": {
+          "src": "/demo/preflight/noise-zscale.png",
+          "vmin": 0.0065,
+          "vmax": 0.0065,
+          "sha256": "8cd43e49c8f1d50c3e9284faebf06afd1f127563c4fddd9e71ad0e0917344bc9"
+        }
+      }
+    },
+    {
+      "id": "snr",
+      "shape": [
+        512,
+        512
+      ],
+      "constant": false,
+      "half_extent_arcsec": 4.007827788649706,
+      "scale_bar_arcsec": 1.0,
+      "variants": {
+        "linear": {
+          "src": "/demo/preflight/snr-linear.png",
+          "vmin": -4.2991652963950955,
+          "vmax": 169.6386270340235,
+          "sha256": "0e528c5ce4f5734a57c34f09edd1c12cb3330e4e22f0f4ded8c33e66d45c1720"
+        },
+        "log": {
+          "src": "/demo/preflight/snr-log.png",
+          "vmin": -4.2991652963950955,
+          "vmax": 169.6386270340235,
+          "sha256": "0806f3a118aadc41cf01811552093f30881a9561a373c2b84d04e181f6521820"
+        },
+        "zscale": {
+          "src": "/demo/preflight/snr-zscale.png",
+          "vmin": -3.326752581586075,
+          "vmax": 11.548287418077445,
+          "sha256": "e63303408b8e9929e5ddf90ce604ab83127b349369dab453e020fe038ddbc648"
+        }
+      }
+    },
+    {
+      "id": "psf",
+      "shape": [
+        11,
+        11
+      ],
+      "constant": false,
+      "half_extent_arcsec": 0.08610567514677103,
+      "scale_bar_arcsec": 0.02,
+      "variants": {
+        "linear": {
+          "src": "/demo/preflight/psf-linear.png",
+          "vmin": 2.0487744580579026e-11,
+          "vmax": 0.1443582426829509,
+          "sha256": "9cb77e862c5769c89dad74cfb020b4950690bfb6195002f046a63d60c0b4eb86"
+        },
+        "log": {
+          "src": "/demo/preflight/psf-log.png",
+          "vmin": 2.0487744580579026e-11,
+          "vmax": 0.1443582426829509,
+          "sha256": "acd9c246d65f72a046160cb3ad4a5de736f2992e3f13986ec44059083be70e3c"
+        },
+        "zscale": {
+          "src": "/demo/preflight/psf-zscale.png",
+          "vmin": 2.0487744580579026e-11,
+          "vmax": 0.0051738429400185245,
+          "sha256": "02a50f14926c871523be00851a4a2a148d6276e3c1ae76d106a2db22eaa01bea"
+        }
+      }
+    }
+  ]
+}

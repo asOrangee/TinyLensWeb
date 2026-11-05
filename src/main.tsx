@@ -1,0 +1,21 @@
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import App from './App';
+import { DemoLanguageProvider } from './lib/demo-i18n';
+import AgentWorkspace from './components/LiveTaskWorkspace';
+import './styles.css';
+import './themes/observatory.css';
+import './themes/paper.css';
+import './themes/studio.css';
+import './themes/design-picker.css';
+import './demo-language.css';
+import './demo-sidebar.css';
+import './conversation.css';
+import './demo-chrome.css';
+import './workbench-refinements.css';
+import './science-refinements.css';
+import './live-prototype.css';
+import './workbench-status.css';
+import './studio-surfaces.css';
+
+ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode>{new URLSearchParams(window.location.search).get('mode') === 'demo' ? <DemoLanguageProvider><App /></DemoLanguageProvider> : <DemoLanguageProvider mode="live"><AgentWorkspace /></DemoLanguageProvider>}</React.StrictMode>);

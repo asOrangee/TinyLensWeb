@@ -1,0 +1,142 @@
+/* Live data uses the same stage workbench and theme rules as the original App.
+   Only the AI cards and real-report surfaces need additional styling here. */
+.app-shell.live-workbench[data-design] {
+  --agent-bg: #f4f7f6;
+  --agent-surface: #fff;
+  --agent-subtle: #f6f9f7;
+  --agent-text: var(--ink);
+  --agent-muted: #6c8178;
+  --agent-line: var(--line);
+  --agent-accent: var(--green);
+  --agent-accent-soft: var(--green-soft);
+  --agent-shadow: 0 3px 16px #26354e04;
+}
+.app-shell.live-workbench[data-design="studio"] { --agent-bg: #f2f3f6; --agent-subtle: #f6f8fb; --agent-muted: #6b7789; }
+.app-shell.live-workbench[data-design="observatory"] { --agent-bg: #0b1019; --agent-surface: #141c29; --agent-subtle: #192333; --agent-muted: #a0aec1; --agent-shadow: 0 3px 16px #00000012; }
+.app-shell.live-workbench[data-design="paper"] { --agent-bg: #f7f3eb; --agent-surface: #fffdf8; --agent-subtle: #f7f1e8; --agent-muted: #807568; --agent-shadow: 0 3px 16px #5d422005; }
+.live-workbench button:disabled { cursor: not-allowed; opacity: .5; }
+.live-workbench code, .live-workbench pre { font-family: var(--mono); }
+.live-workbench .live-system-icon { display: grid; place-items: center; color: currentColor; background: color-mix(in srgb, currentColor 8%, transparent); }
+.app-shell.live-workbench[data-design] .live-title-detail { font-size: .65em; font-weight: 400; margin-left: 12px; color: var(--agent-muted); }
+.live-workbench .live-mode-pill { color: var(--agent-accent); }
+.live-workbench .agent-prototype-link { font-size: 10px; }
+.app-shell.live-workbench[data-design] .agent-error { margin: 0 0 15px; }
+.live-workbench .agent-stream-note { margin-bottom: 15px; border-radius: 6px; border: 1px solid var(--agent-line); }
+.live-workbench .live-stage-status { max-width: 46%; text-align: right; line-height: 1.7; }
+.live-workbench .live-stage-status .neutral { background: var(--agent-muted); }
+.live-workbench .live-attention-deck { margin-bottom: 25px; }
+.live-workbench .live-attention-deck > .agent-request { background: var(--agent-surface); }
+.live-workbench .agent-question-card { background: var(--agent-surface); color: var(--agent-text); }
+.live-workbench .agent-question-card h2 { margin: 13px 0 10px; }
+.live-workbench .agent-question-card h3 { margin: 15px 0 9px; }
+.live-workbench .agent-question-alert strong { font-size: 13px; }
+.live-workbench .agent-question-alert span { line-height: 1.9; }
+.live-workbench .content-tabs { flex-wrap: wrap; gap: 20px; }
+.live-workbench .content-tabs > button { white-space: nowrap; }
+.live-workbench .live-science-panel, .live-workbench .live-reports-panel, .live-workbench .live-dataset-panel { margin-bottom: 19px; overflow: hidden; }
+.live-workbench .live-result-placeholder { min-height: 280px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 34px 25px; color: var(--agent-muted); border-top: 1px solid var(--agent-line); background: var(--agent-subtle); }
+.live-workbench .live-result-icon { display: grid; place-items: center; width: 62px; height: 62px; border: 1px solid var(--agent-line); background: var(--agent-surface); border-radius: 16px; color: var(--agent-accent); margin-bottom: 20px; }
+.live-workbench .live-result-placeholder h3 { font-size: 16px; font-weight: 500; color: var(--agent-text); margin: 0 0 12px; }
+.live-workbench .live-result-placeholder p { max-width: 420px; font-size: 12px; line-height: 1.9; }
+.live-workbench .live-result-placeholder small { margin-top: 18px; font-size: 10px; line-height: 1.8; }
+.live-workbench .live-panel-caption { padding: 0 20px 18px; font-size: 11px; line-height: 1.9; color: var(--agent-muted); }
+.live-workbench .live-report-list { padding: 0 20px 18px; }
+.live-workbench .live-report-list .agent-report h3 { font-size: 13px; color: var(--agent-text); }
+.live-workbench .live-report-list .agent-report p { font-size: 12px; color: var(--agent-text); }
+.live-workbench .live-report-list .agent-report > div { font-size: 10px; }
+.live-workbench .agent-report time { display: block; font-size: 10px; color: var(--agent-muted); margin-top: 8px; }
+.live-workbench .live-artifact-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px; padding: 0 17px 17px; }
+.live-workbench .live-artifact-grid:has(> :only-child) { grid-template-columns: minmax(0, 1fr); }
+.live-workbench .live-artifact { margin: 0; min-width: 0; border: 1px solid var(--agent-line); background: var(--agent-subtle); border-radius: 7px; overflow: hidden; }
+.live-workbench .live-artifact-heading { padding: 12px 13px; display: flex; flex-direction: column; gap: 5px; }
+.live-workbench .live-artifact-heading strong { font-size: 12px; line-height: 1.65; font-weight: 600; color: var(--agent-text); overflow-wrap: anywhere; }
+.live-workbench .live-artifact-heading span { color: var(--agent-muted); font-size: 10px; }
+.live-workbench .live-artifact-image { display: block; background: #10141b; border-block: 1px solid var(--agent-line); }
+.live-workbench .live-artifact-image img { display: block; width: 100%; height: auto; max-height: 640px; object-fit: contain; }
+.live-workbench .live-artifact figcaption { padding: 12px 13px; color: var(--agent-muted); font-size: 10px; line-height: 1.8; }
+.live-workbench .live-artifact figcaption p { margin-bottom: 8px; font-size: 11px; color: var(--agent-text); white-space: pre-wrap; }
+.live-workbench .live-artifact figcaption time { display: block; margin-bottom: 6px; }
+.live-workbench .live-artifact figcaption code { display: block; overflow-wrap: anywhere; font-size: 9px; }
+.live-workbench .live-artifact-error { min-height: 150px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--agent-muted); font-size: 11px; }
+.live-workbench .live-artifact-error button { color: var(--agent-accent); background: var(--agent-surface); border: 1px solid var(--agent-line); border-radius: 5px; padding: 6px 10px; }
+.live-workbench .live-result-note { display: flex; align-items: flex-start; gap: 8px; font-size: 10px; color: var(--agent-muted); line-height: 1.9; padding: 0 2px 5px; }
+.live-workbench .live-result-note > svg { flex-shrink: 0; margin-top: 3px; }
+.live-workbench .live-parameter-table { min-width: 530px; }
+.live-workbench .live-parameter-table td { vertical-align: top; }
+.live-workbench .live-parameter-table td:first-child { width: 64%; }
+.live-workbench .live-parameter-table details summary { display: flex; gap: 9px; align-items: center; cursor: pointer; list-style: none; font-size: 12px; }
+.live-workbench .live-parameter-table details summary::-webkit-details-marker { display: none; }
+.live-workbench .live-parameter-table details summary strong { font-weight: 500; }
+.live-workbench .live-parameter-table details summary > svg { color: var(--agent-muted); flex-shrink: 0; }
+.live-workbench .live-parameter-table details p { margin: 12px 0 8px; line-height: 1.9; font-size: 11px; color: var(--agent-muted); max-width: 490px; }
+.live-workbench .live-parameter-table details > code { display: block; color: var(--agent-muted); font-size: 10px; }
+.live-workbench .live-parameter-table details > a { display: inline-flex; align-items: center; gap: 4px; margin-top: 10px; font-size: 10px; color: var(--agent-accent); }
+.live-workbench .live-parameter-table .live-unreported { font-size: 10px; color: var(--agent-muted); white-space: nowrap; }
+.live-workbench .live-panel-body { padding: 0 20px 20px; }
+.live-workbench .live-panel-body p { color: var(--agent-muted); font-size: 12px; line-height: 1.9; margin-bottom: 13px; }
+.live-workbench .live-panel-body label { display: block; font-size: 10px; color: var(--agent-muted); margin: 15px 0 7px; }
+.live-workbench .agent-chat-card { border-radius: 8px; color: var(--agent-text); }
+.live-workbench .agent-conversation { min-height: 320px; max-height: 720px; }
+.live-workbench .agent-activity-card { border-radius: 8px; color: var(--agent-text); }
+.live-workbench .live-archived-questions { margin-top: 20px; }
+.app-shell.live-workbench[data-design] .overview-details > div { align-items: flex-start; gap: 13px; }
+.app-shell.live-workbench[data-design] .overview-details strong { max-width: 65%; text-align: right; overflow-wrap: anywhere; line-height: 1.7; }
+.app-shell.live-workbench[data-design] .overview-details span { flex-shrink: 0; line-height: 1.7; }
+.live-workbench .live-scope-select { width: 100%; display: block; font-family: inherit; font-size: 11px; padding: 8px 9px; margin-bottom: 13px; background: var(--agent-surface); color: var(--agent-text); border: 1px solid var(--agent-line); border-radius: 5px; }
+.app-shell.live-workbench[data-design] .feedback-card textarea { min-height: 170px; max-height: 460px; }
+.live-workbench .live-feedback-context { display: flex; align-items: flex-start; gap: 7px; margin: 13px 0; padding: 11px; border: 1px solid var(--agent-line); border-radius: 5px; background: var(--agent-subtle); color: var(--agent-muted); font-size: 10px; line-height: 1.8; }
+.live-workbench .live-feedback-context svg { flex-shrink: 0; margin-top: 2px; color: var(--agent-accent); }
+.live-workbench .live-interrupt { margin: 10px auto 0; display: flex; color: var(--agent-muted); }
+.live-workbench .agent-stage-question { text-align: left; align-items: flex-start; line-height: 1.7; margin-top: 13px; }
+.live-workbench .agent-stage-question svg { flex-shrink: 0; margin-top: 2px; }
+.live-workbench .live-session-details { border-top: 1px solid var(--agent-line); padding: 12px 4px 0; color: var(--agent-muted); font-size: 10px; }
+.live-workbench .live-session-details summary { display: flex; align-items: center; gap: 7px; cursor: pointer; list-style: none; }
+.live-workbench .live-session-details summary::-webkit-details-marker { display: none; }
+.live-workbench .live-session-details summary > svg:last-child { margin-left: auto; }
+.live-workbench .live-session-details dl { margin-top: 14px; }
+.live-workbench .live-session-details dt { font-size: 9px; margin: 10px 0 5px; }
+.live-workbench .live-session-details dd { margin: 0; overflow-wrap: anywhere; font-family: var(--mono); font-size: 9px; line-height: 1.8; }
+.live-workbench .agent-button:focus-visible, .live-workbench .agent-stage-question:focus-visible, .live-workbench summary:focus-visible { outline: 2px solid var(--agent-accent); outline-offset: 3px; }
+.app-shell.live-workbench[data-design="observatory"] .agent-button.primary { color: #1a1c24; }
+@media (max-width: 1050px) {
+  .live-workbench .live-session-details { grid-column: 1 / -1; }
+  .live-workbench .live-artifact-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 760px) {
+  .app-shell.live-workbench[data-design] .live-title-detail { display: none; }
+  .live-workbench .topbar-right .agent-prototype-link { display: none; }
+  .live-workbench .live-attention-deck .agent-question-alert { padding: 13px; }
+  .live-workbench .live-result-placeholder { min-height: 245px; padding: 28px 18px; }
+  .live-workbench .content-tabs { gap: 15px; }
+  .live-workbench .content-tabs > button { font-size: 11px; }
+  .live-workbench .agent-question-footer { flex-wrap: wrap; }
+}
+@media (max-width: 480px) {
+  .app-shell.live-workbench[data-design] .insight-rail { display: flex; flex-direction: column; }
+  .app-shell.live-workbench[data-design] .overview-card { display: block; width: 100%; }
+  .live-workbench .live-session-details { width: 100%; }
+  .live-workbench .live-mode-pill { display: none; }
+  .live-workbench .live-science-panel .panel-heading, .live-workbench .live-reports-panel .panel-heading { gap: 10px; align-items: flex-start; }
+  .live-workbench .live-science-panel .panel-heading .tag, .live-workbench .live-reports-panel .panel-heading .tag { font-size: 8px; white-space: normal; text-align: right; max-width: 43%; }
+  .live-workbench .agent-question-count { display: none; }
+}
+.live-workbench .live-report-history { margin-top: 16px; border-top: 1px solid var(--agent-line); }
+.live-workbench .live-report-history > summary { cursor: pointer; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 0 0; color: var(--agent-accent); font-size: 11px; list-style: none; }
+.live-workbench .live-report-history > summary::-webkit-details-marker { display: none; }
+.live-workbench .live-report-history > div { padding-top: 17px; }
+.live-workbench .agent-approval-summary { display: grid; gap: 13px; margin-top: 13px; }
+.live-workbench .agent-approval-summary > div > strong { display: block; font-size: 10px; font-weight: 600; color: var(--agent-muted); margin-bottom: 6px; }
+.live-workbench .agent-approval-reason p { margin: 0; font-size: 12px; line-height: 1.85; white-space: pre-wrap; color: var(--agent-text); }
+.live-workbench .agent-approval-summary pre { margin: 0; max-height: 200px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.live-workbench .agent-approval-command pre { font-size: 11px; line-height: 1.85; }
+.live-workbench .agent-approval-cwd code { display: block; font-size: 11px; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--agent-text); }
+.live-workbench .agent-approval-metadata { border-top: 1px solid var(--agent-line); padding-top: 11px; }
+.live-workbench .agent-approval-metadata > summary { display: flex; align-items: center; gap: 7px; cursor: pointer; list-style: none; font-size: 10px; color: var(--agent-muted); }
+.live-workbench .agent-approval-metadata > summary::-webkit-details-marker { display: none; }
+.live-workbench .agent-approval-metadata[open] > summary { margin-bottom: 11px; }
+.live-workbench .agent-approval-unavailable { font-size: 11px; color: var(--agent-muted); line-height: 1.8; }
+.live-workbench .live-report-link { display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent; padding: 2px 0; color: var(--agent-accent); font: inherit; font-size: 11px; cursor: pointer; text-align: left; }
+.live-workbench .live-report-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.live-workbench .empty-state > .live-report-link { margin-top: 14px; }
+.live-workbench #live-stage-reports { scroll-margin-top: 80px; }
+.live-workbench #live-stage-reports:focus { outline: 2px solid var(--agent-accent); outline-offset: 3px; }

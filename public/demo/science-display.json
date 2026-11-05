@@ -1,0 +1,134 @@
+{
+  "schema": "tinylens-science-display-demo.v1",
+  "synthetic": true,
+  "generator": "scripts/generate_demo.py",
+  "planes": {
+    "observation": {
+      "src": "/demo/observation.png",
+      "shape": [
+        512,
+        512
+      ],
+      "vmin": 0.0,
+      "vmax": 0.93,
+      "data_min": -0.027944574426568117,
+      "data_max": 1.1026510757211527,
+      "stretch": "asinh",
+      "asinh_a": 25.0,
+      "colormap": "magma",
+      "unit": "a.u.",
+      "half_extent_arcsec": 4.007827788649706,
+      "pixel_scale_arcsec": 0.015655577299412915,
+      "sha256": "494b5c1c34c9e30d88fdf771ab258ab45e8fe64d8f7ac15bcd415fe494566834"
+    },
+    "model": {
+      "src": "/demo/model.png",
+      "shape": [
+        512,
+        512
+      ],
+      "vmin": 0.0,
+      "vmax": 0.93,
+      "data_min": 2.1387108040714398e-07,
+      "data_max": 1.0977892002756928,
+      "stretch": "asinh",
+      "asinh_a": 25.0,
+      "colormap": "magma",
+      "unit": "a.u.",
+      "half_extent_arcsec": 4.007827788649706,
+      "pixel_scale_arcsec": 0.015655577299412915,
+      "sha256": "23c9eb41e915ec4151665b68fc00318676e53c21af675871e43572e70e243e8f"
+    },
+    "residual": {
+      "src": "/demo/residual.png",
+      "shape": [
+        512,
+        512
+      ],
+      "vmin": -3.0,
+      "vmax": 3.0,
+      "data_min": -5.112102862773073,
+      "data_max": 5.107273423062077,
+      "stretch": "linear",
+      "asinh_a": null,
+      "colormap": "blue-white-red",
+      "unit": "\u0394I / \u03c3",
+      "half_extent_arcsec": 4.007827788649706,
+      "pixel_scale_arcsec": 0.015655577299412915,
+      "sha256": "66c1aa6dcf0db36b0f10cdcb0861c5e7a8255008c97065514a3863c7d3bf4d46"
+    },
+    "lens-light": {
+      "src": "/demo/lens-light.png",
+      "shape": [
+        512,
+        512
+      ],
+      "vmin": 0.0,
+      "vmax": 0.93,
+      "data_min": 4.3532884957128796e-07,
+      "data_max": 1.119593062405118,
+      "stretch": "asinh",
+      "asinh_a": 25.0,
+      "colormap": "magma",
+      "unit": "a.u.",
+      "half_extent_arcsec": 4.007827788649706,
+      "pixel_scale_arcsec": 0.015655577299412915,
+      "sha256": "8c9c1e3db758ba0caa98b852a75386fcb1792bac95162bc40733fe91ce901772"
+    },
+    "source-lensed": {
+      "src": "/demo/source-lensed.png",
+      "shape": [
+        512,
+        512
+      ],
+      "vmin": 0.0,
+      "vmax": 0.93,
+      "data_min": 0.0,
+      "data_max": 0.44633296609272466,
+      "stretch": "asinh",
+      "asinh_a": 25.0,
+      "colormap": "magma",
+      "unit": "a.u.",
+      "half_extent_arcsec": 4.007827788649706,
+      "pixel_scale_arcsec": 0.015655577299412915,
+      "sha256": "8cfcc79fe1dd406503743ec6c48085f699d20d62c9b7a7903d9cd334506c7577"
+    },
+    "source": {
+      "src": "/demo/source.png",
+      "shape": [
+        512,
+        512
+      ],
+      "vmin": 0.0,
+      "vmax": 0.93,
+      "data_min": 1.5395836306975224e-36,
+      "data_max": 0.45974737713466746,
+      "stretch": "asinh",
+      "asinh_a": 25.0,
+      "colormap": "magma",
+      "unit": "a.u.",
+      "half_extent_arcsec": 0.8015655577299413,
+      "pixel_scale_arcsec": 0.0031311154598825833,
+      "sha256": "58f8d8b7c24808e8a003a0e051a0f2c66a52cf75138ea286efc617730aa5c042"
+    },
+    "chi-square": {
+      "src": "/demo/chi-square.png",
+      "shape": [
+        512,
+        512
+      ],
+      "vmin": 0.0,
+      "vmax": 9.0,
+      "data_min": 6.470887183758438e-12,
+      "data_max": 26.133595679572647,
+      "stretch": "linear",
+      "asinh_a": null,
+      "colormap": "blue-white-red",
+      "unit": "\u03c7\u00b2 per pixel",
+      "half_extent_arcsec": 4.007827788649706,
+      "pixel_scale_arcsec": 0.015655577299412915,
+      "sha256": "9b2f1310304f6e1924703b2c675e06a9878be5671f4577ec76ecf0358b37697f"
+    }
+  },
+  "chi_square_definition": "((data - model) / noise_rms) ** 2; per-pixel contribution, not reduced chi-square"
+}

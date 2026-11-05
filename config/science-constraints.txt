@@ -1,0 +1,16 @@
+# Reference versions read from the environment used during development.
+# Optional constraints, not a portable CUDA driver/JAX installation recipe.
+jax==0.6.2
+jaxlib==0.6.2
+numpy==1.26.4
+scipy==1.15.3
+astropy==6.1.7
+photutils==2.3.0
+pydantic==2.14.1
+matplotlib==3.10.9
+Pillow==12.2.0
+nautilus-sampler==1.0.6
+dynesty==3.1.0
+jsonschema==4.25.1
+caskade==1.0.0
+jaxnnls==1.0.1

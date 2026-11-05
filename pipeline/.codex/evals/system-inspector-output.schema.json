@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "theta_E_hint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "estimate_arcsec",
+        "plausible_range_arcsec",
+        "confidence",
+        "deflector_center",
+        "basis"
+      ],
+      "properties": {
+        "estimate_arcsec": {"type": "number", "exclusiveMinimum": 0},
+        "plausible_range_arcsec": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {"type": "number", "exclusiveMinimum": 0}
+        },
+        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+        "deflector_center": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["dra_arcsec", "ddec_arcsec"],
+          "properties": {
+            "dra_arcsec": {"type": "number"},
+            "ddec_arcsec": {"type": "number"}
+          }
+        },
+        "basis": {"type": "string", "minLength": 1}
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "lens_id",
+    "disposition",
+    "contaminant_ids",
+    "reason",
+    "theta_E_hint"
+  ],
+  "properties": {
+    "lens_id": {"type": "string", "minLength": 1},
+    "disposition": {"type": "string", "enum": ["model", "human_review"]},
+    "contaminant_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "integer", "minimum": 1}
+    },
+    "reason": {"type": "string", "minLength": 1},
+    "theta_E_hint": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/theta_E_hint"}
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"disposition": {"const": "model"}},
+        "required": ["disposition"]
+      },
+      "then": {
+        "properties": {
+          "theta_E_hint": {"$ref": "#/$defs/theta_E_hint"}
+        }
+      }
+    }
+  ]
+}
