@@ -82,7 +82,7 @@
 .app-shell.demo-workspace[data-design] .workbench-heading .stage-nav-item .stage-name-line .stage-step.current .stage-initial{background:var(--green);color:var(--panel);border-color:var(--green)}
 .app-shell.demo-workspace[data-design] .workbench-heading .stage-description{position:static;display:block;min-width:0;flex:1;font-size:9.5px;line-height:1.35;white-space:normal;overflow-wrap:anywhere;text-align:left}
 .app-shell.demo-workspace[data-design][data-demo-language="zh"] .workbench-heading .stage-description{flex:0 1 auto;width:3em;max-width:3em;word-break:normal;text-wrap:balance}
-.app-shell.demo-workspace[data-design][data-demo-language="en"] .workbench-heading .stage-nav-item{min-width:142px}
+.app-shell.demo-workspace[data-design][data-demo-language="en"] .workbench-heading .stage-description{font-size:9px;line-height:1.1;text-wrap:balance}
 /* The plus remains in the same 42px slot during sidebar expansion. */
 .lens-sidebar .lens-collection-heading{justify-content:flex-start;gap:7px}
 .lens-sidebar .lens-collection-heading .lens-new-task{width:42px;min-width:42px;flex:0 0 42px;padding-left:9px}

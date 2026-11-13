@@ -5,6 +5,14 @@ import {renderInputDisplay} from './render-input';
 import { useAgentTaskId } from './agent-task-context';
 import { agentTaskUrl } from './live-tasks';
 
+export async function fetchReportedInput(taskId: string, report: AgentUpdate, signal: AbortSignal) {
+  if (!report.id) throw new Error('等待 AI 报告输入来源。');
+  const url = agentTaskUrl(`/api/agent/input?updateId=${encodeURIComponent(report.id)}`, taskId);
+  const response = await fetch(url, { signal });
+  if (!response.ok) throw new Error('暂时无法读取输入 FITS。');
+  return parseInputDisplay(await response.json(), report);
+}
+
 /** Share one validated input between the preflight viewer and position picker. */
 export function useReportedInput(updates: AgentUpdate[], enabled = true) {
   const taskId = useAgentTaskId();
@@ -14,10 +22,8 @@ export function useReportedInput(updates: AgentUpdate[], enabled = true) {
     if(!enabled||!id||!report)return;
     const controller=new AbortController();
     setLoaded(previous=>({...(previous.id===id?previous:{}),id,loading:true,error:undefined}));
-    fetch(agentTaskUrl(`/api/agent/input?updateId=${encodeURIComponent(id)}`,taskId),{signal:controller.signal}).then(async response=>{
-      const body:unknown=await response.json();
-      if(!response.ok)throw new Error('暂时无法读取输入 FITS。');
-      const data=await renderInputDisplay(parseInputDisplay(body,report));
+    fetchReportedInput(taskId,report,controller.signal).then(async input=>{
+      const data=await renderInputDisplay(input);
       if(!controller.signal.aborted)setLoaded({id,data,loading:false});
     }).catch(error=>{if(!controller.signal.aborted)setLoaded(previous=>({...previous,id,error:error instanceof Error?error.message:'FITS 读取失败。',loading:false}));});
     return()=>controller.abort();

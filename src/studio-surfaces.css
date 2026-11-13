@@ -2,7 +2,7 @@
 html:has(.app-shell.demo-workspace[data-design="studio"]){background:#f7f7f7}
 .app-shell.demo-workspace[data-design="studio"]{--studio-chrome:#f7f7f7;--studio-column-gap:5px;--studio-frame-radius:12px;--studio-frame-line:#e1e1e1;--studio-frame-height:calc(100dvh - var(--workbench-status-height) - 10px);--lens-nav-bg:var(--studio-chrome);height:100dvh;min-height:0;padding:5px 5px calc(var(--workbench-status-height) + 5px);background:var(--studio-chrome)}
 .app-shell.demo-workspace[data-design="studio"] :is(.workspace,.main-content){background:#fff}
-.app-shell.demo-workspace[data-design="studio"] :is(.insight-rail.conversation-rail,.conversation-log,.conversation-composer,.workbench-status-bar){background:var(--studio-chrome)}
+.app-shell.demo-workspace[data-design="studio"] :is(.insight-rail.conversation-rail,.conversation-log,.conversation-rail .conversation-composer,.workbench-status-bar){background:var(--studio-chrome)}
 .app-shell.demo-workspace[data-design="studio"] .workbench-status-bar{border:0;box-shadow:none}
 .app-shell.demo-workspace[data-design="studio"] .conversation-rail{--message-assistant-bg:#e1e1e1}
 .app-shell.demo-workspace[data-design="studio"] .conversation-agent-badge{background:var(--studio-chrome);border:0;border-radius:var(--studio-frame-radius)}
@@ -14,7 +14,7 @@ html:has(.app-shell.demo-workspace[data-design="studio"]){background:#f7f7f7}
 .app-shell.demo-workspace[data-design="studio"] .insight-rail.conversation-rail{top:5px;right:5px;bottom:calc(var(--workbench-status-height) + 5px);height:var(--studio-frame-height);border:1px solid var(--studio-frame-line);border-radius:var(--studio-frame-radius);overflow:visible}
 /* Clip the content corners while leaving the gutter handle outside the rail. */
 .app-shell.demo-workspace[data-design="studio"] .conversation-stream{border-radius:0}
-.app-shell.demo-workspace[data-design="studio"] .conversation-composer{border-radius:0 0 calc(var(--studio-frame-radius) - 1px) calc(var(--studio-frame-radius) - 1px)}
+.app-shell.demo-workspace[data-design="studio"] .conversation-rail .conversation-composer{border-radius:0 0 calc(var(--studio-frame-radius) - 1px) calc(var(--studio-frame-radius) - 1px)}
 .app-shell.demo-workspace[data-design="studio"] .conversation-resize-handle{left:calc(-1 * (var(--studio-column-gap) + 1px));width:var(--studio-column-gap)}
 .app-shell.demo-workspace[data-design="studio"] .conversation-resize-handle:before{top:calc(50% - 1.5px);left:1px;width:3px;height:3px;border-radius:50%;background:#6b7280;box-shadow:0 -6px #6b7280,0 6px #6b7280}
 .app-shell.demo-workspace[data-design="studio"] .conversation-resize-handle:after{display:none}
@@ -28,9 +28,8 @@ html:has(.app-shell.demo-workspace[data-design="studio"]){background:#f7f7f7}
 .app-shell.demo-workspace[data-design="studio"] .main-content{display:flex;flex-direction:column;height:100%;min-height:0;max-width:none;margin:0;padding:0;overflow:hidden}
 .app-shell.demo-workspace[data-design="studio"] .demo-existing-workbench:not([hidden]){display:flex;flex-direction:column;height:100%;min-height:0}
 .app-shell.demo-workspace[data-design="studio"] .blank-task-workspace{flex:1;min-height:0;overflow:auto}
-.app-shell.demo-workspace[data-design="studio"] .main-content.live-task-empty{border:1px solid var(--studio-frame-line);border-radius:var(--studio-frame-radius)}
-.app-shell.demo-workspace[data-design="studio"] .main-content.live-task-empty>.workbench-grid{display:flex;flex-direction:column;align-items:stretch;width:100%}
-.app-shell.demo-workspace[data-design="studio"] .main-content.live-task-empty .blank-task-workspace{width:100%}
+.app-shell.demo-workspace[data-design="studio"] .main-content:has(.blank-task-workspace){border:1px solid var(--studio-frame-line);border-radius:var(--studio-frame-radius)}
+.app-shell.demo-workspace[data-design="studio"] .main-content:has(.blank-task-workspace)>.workbench-grid{display:flex;flex-direction:column;align-items:stretch;width:100%}
 .app-shell.demo-workspace[data-design="studio"] .workbench-heading{margin:0;border:0;border-bottom:1px solid var(--line);border-radius:0;background:transparent;box-shadow:none}
 .app-shell.demo-workspace[data-design="studio"] .workbench-heading,.app-shell.demo-workspace[data-design="studio"] .stage-content-header{flex-shrink:0}
 .app-shell.demo-workspace[data-design="studio"] .workbench-grid{flex:1;min-height:0}

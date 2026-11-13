@@ -7,14 +7,14 @@ import type { PositionDraft } from '../src/lib/position-likelihood.ts';
 
 const report={id:'reported-input',kind:'artifact' as const,stage:'preflight',path:'/run/input/input-provenance.json'};
 const png='data:image/png;base64,iVBORw0KGgo=';
-const display={rendered_from:'numeric-array',schema:'tinylens.input-display.v1',pixel_scale_arcsec:.05,x_direction:'increasing',y_direction:'decreasing',source:{provenance_path:report.path,provenance_sha256:'b'.repeat(64),fits_path:'/run/input/lens.fits',fits_sha256:'a'.repeat(64)},planes:[{id:'data',shape:[151,151],variants:{linear:{src:png},log:{src:png+'log'},zscale:{src:png+'zscale'}}},{id:'noise',shape:[151,151],variants:{linear:{src:'wrong-noise'}}}]} as InputDisplay;
+const display={rendered_from:'numeric-array',schema:'tinylens.input-display.v1',pixel_scale_arcsec:.05,x_direction:'increasing',y_direction:'decreasing',source:{provenance_path:report.path,provenance_sha256:'b'.repeat(64),fits_path:'/run/input/lens.fits',fits_sha256:'a'.repeat(64)},planes:[{id:'data',shape:[151,151],variants:{linear:{src:png},log:{src:png+'log'},asinh:{src:png+'asinh'},zscale:{src:png+'zscale'}}},{id:'noise',shape:[151,151],variants:{linear:{src:'wrong-noise'}}}]} as InputDisplay;
 const draft:PositionDraft={points:[{id:'first',x:'1.8875',y:'1.8875'},{id:'second',x:'-1',y:'-.7'}],threshold:'.1',strength:'10000000000',inputFitsSha256:'a'.repeat(64)};
 
 test('all display scales share the exact point coordinates, FITS identity and outgoing request',()=>{
  const original=structuredClone(draft),reference=inputPositionContext(display,report,'/fallback','linear');
- for(const scale of ['linear','log','zscale'] as const){
+ for(const scale of ['linear','log','asinh','zscale'] as const){
   const context=inputPositionContext(display,report,'/fallback',scale);
-  assert.equal(context.image,display.planes[0].variants[scale].src);
+  assert.equal(context.image,display.planes[0].variants[scale]?.src);
   assert.deepEqual(context.frame,reference.frame);assert.deepEqual(context.source,reference.source);
   assert.deepEqual(positionRequest(draft,context),positionRequest(draft,reference));
  }

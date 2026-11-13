@@ -9,12 +9,12 @@ import ConversationRail from './ConversationRail';
 import ConnectionStatusBar from './ConnectionStatusBar';
 import { stageIndicators, serverLinkConnected, replyPending } from '../lib/workbench-status';
 import DemoSidebar from './DemoSidebar';
+import DeletedTaskList from './DeletedTaskList';
 import LiveStageData, { useLiveStageData } from './LiveStageData';
-import StageWorkbench, { type StageTab } from './StageWorkbench';
+import StageWorkbench from './StageWorkbench';
 import ScienceViewer from './ScienceViewer';
 import LivePreflightViewer from './LivePreflightViewer';
 import { useReportedInput } from '../lib/use-reported-input';
-import { usePreflightScale } from '../lib/use-preflight-scale';
 import {useImageScale} from '../lib/use-image-scale';
 import { inputPositionContext, positionContextForTarget, positionDraftForInput } from '../lib/input-position-context';
 import LiveMaskEditor from './LiveMaskEditor';
@@ -26,7 +26,7 @@ import { catalogParameters } from '../lib/parameter-catalog';
 import { ParameterDetail } from './ParameterTable';
 import { resultIdentity, selectStageResults } from '../lib/live-results';
 import { useDemoI18n } from '../lib/demo-i18n';
-import { stageNavigationTitle, workbenchStageCopy } from '../lib/stage-navigation';
+import { stageNavigationTitle, supportsStageTab, workbenchStageCopy, type StageTab } from '../lib/stage-navigation';
 import { emptyPositionDraft, mergePositionPrompt, positionError, positionPrompt, validStoredPositionDraft, type PositionContext, type PositionDraft } from '../lib/position-likelihood';
 import './agent-workspace.css';
 import './live-workbench.css';
@@ -44,10 +44,9 @@ const sessionStageDescriptions: Partial<Record<StageId, string>> = {
   b: '根据扣除透镜星系光后的信号，检查透镜弧的拟合区域、遗漏成分与边界，并把调整意见交给 AI。',
 };
 const jsonText = (value: unknown) => JSON.stringify(value, null, 2);
-type WorkbenchTab = StageTab;
-function readPreferences(taskId: string): { stageId: StageId; draft?: string; position?: PositionDraft; positionPrompt?: string;maskPrompt?:string } {
+function readPreferences(taskId?: string): { stageId: StageId; draft?: string; position?: PositionDraft; positionPrompt?: string;maskPrompt?:string } {
   try {
-    const saved = JSON.parse(localStorage.getItem(liveTaskPreferenceKey(taskId)) ?? 'null');
+    const saved = taskId ? JSON.parse(localStorage.getItem(liveTaskPreferenceKey(taskId)) ?? 'null') : null;
     if (saved && typeof saved === 'object') return {
       stageId: stages.some(stage => stage.id === saved.stageId) ? saved.stageId : 'preflight',
       draft: typeof saved.draft === 'string' ? saved.draft : undefined,
@@ -70,20 +69,24 @@ function initialDesign(): DesignId {
   return 'studio';
 }
 
-export default function AgentWorkspace({ task, tasks, taskError, taskCreationDisabled, onNewTask, onSelectTask, onRenameTask, onTaskActivity }: {
-  task: LiveTask; tasks: LiveTask[]; taskError: string; taskCreationDisabled: boolean;
-  onNewTask: () => void; onSelectTask: (id: string) => void; onRenameTask: (name: string) => void; onTaskActivity: () => void;
+export default function AgentWorkspace({ task, tasks, deletedTasks, taskError, taskCreationDisabled, onNewTask, onSelectTask, onDeleteTask, onRestoreTask, onTaskActivity }: {
+  task?: LiveTask; tasks: (LiveTask & { image?: string })[]; deletedTasks: LiveTask[]; taskError: string; taskCreationDisabled: boolean;
+  onNewTask: () => void; onSelectTask: (id: string) => void; onDeleteTask: (id: string) => void; onRestoreTask: (id: string) => void;
+  onTaskActivity: () => void;
 }) {
   const { t, language } = useDemoI18n();
-  const preferenceKey = liveTaskPreferenceKey(task.id);
-  const api = (path: string) => agentTaskUrl(path, task.id);
-  const [taskName, setTaskName] = useState(task.name);
+  const taskId = task?.id;
+  const preferenceKey = taskId ? liveTaskPreferenceKey(taskId) : undefined;
+  const api = (path: string) => {
+    if (!taskId) throw new Error('请先打开一个任务。');
+    return agentTaskUrl(path, taskId);
+  };
   const [stateReady, setStateReady] = useState(false);
-  const [workspacePanel, setWorkspacePanel] = useState<'history' | 'guide' | 'manual' | 'parameter' | null>(null);
-  const [state, setState] = useState<AgentState>(() => task.id === defaultLiveTaskId ? EMPTY_AGENT_STATE : { ...EMPTY_AGENT_STATE, datasetPath: '' });
+  const [workspacePanel, setWorkspacePanel] = useState<'history' | 'guide' | 'manual' | 'parameter' | 'trash' | null>(null);
+  const [state, setState] = useState<AgentState>(() => taskId === defaultLiveTaskId ? EMPTY_AGENT_STATE : { ...EMPTY_AGENT_STATE, datasetPath: '' });
   const [viewerToolbarTarget, setViewerToolbarTarget] = useState<HTMLDivElement | null>(null);
   const [parameterKey, setParameterKey] = useState('');
-  const [savedPreferences] = useState(() => readPreferences(task.id));
+  const [savedPreferences] = useState(() => readPreferences(taskId));
   const [draft, setDraft] = useState(savedPreferences.draft ?? '');
   const answerLocks = useRef(new Set<string>());
   const questionKey = (id: string) => `${state.threadId ?? ''}:${id}`;
@@ -94,7 +97,7 @@ export default function AgentWorkspace({ task, tasks, taskError, taskCreationDis
   const draftTouched = useRef(savedPreferences.draft !== undefined);
   const initialStateLoaded = useRef(false);
   const [stageId, setStageId] = useState<StageId>(savedPreferences.stageId);
-  const [tab, setTab] = useState<WorkbenchTab>('results');
+  const [tab, setTab] = useState<StageTab>('results');
   const [menuOpen, setMenuOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [storageUnavailable, setStorageUnavailable] = useState(false);
@@ -117,10 +120,9 @@ export default function AgentWorkspace({ task, tasks, taskError, taskCreationDis
   const parameter = stageData.parameters.find(item => item.key === parameterKey)??catalogParameters(selectedStage).find(item=>item.key===parameterKey);
   const showParameter = (item: Parameter) => { setParameterKey(item.key); setWorkspacePanel('parameter'); };
   const input=useReportedInput(state.updates,stageId==='preflight');
-  const [preflightScale,setPreflightScale]=usePreflightScale('live',task.id===defaultLiveTaskId?undefined:task.id);
-  const [imageScale,setImageScale]=useImageScale('live',stageId,task.id===defaultLiveTaskId?undefined:task.id);
+  const [imageScale,setImageScale]=useImageScale('live',taskId===defaultLiveTaskId?undefined:taskId??null);
   function updateMaskPrompt(next:string){draftTouched.current=true;setDraft(previous=>mergeMaskPrompt(previous,generatedMaskPrompt,next));setGeneratedMaskPrompt(next);}
-  const inputContext=inputPositionContext(input.display,input.report,state.datasetPath,preflightScale);
+  const inputContext=inputPositionContext(input.display,input.report,state.datasetPath,imageScale);
   const positionValue=positionDraftForInput(position,inputContext,state.datasetPath);
   const positionContext: PositionContext = positionContextForTarget(inputContext,positionValue.target);
   const positionManual = !!generatedPositionPrompt && !draft.includes(generatedPositionPrompt);
@@ -135,8 +137,10 @@ export default function AgentWorkspace({ task, tasks, taskError, taskCreationDis
     if (!merged.manual) setGeneratedPositionPrompt(prompt);
   }
   const isBusy = state.status === 'running' || state.status === 'waiting';
-  const blankWorkspace = task.id !== defaultLiveTaskId && state.messages.length === 0 && state.updates.length === 0;
-  const canInitialize = stateReady && task.id !== defaultLiveTaskId && !state.threadId && state.messages.length === 0;
+  const showTaskWelcome = !!taskId && taskId !== defaultLiveTaskId && !task?.lastConversationAt
+    && state.messages.length === 0 && state.updates.length === 0 && state.questions.length === 0 && state.requests.length === 0;
+  const blankWorkspace = !taskId || showTaskWelcome;
+  const canInitialize = !!taskId && stateReady && taskId !== defaultLiveTaskId && !state.threadId && state.messages.length === 0;
   const messages = state.messages.filter(message => !hiddenReasoning(message.phase));
   const activities = state.activities.filter(activity => !hiddenReasoning(activity.type));
   const visibleActivities = showAllActivities ? activities : activities.slice(-8);
@@ -162,6 +166,7 @@ export default function AgentWorkspace({ task, tasks, taskError, taskCreationDis
   }
 
   useEffect(() => {
+    if (!taskId) return;
     const abort = new AbortController();
     let sawEvent = false;
     let active = true;
@@ -178,18 +183,18 @@ export default function AgentWorkspace({ task, tasks, taskError, taskCreationDis
       if (active && !sawEvent) receiveState(next);
     }).catch(error => { if (active && !abort.signal.aborted) setLocalError(error instanceof Error ? error.message : '无法连接 AI 会话服务。'); });
     return () => { active = false; abort.abort(); events.close(); };
-  }, [task.id]);
+  }, [taskId]);
 
-  useEffect(() => { setTaskName(task.name); }, [task.name]);
-  useEffect(() => { document.title = `TinyLens · ${task.name}`; }, [task.name]);
+  useEffect(() => { document.title = task ? `TinyLens · ${task.name}` : 'TinyLens'; }, [task?.name]);
 
   useEffect(() => { const openManual = (event: KeyboardEvent) => { if ((event.metaKey || event.ctrlKey) && event.key === 'k') { event.preventDefault(); setWorkspacePanel('manual'); } }; window.addEventListener('keydown', openManual); return () => window.removeEventListener('keydown', openManual); }, []);
   useEffect(() => { if (showDesigns || workspacePanel) dialog.current?.showModal(); else dialog.current?.close(); }, [showDesigns, workspacePanel]);
   useEffect(() => { if (pinConversation.current && log.current) log.current.scrollTop = log.current.scrollHeight; }, [state.messages, tab]);
   useEffect(() => {
+    if (!preferenceKey) return;
     try { localStorage.setItem(preferenceKey, JSON.stringify({ stageId, draft, position, positionPrompt: generatedPositionPrompt,maskPrompt:generatedMaskPrompt })); setStorageUnavailable(false); }
     catch { setStorageUnavailable(true); }
-  }, [stageId, draft, position, generatedPositionPrompt,generatedMaskPrompt]);
+  }, [preferenceKey, stageId, draft, position, generatedPositionPrompt,generatedMaskPrompt]);
   useEffect(() => {
     const track = stageTrack.current;
     const selected = track?.querySelector<HTMLElement>('[aria-current="step"]');
@@ -207,7 +212,7 @@ export default function AgentWorkspace({ task, tasks, taskError, taskCreationDis
   }, [tab, focusReports]);
 
   async function perform(name: string, body: Record<string, unknown> = {}) {
-    if (action) return false;
+    if (!taskId || action) return false;
     setAction(name); setLocalError(null);
     try {
       const response = await fetch(api(`/api/agent/${name}`), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -227,7 +232,7 @@ export default function AgentWorkspace({ task, tasks, taskError, taskCreationDis
 
   async function sendMessage() {
     const text = draft;
-    if (!text.trim() || !stateReady || state.connection !== 'connected' && !canInitialize || action || messageSending.current || isBusy) return;
+    if (!preferenceKey || !text.trim() || !stateReady || state.connection !== 'connected' && !canInitialize || action || messageSending.current || isBusy) return;
     pinConversation.current = true;
     messageSending.current = true;
     try {
@@ -283,8 +288,13 @@ export default function AgentWorkspace({ task, tasks, taskError, taskCreationDis
     try { localStorage.setItem('tinylens-design-v1', id); } catch { /* Visual preference is optional. */ }
   }
 
-  function chooseStage(id: StageId) { setStageId(id); setTab('results'); setExpanded(false); setMenuOpen(false); }
-  function chooseTab(value: WorkbenchTab) { setTab(value); setMenuOpen(false); }
+  function chooseStage(id: StageId) {
+    setStageId(id);
+    setTab(current => supportsStageTab(id, current) ? current : 'results');
+    setExpanded(false);
+    setMenuOpen(false);
+  }
+  function chooseTab(value: StageTab) { setTab(value); setMenuOpen(false); }
   function viewStageReports() { setTab('results'); setFocusReports(true); setMenuOpen(false); }
   function addPrompt(text: string) { draftTouched.current = true; setDraft(previous => previous.trim() ? `${previous}\n\n${text}` : text); composer.current?.focus(); }
   async function copyPath(path: string) { try { await navigator.clipboard.writeText(path); setCopyNotice('已复制 AI 报告的文件路径。'); } catch { setCopyNotice('无法访问剪贴板，请选中文件路径复制。'); } }
@@ -294,39 +304,52 @@ export default function AgentWorkspace({ task, tasks, taskError, taskCreationDis
   const displayTitle = (id: StageId) => t(workbenchStageCopy[id]?.title ?? stages.find(stage => stage.id === id)!.title);
   const indicators = stageIndicators(state);
   const closePanel = () => { setShowDesigns(false); setWorkspacePanel(null); };
-  return <div className="app-shell demo-workspace live-workbench live-prototype-workbench" data-design={designId} data-demo-language={language}>
-    <DemoSidebar live lenses={tasks.map(item=>({...item,...(item.id===defaultLiveTaskId?{}:{kind:'task' as const})}))} selected={task.id} open={menuOpen} onClose={() => setMenuOpen(false)} onSelect={onSelectTask} onNewTask={onNewTask} taskCreationDisabled={taskCreationDisabled} onDelete={() => {}} onTrash={() => {}} deletedCount={0} onHistory={() => setWorkspacePanel('history')} onManual={() => setWorkspacePanel('manual')} onGuide={() => setWorkspacePanel('guide')} design={designId} onDesignChange={chooseDesign}/>
-    <div className="workspace"><main className={`main-content${blankWorkspace?' live-task-empty':''}`}>
-      {!blankWorkspace&&<div className="workbench-heading"><div className="lens-identity"><h1>{task.name}</h1></div>
+  const conversation = <ConversationRail aiName="Codex" conversationId={taskId} composerOnly={showTaskWelcome}
+    newTask={blankWorkspace} inactive={!taskId} replyPending={replyPending(state, streamStatus, messages)}
+    connectionAction={taskId && state.connection !== 'connected' && <button type="button" className="conversation-connect"
+      disabled={state.connection === 'connecting' || action !== null} onClick={() => void perform('connect')}>
+      {state.connection === 'connecting' ? '连接中' : '连接 AI'}
+    </button>}
+    messages={messages} value={draft} onChange={text => { draftTouched.current = true; setDraft(text); }}
+    onSubmit={() => void sendMessage()} textareaId="pipeline-message" inputRef={composer}
+    disabled={!stateReady || state.connection !== 'connected' && !canInitialize || action !== null} busy={isBusy}
+    error={localError ?? state.error ?? (taskError || null) ?? (storageUnavailable ? '草稿暂存在页面内' : '')}
+    interruptAvailable={isBusy} onInterrupt={() => perform('interrupt')} attentionCount={openQuestions.length + state.requests.length}
+    attention={(openQuestions.length > 0 || state.requests.length > 0) && <section id="agent-pending-questions" className="agent-question-deck live-attention-deck" aria-label="等待你的决定">
+      {openQuestions.map(question => <QuestionCard key={`${question.threadId}:${question.id}`} question={question} connected={state.connection === 'connected'} busy={action !== null || answerLocks.current.has(questionKey(question.id))} onAnswer={answer => answerQuestion(question.id, answer)}/>)}
+      {state.requests.map(request => <RequestCard key={`${state.threadId}:${typeof request.id}:${request.id}`} request={request} busy={action !== null || state.connection !== 'connected'} reply={result => perform('reply', { requestId: request.id, result })}/>)}
+    </section>}/>;
+  return <div className="app-shell demo-workspace live-workbench live-prototype-workbench" data-design={designId} data-demo-language={language} data-task-welcome={showTaskWelcome || undefined}>
+    <DemoSidebar live lenses={tasks.map(item=>({...item,...(item.id===defaultLiveTaskId?{}:{kind:'task' as const})}))} selected={taskId ?? ''} open={menuOpen} onClose={() => setMenuOpen(false)} onSelect={onSelectTask} onNewTask={onNewTask} taskCreationDisabled={taskCreationDisabled} onDelete={onDeleteTask} onTrash={() => setWorkspacePanel('trash')} deletedCount={deletedTasks.length} onHistory={() => setWorkspacePanel(taskId ? 'history' : 'trash')} onManual={() => setWorkspacePanel('manual')} onGuide={() => setWorkspacePanel('guide')} design={designId} onDesignChange={chooseDesign}/>
+    <div className="workspace"><main className="main-content">
+      {!blankWorkspace&&<div className="workbench-heading"><div className="lens-identity"><h1>{task?.name}</h1></div>
         <div ref={stageTrack} className="stage-track" aria-label={t('建模阶段')}>{stages.map(stage => {
           const indicator = indicators.get(stage.id)!;
           const label = indicator.waitingForUser ? '等待你的答复' : stageLabel(indicator.report);
           return <div className="stage-nav-item" key={stage.id}><div className="stage-name-line"><button className={`stage-step ${stage.id === stageId ? 'current' : ''} ${indicator.report?.status === 'accepted' ? 'done' : ''}`} data-stage-status={indicator.state} aria-current={stage.id === stageId ? 'step' : undefined} aria-busy={indicator.state === 'running' || undefined} aria-label={`${stageNavigationTitle(stage)} ${displayTitle(stage.id)}`} aria-description={label} title={label} onClick={() => chooseStage(stage.id)}><span className="step-dot stage-initial">{stage.id === 'preflight' ? 'D' : stage.code}</span><span className="stage-description">{displayTitle(stage.id)}</span></button></div></div>;
         })}</div>
       </div>}
-      <div className="workbench-grid">{blankWorkspace?<BlankTaskWorkspace name={taskName} placeholder={t('新任务')} onNameChange={setTaskName} onNameBlur={()=>onRenameTask(taskName)}/>:<StageWorkbench title={displayTitle(stageId)} tab={tab} onTabChange={chooseTab} parameterCount={stageData.parameters.length} toolbarRef={setViewerToolbarTarget} showParameters={stageId!=='preflight'&&stageId!=='b'} showConfig={stageId!=='preflight'&&stageId!=='b'} showPositions={stageId==='preflight'} resultsLabel={stageId==='preflight'?'输入预览':'结果预览'}>
+      <div className="workbench-grid">{blankWorkspace?<BlankTaskWorkspace composer={showTaskWelcome ? conversation : undefined} onCreate={taskId ? undefined : onNewTask} createDisabled={taskCreationDisabled}/>:<StageWorkbench stageId={stageId} title={displayTitle(stageId)} tab={tab} onTabChange={chooseTab} parameterCount={stageData.parameters.length} toolbarRef={setViewerToolbarTarget}>
         {stageId==='preflight'&&<>
-          <div className="tab-panel" role="tabpanel" aria-label="输入预览" hidden={tab!=='results'}><LivePreflightViewer input={input} toolbarTarget={tab==='results'?viewerToolbarTarget:null} scale={preflightScale} onScaleChange={setPreflightScale}/></div>
-          <div className="tab-panel" role="tabpanel" aria-label="位置约束" hidden={tab!=='positions'}><PositionLikelihoodEditor value={positionValue} context={positionContext} onChange={updatePositions} onReplacePrompt={() => updatePositions(positionValue, true)} manualPrompt={positionManual} promptPresent={!!generatedPositionPrompt && !positionManual} disabled={isBusy || action !== null||!!input.loading} toolbarTarget={tab==='positions'?viewerToolbarTarget:null} scale={preflightScale} onScaleChange={setPreflightScale}/></div>
+          <div className="tab-panel" role="tabpanel" aria-label="输入预览" hidden={tab!=='results'}><LivePreflightViewer input={input} toolbarTarget={tab==='results'?viewerToolbarTarget:null} scale={imageScale} onScaleChange={setImageScale}/></div>
+          <div className="tab-panel" role="tabpanel" aria-label="位置约束" hidden={tab!=='positions'}><PositionLikelihoodEditor value={positionValue} context={positionContext} onChange={updatePositions} onReplacePrompt={() => updatePositions(positionValue, true)} manualPrompt={positionManual} promptPresent={!!generatedPositionPrompt && !positionManual} disabled={isBusy || action !== null||!!input.loading} toolbarTarget={tab==='positions'?viewerToolbarTarget:null} scale={imageScale} onScaleChange={setImageScale}/></div>
         </>}
         {tab === 'results' && stageId!=='preflight' && <div className="tab-panel" role="tabpanel" aria-label="结果预览">
           {stageId === 'b' ? <LiveMaskEditor report={stageData.reports.summary} threadId={state.threadId??''} summary={stageData.summary} toolbarTarget={viewerToolbarTarget} scale={imageScale} onScaleChange={setImageScale} onPromptChange={updateMaskPrompt} disabled={isBusy||action!==null}/> : <ScienceViewer stageId={stageId} toolbarTarget={viewerToolbarTarget} missingLayers="—" displayPlanes={stageData.modelPlanes} modelResult={stageData.modelResult} imageScale={imageScale} onScaleChange={setImageScale}/>}
         </div>}
         {tab === 'parameters' && <div className="tab-panel" role="tabpanel" aria-label="参数后验"><LiveStageData stage={selectedStage} data={stageData} view="parameters" onDetail={showParameter}/></div>}
-        {tab === 'config' && stageId!=='preflight' && stageId!=='b' && <div className="tab-panel" role="tabpanel" aria-label="模型配置"><LiveStageData stage={selectedStage} data={stageData} view="config" onDetail={showParameter} connection={connectionNames[state.connection]}/></div>}
+        {tab === 'config' && <div className="tab-panel" role="tabpanel" aria-label="模型配置"><LiveStageData stage={selectedStage} data={stageData} view="config" onDetail={showParameter} connection={connectionNames[state.connection]}/></div>}
       </StageWorkbench>}
-        <ConversationRail aiName="Codex" conversationId={task.id} newTask={blankWorkspace} replyPending={replyPending(state, streamStatus, messages)} connectionAction={state.connection !== 'connected' && <button type="button" className="conversation-connect" disabled={state.connection === 'connecting' || action !== null} onClick={() => void perform('connect')}>{state.connection === 'connecting' ? '连接中' : '连接 AI'}</button>} messages={messages} value={draft} onChange={text=>{draftTouched.current=true;setDraft(text);}} onSubmit={()=>void sendMessage()} textareaId="pipeline-message" inputRef={composer} disabled={!stateReady||state.connection!=='connected'&&!canInitialize||action!==null} busy={isBusy} error={localError??state.error??(taskError||null)??(storageUnavailable?'草稿暂存在页面内':'')} interruptAvailable={isBusy} onInterrupt={()=>perform('interrupt')} attentionCount={openQuestions.length+state.requests.length} attention={(openQuestions.length > 0 || state.requests.length > 0) && <section id="agent-pending-questions" className="agent-question-deck live-attention-deck" aria-label="等待你的决定">
-          {openQuestions.map(question => <QuestionCard key={`${question.threadId}:${question.id}`} question={question} connected={state.connection === 'connected'} busy={action !== null || answerLocks.current.has(questionKey(question.id))} onAnswer={answer => answerQuestion(question.id, answer)}/>)}
-          {state.requests.map(request => <RequestCard key={`${state.threadId}:${typeof request.id}:${request.id}`} request={request} busy={action !== null || state.connection !== 'connected'} reply={result => perform('reply', { requestId: request.id, result })}/>)}
-        </section>}/>
+        {!showTaskWelcome && conversation}
       </div>
     </main></div>
     <ConnectionStatusBar connected={serverLinkConnected(state.connection, streamStatus)}/>
-    <dialog ref={dialog} className={`modal modal-${workspacePanel ?? 'design'}`} onCancel={closePanel} onClick={event => { if (event.target === dialog.current) closePanel(); }} aria-labelledby="agent-panel-title"><div className="modal-header"><div>{workspacePanel !== 'parameter' && <span className="eyebrow">TINYLENS WORKSPACE</span>}<h2 id="agent-panel-title">{workspacePanel === 'history' ? `${task.name} 的运行历史` : workspacePanel === 'manual' ? '参数手册' : workspacePanel === 'parameter' ? t(parameter?.name??'') : workspacePanel === 'guide' ? '欢迎来到 TinyLens' : '工作台外观'}</h2></div><button aria-label="关闭窗口" onClick={closePanel}><X size={19}/></button></div><div className="modal-body">
-      {workspacePanel === 'manual' && <ParameterManual stages={stages} onSelect={(next, item) => { setStageId(next.id); setParameterKey(item.key); setWorkspacePanel('parameter'); }}/> }
+    <dialog ref={dialog} className={`modal modal-${workspacePanel ?? 'design'}`} onCancel={closePanel} onClick={event => { if (event.target === dialog.current) closePanel(); }} aria-labelledby="agent-panel-title"><div className="modal-header"><div>{workspacePanel !== 'parameter' && <span className="eyebrow">TINYLENS WORKSPACE</span>}<h2 id="agent-panel-title">{workspacePanel === 'trash' ? t('已删除任务') : workspacePanel === 'history' ? `${task?.name ?? ''} 的运行历史` : workspacePanel === 'manual' ? '参数手册' : workspacePanel === 'parameter' ? t(parameter?.name??'') : workspacePanel === 'guide' ? '欢迎来到 TinyLens' : '工作台外观'}</h2></div><button aria-label={t('关闭窗口')} onClick={closePanel}><X size={19}/></button></div><div className="modal-body">
+      {workspacePanel === 'trash' && <DeletedTaskList tasks={deletedTasks} onRestore={onRestoreTask}/>}
+      {workspacePanel === 'manual' && <ParameterManual stages={stages} onSelect={(next, item) => { chooseStage(next.id); setParameterKey(item.key); setWorkspacePanel('parameter'); }}/> }
       {workspacePanel === 'parameter' && parameter && <ParameterDetail parameter={parameter} live/>}
       {workspacePanel === 'history' && <div className="run-history branch-history">{historyAttempts.map(item => <div className="branch-entry" key={item.key}><button disabled={selectStageResults(state.updates,item.stage).identity?.key !== item.key} onClick={() => { chooseStage(item.stage as StageId); closePanel(); }}><span className="run-icon"><Layers3 size={19}/></span><div><strong>Stage {item.stage.toUpperCase()} · attempt {item.attempt}</strong><small className="branch-origin">{item.key.split('/').slice(-5, -3).join('/')}</small></div><ChevronRight size={16}/></button></div>)}</div>}
-      {workspacePanel === 'guide' && <div className="live-guide-copy"><p>使用与原型相同的 Stage 导航、页签、主题和对话分栏，展示 0946 mock 的真实结果。</p><p>当前展示已有诊断图、参数摘要、带权后验和 M0 证据扫描。缺少的产物先略过；图像及后验不使用合成样例补齐。</p><p>问题与审批位于右侧会话栏。修改意见作为普通消息交给 Pipeline AI，不直接调度科学阶段。</p><p>连接状态：{connectionNames[state.connection]}；{turnNames[state.status]}</p>{state.connection !== 'connected' && <button className="button secondary" onClick={() => void perform('connect')}>连接 Pipeline AI</button>}</div>}
+      {workspacePanel === 'guide' && <div className="live-guide-copy"><p>使用与原型相同的 Stage 导航、页签、主题和对话分栏，展示当前任务已报告的科学结果。</p><p>当前展示已有诊断图、参数摘要、带权后验和 M0 证据扫描。缺少的产物先略过；图像及后验不使用合成样例补齐。</p><p>问题与审批位于右侧会话栏。修改意见作为普通消息交给 Pipeline AI，不直接调度科学阶段。</p><p>连接状态：{connectionNames[state.connection]}；{turnNames[state.status]}</p>{taskId && state.connection !== 'connected' && <button className="button secondary" onClick={() => void perform('connect')}>连接 Pipeline AI</button>}</div>}
       {showDesigns && <div className="agent-design-options">{designs.map(design => <button key={design.id} onClick={() => chooseDesign(design.id)}>{design.name}</button>)}</div>}
     </div></dialog>
     {copyNotice && <div className="agent-notice" role="status">{copyNotice}</div>}

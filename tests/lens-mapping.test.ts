@@ -2,10 +2,56 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {potentialMapper,verifiedDemoMapping,screenToPlane,planeToScreen,isInside,displayImageFamily,isInPlaneView,weakImageMagnification} from '../src/lib/lens-mapping.ts';
+import {eplMapper,type EplShearModel} from '../src/lib/epl-mapping.ts';
+import {verifiedLiveMapping,type LiveMapping} from '../src/lib/live-mapping.ts';
 const data=JSON.parse(readFileSync(new URL('../src/data/lens-mapping-demo.json',import.meta.url),'utf8'));
 const display=JSON.parse(readFileSync(new URL('../src/data/science-demo.json',import.meta.url),'utf8'));
 const mapper=verifiedDemoMapping(data,display)!;
 const distance=(a:{x:number;y:number},b:{x:number;y:number})=>Math.hypot(a.x-b.x,a.y-b.y);
+
+const epl:EplShearModel={kind:'epl-shear',theta_E:1.3,gamma:1.97,e1_mass:0,e2_mass:0,center_x_mass:.0237,center_y_mass:-.0341,gamma1:0,gamma2:0};
+const eplFrame={shape:[151,181],bounds_arcsec:[-4.525,4.525,-3.775,3.775],half_extent_arcsec:3.775};
+
+test('a shallow EPL resolves both critical radii around its shifted mass center',()=>{
+  const geometry=eplMapper(epl,eplFrame),curves=geometry.criticalCurves(),slope=epl.gamma-1;
+  const center={x:epl.center_x_mass,y:epl.center_y_mass};
+  const radial=epl.theta_E*(1-slope)**(1/slope),expected=[epl.theta_E,radial];
+  assert.equal(curves.length,2);
+  for(const [index,curve] of curves.entries()){
+    assert.ok(curve.closed&&curve.critical.length>100);
+    const causticRadius=Math.abs(expected[index]-epl.theta_E**slope*expected[index]**(1-slope));
+    for(const [i,point] of curve.critical.entries()){
+      assert.ok(isInside(point,eplFrame));
+      assert.ok(Math.abs(distance(point,center)-expected[index])<1e-9);
+      assert.ok(Math.abs(geometry.determinantFor(point))<1e-8);
+      assert.ok(Math.abs(distance(curve.caustic[i],center)-causticRadius)<1e-9);
+    }
+  }
+  const centralImage={x:center.x+radial/2,y:center.y};
+  const target=geometry.sourceFor(centralImage),images=geometry.imagesFor(target);
+  assert.equal(images.length,3);
+  assert.ok(images.some(image=>distance(image,centralImage)<1e-7));
+  assert.ok(images.every(image=>distance(geometry.sourceFor(image),target)<1e-7));
+});
+
+test('live EPL mapping verifies forward rays and the signed Jacobian of the same attempt',()=>{
+  const model={...epl,gamma:2.15,gamma1:.04,gamma2:-.03};
+  const binding={stage:'m3',attempt:0,path:'/run/attempts/m3/0/stage-result.json',sha256:'a'.repeat(64),fitsSha256:'b'.repeat(64)};
+  const references=[[-1.1,-.7],[.5,.6],[.1,-1.2],[1.5,.2],[-.8,1.2]].map(([x,y])=>{
+    const dx=x-model.center_x_mass,dy=y-model.center_y_mass,r2=dx*dx+dy*dy,t=model.gamma-1;
+    const weight=(model.theta_E/Math.sqrt(r2))**t;
+    const xx=1-model.gamma1-weight*(1-t*dx*dx/r2), yy=1+model.gamma1-weight*(1-t*dy*dy/r2);
+    const xy=-model.gamma2+weight*t*dx*dy/r2;
+    return {image:{x,y},source:{x:(1-model.gamma1)*x-model.gamma2*y-weight*dx,y:(1+model.gamma1)*y-model.gamma2*x-weight*dy},determinant:xx*yy-xy*xy};
+  });
+  const value:LiveMapping={schema:'tinylens.lens-mapping.v1',synthetic:false,stage:binding.stage,attempt:binding.attempt,path:binding.path,
+    summary_sha256:binding.sha256,fits_sha256:binding.fitsSha256,model,frames:{image:eplFrame,source:eplFrame},references};
+  assert.ok(verifiedLiveMapping(value,binding));
+  assert.equal(verifiedLiveMapping(value,{...binding,attempt:1}),null);
+  assert.equal(verifiedLiveMapping({...value,model:{...model,kind:'sie-shear'}},binding),null);
+  const wrongJacobian=references.map((ray,index)=>index===0?{...ray,determinant:ray.determinant+.01}:ray);
+  assert.equal(verifiedLiveMapping({...value,references:wrongJacobian},binding),null);
+});
 test('mapping is bound to the same synthetic assets and calibrated frames',()=>{
   assert.ok(mapper);
   for(const invalid of [undefined,{...data,synthetic:false},{...data,coordinates:{...data.coordinates,y:'down'}},{...data,images:{}},{...data,frames:{...data.frames,source:{...data.frames.source,half_extent_arcsec:1}}}])assert.equal(verifiedDemoMapping(invalid,display),null);

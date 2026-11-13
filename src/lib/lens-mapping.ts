@@ -14,14 +14,15 @@ export type Potential = {kind:string;normalization_arcsec:number;potential_axis_
 type Mapping = {schema:string;synthetic:boolean;coordinates:{unit:string;origin:string;x:string;y:string};model:Potential;frames:{image:PlaneFrame;source:PlaneFrame};images:Record<string,{src:string;sha256:string}>};
 type Display = {planes:Record<string,{src:string;sha256:string;half_extent_arcsec:number;shape:number[]}>};
 const finite=(p:Point)=>Number.isFinite(p.x)&&Number.isFinite(p.y);
+const frameBounds=(frame:PlaneFrame)=>frame.bounds_arcsec??[-frame.half_extent_arcsec,frame.half_extent_arcsec,-frame.half_extent_arcsec,frame.half_extent_arcsec];
 
 /** Fractions are measured from the upper-left pixel edge, before CSS transforms. */
 export function screenToPlane(position:Point,frame:PlaneFrame,view:PlaneView):Point{
-  const b=frame.bounds_arcsec??[-frame.half_extent_arcsec,frame.half_extent_arcsec,-frame.half_extent_arcsec,frame.half_extent_arcsec];
+  const b=frameBounds(frame);
   return {x:(b[0]+b[1])/2+(position.x-.5-view.pan.x/100)*(b[1]-b[0])/view.zoom,y:(b[2]+b[3])/2-(position.y-.5-view.pan.y/100)*(b[3]-b[2])/view.zoom};
 }
 export function planeToScreen(position:Point,frame:PlaneFrame,view:PlaneView):Point{
-  const b=frame.bounds_arcsec??[-frame.half_extent_arcsec,frame.half_extent_arcsec,-frame.half_extent_arcsec,frame.half_extent_arcsec];
+  const b=frameBounds(frame);
   return {x:.5+(position.x-(b[0]+b[1])/2)*view.zoom/(b[1]-b[0])+view.pan.x/100,y:.5-(position.y-(b[2]+b[3])/2)*view.zoom/(b[3]-b[2])+view.pan.y/100};
 }
 export const isInside=(point:Point,frame:PlaneFrame)=>{const p=planeToScreen(point,frame,{zoom:1,pan:{x:0,y:0}});return finite(p)&&p.x>=0&&p.x<=1&&p.y>=0&&p.y<=1;};
@@ -40,21 +41,36 @@ export function potentialMapper(model:Potential,frame:PlaneFrame){
   return mapperFromEvaluator(evaluate,frame,Math.min(frame.half_extent_arcsec,Math.max(4*Math.sqrt(core2),2*Math.cbrt(b*core2))));
 }
 
-type Evaluation=Point&{xx:number;xy:number;yy:number};
-export function mapperFromEvaluator(evaluate:(point:Point)=>Evaluation,frame:PlaneFrame,coreExtent=0){
+type Evaluation=Point&{xx:number;xy:number;yx?:number;yy:number};
+const jacobianDeterminant=(value:Evaluation)=>value.xx*value.yy-value.xy*(value.yx??value.xy);
+
+function gridAxis(low:number,high:number,steps:number,center:number,coreExtent:number,coreSteps:number){
+  const span=high-low,coordinates=Array.from({length:steps+1},(_,i)=>low+span*i/steps);
+  if(coreExtent>0)for(let i=0;i<=coreSteps;i++){
+    const coordinate=center-coreExtent+2*coreExtent*i/coreSteps;
+    if(coordinate>low&&coordinate<high)coordinates.push(coordinate);
+  }
+  return coordinates.sort((a,b)=>a-b).filter((value,i,sorted)=>i===0||value-sorted[i-1]>span*5e-13);
+}
+
+export function mapperFromEvaluator(evaluate:(point:Point)=>Evaluation,frame:PlaneFrame,coreExtent=0,coreCenter?:Point){
   const sourceFor=(p:Point):Point=>{const value=evaluate(p);return{x:value.x,y:value.y};};
-  const determinantFor=(p:Point)=>{const value=evaluate(p);return value.xx*value.yy-value.xy*value.xy;};
+  const determinantFor=(p:Point)=>jacobianDeterminant(evaluate(p));
   const magnificationFor=(p:Point)=>1/determinantFor(p);
+  const [left,right,bottom,top]=frameBounds(frame);
+  const center=coreCenter??{x:(left+right)/2,y:(bottom+top)/2};
   let curves:LensCurvePair[]|undefined;
-  const criticalCurves=()=>curves??=criticalContours(frame,coreExtent,determinantFor,sourceFor);
+  const criticalCurves=()=>curves??=criticalContours(frame,center,coreExtent,determinantFor,sourceFor);
   type Vertex={image:Point;source:Point};
   type Triangle={p:Vertex;q:Vertex;r:Vertex;minX:number;maxX:number;minY:number;maxY:number};
   let mesh:{vertices:Vertex[];triangles:Triangle[]}|undefined;
   function makeMesh(){
-    const n=128,e=frame.half_extent_arcsec,vertices:Vertex[]=[],triangles:Triangle[]=[];
-    for(let row=0;row<=n;row++)for(let col=0;col<=n;col++){const image={x:-e+2*e*col/n,y:-e+2*e*row/n};vertices.push({image,source:sourceFor(image)});}
+    const refineExtent=coreCenter?coreExtent:0;
+    const xs=gridAxis(left,right,128,center.x,refineExtent,32),ys=gridAxis(bottom,top,128,center.y,refineExtent,32);
+    const width=xs.length,vertices:Vertex[]=[],triangles:Triangle[]=[];
+    for(const y of ys)for(const x of xs){const image={x,y};vertices.push({image,source:sourceFor(image)});}
     function triangle(i:number,j:number,k:number){const p=vertices[i],q=vertices[j],r=vertices[k];triangles.push({p,q,r,minX:Math.min(p.source.x,q.source.x,r.source.x),maxX:Math.max(p.source.x,q.source.x,r.source.x),minY:Math.min(p.source.y,q.source.y,r.source.y),maxY:Math.max(p.source.y,q.source.y,r.source.y)});}
-    for(let row=0;row<n;row++)for(let col=0;col<n;col++){const i=row*(n+1)+col;triangle(i,i+1,i+n+2);triangle(i,i+n+2,i+n+1);}
+    for(let row=0;row<ys.length-1;row++)for(let col=0;col<width-1;col++){const i=row*width+col;triangle(i,i+1,i+width+1);triangle(i,i+width+1,i+width);}
     return {vertices,triangles};
   }
   function refine(seed:Point,target:Point):Point|null{
@@ -62,8 +78,8 @@ export function mapperFromEvaluator(evaluate:(point:Point)=>Evaluation,frame:Pla
     for(let iteration=0;iteration<55;iteration++){
       const f=evaluate(point),rx=f.x-target.x,ry=f.y-target.y,error=rx*rx+ry*ry;
       if(error<1e-18)return isInside(point,frame)?point:null;
-      const determinant=f.xx*f.yy-f.xy*f.xy;if(Math.abs(determinant)<1e-13)break;
-      let dx=(f.yy*rx-f.xy*ry)/determinant,dy=(-f.xy*rx+f.xx*ry)/determinant;
+      const determinant=jacobianDeterminant(f);if(Math.abs(determinant)<1e-13)break;
+      let dx=(f.yy*rx-f.xy*ry)/determinant,dy=(-(f.yx??f.xy)*rx+f.xx*ry)/determinant;
       const length=Math.hypot(dx,dy);if(length>1){dx/=length;dy/=length;}
       let improved=false;
       for(let damping=1;damping>=1/1024;damping/=2){const next={x:point.x-damping*dx,y:point.y-damping*dy},g=evaluate(next);if((g.x-target.x)**2+(g.y-target.y)**2<error){point=next;improved=true;break;}}
@@ -73,7 +89,7 @@ export function mapperFromEvaluator(evaluate:(point:Point)=>Evaluation,frame:Pla
   }
   function imagesFor(target:Point):Point[]{
     if(!finite(target))return [];
-    mesh??=makeMesh();const seeds:Point[]=[{x:0,y:0}],nearest:{distance:number;point:Point}[]=[];
+    mesh??=makeMesh();const seeds:Point[]=[center],nearest:{distance:number;point:Point}[]=[];
     // Seed every mapped triangle containing beta; this retains distinct image branches.
     for(const triangle of mesh.triangles){
       if(target.x<triangle.minX-1e-8||target.x>triangle.maxX+1e-8||target.y<triangle.minY-1e-8||target.y>triangle.maxY+1e-8)continue;
@@ -94,17 +110,15 @@ export function mapperFromEvaluator(evaluate:(point:Point)=>Evaluation,frame:Pla
 }
 
 /** Trace det(d beta / d theta)=0, then ray-shoot each curve to its caustic.
- * A refined central mesh resolves the small radial curve of this softened model.
+ * A refined mesh around the lens center resolves small radial curves.
  * Shared edge roots retain connected branches; field-edge paths remain open.
  */
-function criticalContours(frame:PlaneFrame,coreExtent:number,determinantFor:(point:Point)=>number,sourceFor:(point:Point)=>Point):LensCurvePair[]{
-  const extent=frame.half_extent_arcsec,coordinates:number[]=[];
-  for(let i=0;i<=256;i++)coordinates.push(-extent+2*extent*i/256);
-  if(coreExtent>0)for(let i=0;i<=128;i++)coordinates.push(-coreExtent+2*coreExtent*i/128);
-  const axis=coordinates.sort((a,b)=>a-b).filter((value,i,sorted)=>i===0||value-sorted[i-1]>extent*1e-12),n=axis.length;
-  const values=new Float64Array(n*n),nodes=new Map<string,Point>(),segments:{a:string;b:string}[]=[],adjacency=new Map<string,number[]>();
-  const vertex=(id:number):Point=>({x:axis[id%n],y:axis[Math.floor(id/n)]});
-  for(let row=0;row<n;row++)for(let col=0;col<n;col++)values[row*n+col]=determinantFor({x:axis[col],y:axis[row]});
+function criticalContours(frame:PlaneFrame,center:Point,coreExtent:number,determinantFor:(point:Point)=>number,sourceFor:(point:Point)=>Point):LensCurvePair[]{
+  const [left,right,bottom,top]=frameBounds(frame);
+  const xs=gridAxis(left,right,256,center.x,coreExtent,128),ys=gridAxis(bottom,top,256,center.y,coreExtent,128);
+  const width=xs.length,values=new Float64Array(width*ys.length),nodes=new Map<string,Point>(),segments:{a:string;b:string}[]=[],adjacency=new Map<string,number[]>();
+  const vertex=(id:number):Point=>({x:xs[id%width],y:ys[Math.floor(id/width)]});
+  for(let row=0;row<ys.length;row++)for(let col=0;col<width;col++)values[row*width+col]=determinantFor({x:xs[col],y:ys[row]});
   function crossing(i:number,j:number):string{
     const id=values[i]===0?`v${i}`:values[j]===0?`v${j}`:i<j?`${i}:${j}`:`${j}:${i}`;
     if(nodes.has(id))return id;
@@ -125,8 +139,8 @@ function criticalContours(frame:PlaneFrame,coreExtent:number,determinantFor:(poi
     const index=segments.length;segments.push({a:edges[0],b:edges[1]});
     for(const node of edges){const incident=adjacency.get(node);if(incident)incident.push(index);else adjacency.set(node,[index]);}
   }
-  for(let row=0;row<n-1;row++)for(let col=0;col<n-1;col++){
-    const a=row*n+col,b=a+1,c=a+n+1,d=a+n;
+  for(let row=0;row<ys.length-1;row++)for(let col=0;col<width-1;col++){
+    const a=row*width+col,b=a+1,c=a+width+1,d=a+width;
     const signs=[values[a]<0,values[b]<0,values[c]<0,values[d]<0];
     if(signs.every(sign=>sign===signs[0]))continue;
     triangle(a,b,c);triangle(a,c,d);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {formatParameterNumber,groupParameters,parameterCategory,parameterEstimate,parameterNotation} from '../src/lib/parameter-presentation.ts';
+import {formatParameterNumber,groupParameters,parameterCategory,parameterEstimate,parameterNotation,parametersForPosterior} from '../src/lib/parameter-presentation.ts';
 import {stages,type Parameter} from '../src/data/stages.ts';
 import {liveParameters} from '../src/lib/live-parameters.ts';
 import type {LiveResult} from '../src/lib/live-results.ts';
@@ -27,11 +27,20 @@ test('all modeling-stage physical parameters have one explicit lens or source ca
  for(const stage of stages.filter(s=>!['preflight','b'].includes(s.id))){const grouped=groupParameters(stage.parameters);assert.deepEqual(new Set(grouped.flatMap(g=>g.parameters.map(p=>p.key))),new Set(stage.parameters.map(p=>p.key)));assert.ok(stage.parameters.every(p=>parameterCategory(p.key)));}
  const grouped=groupParameters(stages.find(s=>s.id==='a')!.parameters);assert.deepEqual(grouped.map(g=>g.label),['Lens mass','Lens light','Source light']);assert.equal(grouped[1].parameters.filter(p=>/_lens_[12]$/.test(p.key)).length,8);assert.equal(parameterCategory('adaptive_reg_rho'),'source-light');assert.equal(parameterCategory('new_unknown_parameter'),undefined);
 });
+test('posterior cards keep sampled and linear parameters plus the M0 evidence-scan choice',()=>{
+ const visible=Object.fromEntries(stages.map(stage=>[stage.id,parametersForPosterior(stage.id,stage.parameters)]));
+ assert.deepEqual(Object.fromEntries(Object.entries(visible).map(([id,parameters])=>[id,parameters.length])),
+  {preflight:0,a:21,b:0,m0:1,m1:7,m2:3,m3:7});
+ assert.deepEqual(visible.m0.map(p=>p.key),['log_lambda_reg']);
+ assert.deepEqual(new Set(visible.m2.map(p=>p.key)),new Set(['log_lambda_reg','adaptive_reg_rho','source_brightness']));
+ assert.ok(visible.m3.every(p=>p.role==='sampled'||p.role==='linear'));
+});
 test('reported lens-light groups and fixed mass fields enter the same curated table',()=>{
  const a=stages.find(s=>s.id==='a')!,summary={stage:'a',path:'/a',attempt:0,sha256:'hash',result:{metrics:{posterior_quantiles:{e1_lens_1:{q16:-.04,q50:-.037467181404941416,q84:-.036}}}}} as LiveResult;
  const row=liveParameters(a,summary).find(p=>p.key==='e1_lens_1')!;assert.equal(row.quantiles?.q50,-.037467181404941416);assert.equal(parameterEstimate(row,true).text,'-0.03747');
  const m2=stages.find(s=>s.id==='m2')!,fixed={kind:'weighted_posterior',parameters:[],fixed_parameters:{center_x_mass:-.016206387357967002}} as unknown as LiveResult;
  const center=liveParameters(m2,undefined,fixed).find(p=>p.key==='center_x_mass')!;assert.equal(center.role,'fixed');assert.equal(parameterEstimate(center,true).text,'-0.01621');assert.equal(center.quantiles,undefined);
+ assert.ok(!parametersForPosterior(m2.id,liveParameters(m2,undefined,fixed)).some(p=>p.key==='center_x_mass'));
 });
 test('fixed values from the display adapter require the same summary hash and attempt',()=>{
  const stage=stages.find(s=>s.id==='m0')!,summary={stage:'m0',path:'/m0',attempt:0,sha256:'saved',result:{metrics:{}}} as LiveResult,model={...summary,display_mapping:{model:{theta_E:1.407872200012207}}} as LiveResult;

@@ -16,10 +16,30 @@ import { initialState, receiveNotification, receiveReport, receiveRequest, valid
   restoreThread, applyTurn, hasBlockingRequest, normalizeStage, disconnected, reportTool, WORKSPACE } from './agent-state.mjs';
 import { connectionConfig, appServerCommand } from './connection-config.mjs';
 const defaultDirectory = fileURLToPath(new URL('../.local/', import.meta.url));
+function unusedThread(state) {
+  return state.status === 'idle' && !state.turnId && !state.lastTurnId && !state.remoteActive && !state.needsReconcile
+    && [state.messages, state.updates, state.activities, state.questions, state.requests, state.finishedTurnIds].every(items => items.length === 0);
+}
+
+async function allocatedProxyPort(stderr, localPort, timeoutMs) {
+  const lines = createInterface({ input: stderr, crlfDelay: Infinity });
+  const announcement = new RegExp(`^Allocated port (\\d+) for remote forward to 127\\.0\\.0\\.1:${localPort}$`);
+  const timeout = setTimeout(() => lines.close(), timeoutMs);
+  try {
+    for await (const line of lines) {
+      const port = Number(announcement.exec(line)?.[1]);
+      if (port >= 1024 && port <= 65535) return port;
+    }
+    throw new Error('SSH did not allocate a port for the temporary AI proxy');
+  } finally {
+    clearTimeout(timeout);
+    lines.close();
+  }
+}
 // Injection is solely for local protocol tests; the executable entry point uses SSH.
 export async function createAgentServer({ stateDirectory = defaultDirectory, spawnProcess = spawn, rpcTimeoutMs = 60000, logger = console,
   aiNetwork = false, networkProxyFactory = createAiNetworkProxy, remoteProxyPort = connectionConfig.remoteProxyPort, datasetPath } = {}) {
-  if (!Number.isInteger(remoteProxyPort) || remoteProxyPort < 1024 || remoteProxyPort > 65535) throw new Error('Invalid remote proxy port');
+  if (!Number.isInteger(remoteProxyPort) || (remoteProxyPort !== 0 && remoteProxyPort < 1024) || remoteProxyPort > 65535) throw new Error('Invalid remote proxy port');
   const statePath = `${stateDirectory}/agent-state.json`;
   let saved;
   try { saved = JSON.parse(await readFile(statePath, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') logger.error('Previous UI state could not be read:', error.message); }
@@ -136,7 +156,8 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
       const request = pending.get(message.id);
       if (request) {
         pending.delete(message.id); clearTimeout(request.timer);
-        message.error ? request.reject(new Error(message.error.message || 'AI request rejected')) : request.resolve(message.result);
+        if (message.error) request.reject(Object.assign(new Error(message.error.message || 'AI request rejected'), { rpcCode: message.error.code }));
+        else request.resolve(message.result);
       }
       return;
     }
@@ -186,7 +207,7 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
   async function makeTransport() {
     const networkProxy = aiNetwork ? await networkProxyFactory({ upstreamHost: '127.0.0.1', upstreamPort: connectionConfig.upstreamPort }) : null;
     const args = ['-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=12', '-o', 'ServerAliveInterval=20', '-o', 'ServerAliveCountMax=3'];
-    if (networkProxy) args.push('-o', 'ExitOnForwardFailure=yes', '-R', `127.0.0.1:${remoteProxyPort}:127.0.0.1:${networkProxy.port}`);
+    if (networkProxy) args.push('-o', 'ExitOnForwardFailure=yes', '-o', 'LogLevel=INFO', '-R', `127.0.0.1:${remoteProxyPort}:127.0.0.1:${networkProxy.port}`);
     // The one-time proxy credential is delivered on SSH stdin, never in argv or a file.
     const networkBootstrap = networkProxy
       ? 'IFS= read -r TINYLENS_AI_PROXY && export HTTPS_PROXY="$TINYLENS_AI_PROXY" HTTP_PROXY="$TINYLENS_AI_PROXY" ALL_PROXY="$TINYLENS_AI_PROXY" https_proxy="$TINYLENS_AI_PROXY" http_proxy="$TINYLENS_AI_PROXY" all_proxy="$TINYLENS_AI_PROXY" NO_PROXY="127.0.0.1,localhost,::1" no_proxy="127.0.0.1,localhost,::1" && unset TINYLENS_AI_PROXY && '
@@ -204,25 +225,40 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
       try { message = JSON.parse(line); } catch { state.error = 'AI returned invalid protocol JSON'; publish(); return; }
       void onProtocol(message, current).catch(error => { if (transport === current) { state.error = `AI protocol: ${error.message}`; publish(); } });
     });
-    // Drain logs without mixing them into the JSON protocol or exposing account data.
-    proc.stderr.on('data', () => {});
     const lost = error => {
-      void networkProxy?.close();
       if (transport !== current) return;
       transport = null; current.buffer = []; lines.close();
+      void networkProxy?.close();
       disconnected(state, error); rejectPending(error); publish();
     };
     proc.stdin.on('error', error => lost(`AI input connection failed: ${error.message}`));
     proc.on('error', error => lost(error.message));
     proc.on('exit', code => lost(`AI connection closed (${code ?? 'signal'}). Reconnect to inspect the persisted conversation.`));
-    if (networkProxy) await new Promise((resolveWrite, reject) => proc.stdin.write(`${networkProxy.proxyUrlForRemote(remoteProxyPort)}\n`, error => error ? reject(error) : resolveWrite()));
-    return current;
+    try {
+      if (networkProxy) {
+        const port = remoteProxyPort || await allocatedProxyPort(proc.stderr, networkProxy.port, Math.min(rpcTimeoutMs, 20000));
+        const proxyUrl = networkProxy.proxyUrlForRemote(port);
+        await new Promise((resolveWrite, reject) => proc.stdin.write(`${proxyUrl}\n`, error => error ? reject(error) : resolveWrite()));
+      }
+      return current;
+    } catch (error) {
+      if (transport === current) {
+        transport = null; lines.close(); proc.kill();
+        await networkProxy?.close();
+      }
+      throw error;
+    } finally {
+      // Drain the remaining SSH logs without exposing account data.
+      proc.stderr.resume();
+    }
   }
   async function connect() {
     if (closed) throw new Error('AI bridge is closed');
     if (state.connection === 'connected' && !state.needsReconcile) return;
     if (connecting) return connecting;
     connecting = (async () => {
+      const previousThreadId = state.threadId;
+      const wasUnused = unusedThread(state);
       state.connection = 'connecting'; state.error = null; state.requests = []; publish();
       // After a request timeout, inspect the same live transport instead of replaying the task.
       let current;
@@ -234,14 +270,25 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
           await send({ method: 'initialized' }, current); current.initialized = true;
         }
         const permissions = { cwd: WORKSPACE, approvalPolicy: 'on-request', approvalsReviewer: 'user', sandbox: 'workspace-write' };
-        const resuming = Boolean(state.threadId);
-        const result = resuming
-          ? await rpc('thread/resume', { threadId: state.threadId, excludeTurns: true,
-            initialTurnsPage: { limit: 30, sortDirection: 'desc', itemsView: 'full' }, ...permissions })
-          : await rpc('thread/start', { ...permissions, ephemeral: false, dynamicTools: [reportTool] });
-        const turns = result.initialTurnsPage?.data ? [...result.initialTurnsPage.data].reverse() : result.thread.turns;
-        restoreThread(state, result.thread, turns);
+        const startThread = () => rpc('thread/start', { ...permissions, ephemeral: false, dynamicTools: [reportTool] });
+        let result;
+        let target = state;
+        if (previousThreadId) {
+          try {
+            result = await rpc('thread/resume', { threadId: previousThreadId, excludeTurns: true,
+              initialTurnsPage: { limit: 30, sortDirection: 'desc', itemsView: 'full' }, ...permissions });
+          } catch (error) {
+            // A thread opened before the first turn can disappear when its app-server exits.
+            if (!wasUnused || transport !== current || error.rpcCode !== -32600
+              || error.message !== `no rollout found for thread id ${previousThreadId}`) throw error;
+            result = await startThread();
+            target = { ...state, threadId: null };
+          }
+        } else result = await startThread();
         if (transport !== current) throw new Error('AI connection changed during initialization');
+        const turns = result.initialTurnsPage?.data ? [...result.initialTurnsPage.data].reverse() : result.thread.turns;
+        restoreThread(target, result.thread, turns);
+        if (target !== state) Object.assign(state, target);
         current.bootstrapping = false;
         for (const message of current.buffer.splice(0)) await onProtocol(message, current);
         state.connection = 'connected'; publish(); await persist();
@@ -353,7 +400,9 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
     if (request.method === 'GET' && path === '/api/agent/state') return json(response, 200, state);
     if (request.method === 'GET' && path === '/api/agent/artifact') return serveReportedImage(request, response, state);
     if (request.method === 'GET' && path === '/api/agent/result') return serveReportedResult(request, response, state, { cacheDirectory: resolve(stateDirectory, 'result-cache') });
-    if (request.method === 'GET' && path === '/api/agent/model') return serveReportedModel(request, response, state, { cacheDirectory: resolve(stateDirectory, 'model-cache') });
+    if (request.method === 'GET' && path === '/api/agent/model') return serveReportedModel(request, response, state, {
+      cacheDirectory: resolve(stateDirectory, 'model-cache'), resultCacheDirectory: resolve(stateDirectory, 'result-cache'), logger,
+    });
     if (request.method === 'GET' && path === '/api/agent/mask') return serveReportedMask(request, response, state, { cacheDirectory: resolve(stateDirectory, 'mask-cache') });
     if (request.method === 'GET' && path === '/api/agent/input') return serveReportedInput(request, response, state, { cacheDirectory: resolve(stateDirectory, 'input-cache') });
     if (request.method === 'GET' && path === '/api/agent/panels') return json(response,410,{error:'Scientific image panels require numerical outputs.'});

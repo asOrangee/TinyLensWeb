@@ -1,5 +1,23 @@
 import type {LivePlane} from './live-results';
-export type ImageScale='original'|'linear'|'log'|'zscale';
+
+export const imageScaleOptions = [
+  ['linear', 'Linear'],
+  ['log', 'Log'],
+  ['asinh', 'Asinh'],
+  ['zscale', 'Z'],
+] as const;
+export type ImageScale = typeof imageScaleOptions[number][0];
+
+export function isImageScale(value: unknown): value is ImageScale {
+  return imageScaleOptions.some(([scale]) => scale === value);
+}
+
+export function imageScaleStretch(scale: ImageScale, logA = 1000) {
+  if (scale === 'log') return { stretch: 'log' as const, parameter: logA };
+  if (scale === 'asinh') return { stretch: 'asinh' as const, parameter: 25 };
+  return { stretch: 'linear' as const, parameter: 1 };
+}
+
 export type NumericRaster={values_base64:string;values_sha256:string;mask_base64:string;array_y_direction:'increasing'|'decreasing';color_lut_base64:string;color_lut_sha256:string};
 export const hasNumericRaster=(plane:LivePlane|undefined):plane is LivePlane&NumericRaster=>!!plane?.values_base64&&/^[a-f0-9]{64}$/.test(plane.values_sha256??'')&&!!plane.mask_base64&&['increasing','decreasing'].includes(plane.array_y_direction??'')&&!!plane.color_lut_base64&&/^[a-f0-9]{64}$/.test(plane.color_lut_sha256??'');
 export const scalablePlanes=new Set(['observation','model','source-lensed']);
@@ -28,10 +46,10 @@ export function zscaleLimits(values:readonly number[]):[number,number]{
  if(good>=min){const center=Math.floor((n-1)/2),median=(samples[Math.floor(n/2)]+samples[Math.floor((n-1)/2)])/2;slope/=.25;low=Math.max(low,median-(center-1)*slope);high=Math.min(high,median+(n-center)*slope);}
  return low<=high?[low,high]:[samples[0],samples[n-1]];
 }
-export function imageScaleValues(values:readonly number[],scale:Exclude<ImageScale,'original'>){
+export function imageScaleValues(values:readonly number[],scale:ImageScale){
  let min=Infinity,max=-Infinity;for(const value of values){if(!Number.isFinite(value))throw Error('Invalid display pixel');min=Math.min(min,value);max=Math.max(max,value);}if(min===Infinity)throw Error('Empty display pixels');
  const [vmin,vmax]=scale==='zscale'?zscaleLimits(values):[min,max];
- return {vmin,vmax,stretch:scale==='log'?'log' as const:'linear' as const,parameter:scale==='log'?1000:1};
+ return {vmin,vmax,...imageScaleStretch(scale)};
 }
 
 export type RasterLimits={vmin:number;vmax:number;stretch:string;parameter:number};
@@ -84,7 +102,7 @@ async function palette(plane:LivePlane&NumericRaster){
 }
 const rendered=new Map<string,Promise<{src:string;colormap_src:string;limits:RasterLimits}>>();
 /** A shared reference changes only intensity normalization and palette, never science pixels or geometry. */
-export async function scaleImagePlane(plane:LivePlane&NumericRaster,scale:ImageScale,reference:LivePlane&NumericRaster=plane):Promise<LivePlane>{
+export async function scaleImagePlane(plane:LivePlane&NumericRaster,scale:ImageScale|'original',reference:LivePlane&NumericRaster=plane):Promise<LivePlane>{
  if(!hasNumericRaster(plane)||!hasNumericRaster(reference))throw Error('A numerical image and display reference are required.');
  const key=JSON.stringify([plane.values_sha256,plane.mask_base64,plane.shape,plane.array_y_direction,scale,reference.values_sha256,reference.mask_base64,reference.shape,reference.array_y_direction,reference.color_lut_sha256,reference.color_stops,reference.vmin,reference.vmax,reference.stretch,reference.asinh_a]);
  if(!rendered.has(key))rendered.set(key,(async()=>{

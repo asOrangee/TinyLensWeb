@@ -1,27 +1,43 @@
-import { connectionConfig } from './connection-config.mjs';
 import {spawn} from 'node:child_process';
 import {createHash,randomUUID} from 'node:crypto';
 import {mkdir,readFile,writeFile,rename} from 'node:fs/promises';
 import {dirname,join} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {reportedResult} from './agent-results.mjs';
+import {readReportedResult,reportedResult} from './agent-results.mjs';
 import {WORKSPACE} from './agent-state.mjs';
 import {numericalPlane} from './numeric-payload.mjs';
+import {connectionConfig} from './connection-config.mjs';
 
 export const MODEL_READER=await readFile(new URL('./reconstruct-models.py',import.meta.url),'utf8');
+const EPL_REFERENCE_READER=await readFile(new URL('./epl-reference-rays.py',import.meta.url),'utf8');
 const cacheDirectoryDefault=fileURLToPath(new URL('../.local/model-cache/',import.meta.url));
 const sha=value=>createHash('sha256').update(value).digest('hex');
 const pending=new Map();
 const quote=value=>"'"+value.replaceAll("'","'\\''")+"'";
-const stages=['a','m0','m1','m2'];
+const dependencies={a:[],m0:['a','b'],m1:['a','b'],m2:['a','b','m0','m1'],m3:['a','b','m0','m1','m2']};
+// The M3 addition preserves the A–M2 reader behavior and its validated offline displays.
+const compatibleReaderSha256='6d8d9341d3a230705510e07d090414678982bbd05d1bba1e460c718b0903d286';
+const sampledMassParameters=['theta_E','e1_mass','e2_mass','gamma1','gamma2'];
+const eplParameters=[...sampledMassParameters,'gamma'];
+const centerParameters=['center_x_mass','center_y_mass'];
+const mappingPlanes={image:'model',source:'source'};
+const frameFields=['shape','bounds_arcsec','half_extent_arcsec'];
+
+function validateMapping(value,mapping){
+ const epl=value.stage==='m3',kind=epl?'epl-shear':'sie-shear';
+ if(mapping?.schema!=='tinylens.lens-mapping.v1'||mapping.synthetic!==false||mapping.stage!==value.stage||mapping.attempt!==value.attempt||mapping.path!==value.path||mapping.summary_sha256!==value.sha256||mapping.fits_sha256!==value.planes.observation.input_fits_sha256||mapping.model?.kind!==kind||![...sampledMassParameters,...centerParameters].every(k=>Number.isFinite(mapping.model[k]))||mapping.model.theta_E<=0||!Array.isArray(mapping.references)||mapping.references.length<5||mapping.references.some(ray=>![ray.image?.x,ray.image?.y,ray.source?.x,ray.source?.y].every(Number.isFinite)))throw Error('Invalid frozen lens mapping.');
+ if(epl&&(!Number.isFinite(mapping.model.gamma)||mapping.model.gamma<1||mapping.model.gamma>3||eplParameters.some(k=>mapping.model[k]!==value.result.metrics.medians?.[k])||mapping.references.some(ray=>!Number.isFinite(ray.determinant))))throw Error('Invalid frozen EPL parameters or Jacobian references.');
+ for(const [space,name] of Object.entries(mappingPlanes))for(const key of frameFields)if(JSON.stringify(mapping.frames?.[space]?.[key])!==JSON.stringify(value.planes[name][key]))throw Error('Lens mapping frame mismatch.');
+ return mapping;
+}
 
 /** Resolve only explicit reports in one run; never guess an upstream attempt. */
 export function reportedModelPlan(state,updateId){
  const target=reportedResult(state,updateId);
- if(target.kind!=='summary'||!stages.includes(target.stage))throw Error('A reported modeling-stage summary is required.');
- const run=target.path.replace(/\/attempts\/(a|m0|m1|m2)\/\d+\/stage-result\.json$/,'');
+ if(target.kind!=='summary'||!Object.hasOwn(dependencies,target.stage))throw Error('A reported modeling-stage summary is required.');
+ const run=target.path.replace(/\/attempts\/(a|m0|m1|m2|m3)\/\d+\/stage-result\.json$/,'');
  const position=state.updates.findIndex(u=>u.id===updateId);
- const required=target.stage==='a'?['a']:target.stage==='m2'?['a','b','m0','m1','m2']:['a','b',target.stage];
+ const required=[...dependencies[target.stage],target.stage];
  const files={};
  for(const stage of required){
   let summary=target.stage===stage?state.updates[position]:undefined;
@@ -70,40 +86,89 @@ export function validateModelDisplay(value,plan){
  if(full?.pixel_count!==size||![full.rms,full.chi_square_sum].every(Number.isFinite)||full.rms<0||full.chi_square_sum<0||Math.abs(full.chi_square_sum-full.rms**2*size)>1e-8*Math.max(1,full.chi_square_sum))throw Error('Invalid complete-grid statistics.');
  if(value.planes.model.mask_sha256!==value.planes['chi-square'].mask_sha256)throw Error('Model and chi-square masks must agree.');
  for(const name of ['residual','source-lensed'])if(value.planes[name].mask_sha256!==value.planes.model.mask_sha256)throw Error('Display coverage must agree.');
- const mapping=value.display_mapping;
- if(mapping?.schema!=='tinylens.lens-mapping.v1'||mapping.synthetic!==false||mapping.stage!==value.stage||mapping.attempt!==value.attempt||mapping.path!==value.path||mapping.summary_sha256!==value.sha256||mapping.fits_sha256!==value.planes.observation.input_fits_sha256||mapping.model?.kind!=='sie-shear'||!['theta_E','e1_mass','e2_mass','center_x_mass','center_y_mass','gamma1','gamma2'].every(k=>Number.isFinite(mapping.model[k]))||mapping.model.theta_E<=0||!Array.isArray(mapping.references)||mapping.references.length<5||mapping.references.some(ray=>![ray.image?.x,ray.image?.y,ray.source?.x,ray.source?.y].every(Number.isFinite)))throw Error('Invalid frozen lens mapping.');
- for(const [space,name] of [['image','model'],['source','source']])for(const key of ['shape','bounds_arcsec','half_extent_arcsec'])if(JSON.stringify(mapping.frames?.[space]?.[key])!==JSON.stringify(value.planes[name][key]))throw Error('Lens mapping frame mismatch.');
+ if(plan.stage!=='m3'||value.display_mapping!==undefined)validateMapping(value,value.display_mapping);
  for(const entry of Object.values(plan.files))for(const key of ['summary','posterior'])if(entry[key]&&!/^[a-f0-9]{64}$/.test(derived.input_files_sha256?.[entry[key]]??''))throw Error('The diagnostic dependency was not verified.');
  return value;
 }
 
-export async function readReportedModel(state,updateId,{spawnProcess=spawn,cacheDirectory=cacheDirectoryDefault,timeoutMs=180000}={}){
- const plan=reportedModelPlan(state,updateId),identity=JSON.stringify({threadId:state.threadId,updateId,plan,reader:sha(MODEL_READER)}),key=sha(identity);
- const path=join(cacheDirectory,key+'.json');
- try{
-  const record=JSON.parse(await readFile(path,'utf8'));
-  if(record.identity!==identity||record.sha256!==sha(JSON.stringify(record.value)))throw Error('Derived cache checksum mismatch.');
-  return validateModelDisplay(record.value,plan);
- }catch{/* Rebuild only these explicitly reported, frozen diagnostics. */}
+async function readCache(path,identity){
+ const record=JSON.parse(await readFile(path,'utf8'));
+ if(record.identity!==identity||record.sha256!==sha(JSON.stringify(record.value)))throw Error('Derived cache checksum mismatch.');
+ return record.value;
+}
+
+async function writeCache(cacheDirectory,path,identity,value){
+ await mkdir(cacheDirectory,{recursive:true,mode:0o700});
+ const temporary=path+randomUUID();
+ await writeFile(temporary,JSON.stringify({identity,sha256:sha(JSON.stringify(value)),value}),{mode:0o600});
+ await rename(temporary,path);
+}
+
+function readCpuDiagnostic(reader,request,spawnProcess,timeoutMs){
+ const command=`env PYTHONDONTWRITEBYTECODE=1 CUDA_VISIBLE_DEVICES= JAX_PLATFORMS=cpu OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MPLBACKEND=Agg ${quote(connectionConfig.python)} -B -c ${quote(reader)}`;
+ return new Promise((resolve,reject)=>{
+  const proc=spawnProcess('ssh',['-T','-o','BatchMode=yes','-o','ConnectTimeout=10',connectionConfig.sshHost,command],{stdio:['pipe','pipe','pipe']});
+  const chunks=[];let bytes=0,done=false;
+  const finish=(error,result)=>{if(done)return;done=true;clearTimeout(timer);error?reject(error):resolve(result)};
+  const timer=setTimeout(()=>{proc.kill();finish(Error('Frozen diagnostic reconstruction timed out.'));},timeoutMs);
+  proc.on('error',e=>finish(e));proc.stdin.on('error',e=>finish(e));proc.stderr.resume();
+  proc.stdout.on('data',chunk=>{bytes+=chunk.length;if(bytes>4*1024*1024){proc.kill();finish(Error('Diagnostic display is too large.'))}else chunks.push(chunk)});
+  proc.on('close',code=>{if(code!==0)return finish(Error('The frozen diagnostic could not be reconstructed and verified.'));
+   try{finish(null,JSON.parse(Buffer.concat(chunks).toString('utf8')))}catch(error){finish(error)}});
+  proc.stdin.end(JSON.stringify(request)+'\n');
+ });
+}
+
+async function readNumericalModel(state,updateId,plan,{spawnProcess=spawn,cacheDirectory=cacheDirectoryDefault,timeoutMs=180000}){
+ const binding={threadId:state.threadId,updateId,plan};
+ const identity=JSON.stringify({...binding,reader:sha(MODEL_READER)});
+ const path=join(cacheDirectory,sha(identity)+'.json');
+ const cacheIdentities=plan.stage==='m3'?[identity]:[identity,JSON.stringify({...binding,reader:compatibleReaderSha256})];
+ for(const cacheIdentity of cacheIdentities){
+  try{
+   const cached=await readCache(join(cacheDirectory,sha(cacheIdentity)+'.json'),cacheIdentity);
+   return validateModelDisplay(cached,plan);
+  }catch{/* Rebuild only these explicitly reported, frozen diagnostics. */}
+ }
  if(pending.has(path))return pending.get(path);
  const operation=(async()=>{
-  const value=await new Promise((resolve,reject)=>{
-   const command=`env PYTHONDONTWRITEBYTECODE=1 CUDA_VISIBLE_DEVICES= JAX_PLATFORMS=cpu OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MPLBACKEND=Agg ${quote(connectionConfig.python)} -B -c ${quote(MODEL_READER)}`;
-   const proc=spawnProcess('ssh',['-T','-o','BatchMode=yes','-o','ConnectTimeout=10',connectionConfig.sshHost,command],{stdio:['pipe','pipe','pipe']});
-   const chunks=[];let bytes=0,done=false;
-   const finish=(error,result)=>{if(done)return;done=true;clearTimeout(timer);error?reject(error):resolve(result)};
-   const timer=setTimeout(()=>{proc.kill();finish(Error('Frozen diagnostic reconstruction timed out.'));},timeoutMs);
-   proc.on('error',e=>finish(e));proc.stdin.on('error',e=>finish(e));proc.stderr.resume();
-   proc.stdout.on('data',chunk=>{bytes+=chunk.length;if(bytes>4*1024*1024){proc.kill();finish(Error('Diagnostic display is too large.'))}else chunks.push(chunk)});
-   proc.on('close',code=>{if(code!==0)return finish(Error('The frozen diagnostic could not be reconstructed and verified.'));
-    try{finish(null,validateModelDisplay(JSON.parse(Buffer.concat(chunks).toString('utf8')),plan))}catch(error){finish(error)}});
-   proc.stdin.end(JSON.stringify(plan)+'\n');
-  });
-  await mkdir(cacheDirectory,{recursive:true,mode:0o700});const tmp=path+randomUUID();
-  await writeFile(tmp,JSON.stringify({identity,sha256:sha(JSON.stringify(value)),value}),{mode:0o600});await rename(tmp,path);
+  const value=validateModelDisplay(await readCpuDiagnostic(MODEL_READER,plan,spawnProcess,timeoutMs),plan);
+  await writeCache(cacheDirectory,path,identity,value);
   return value;
  })();
  pending.set(path,operation);try{return await operation}finally{pending.delete(path)}
+}
+
+async function readEplMapping(state,plan,value,{spawnProcess=spawn,cacheDirectory=cacheDirectoryDefault,resultCacheDirectory,timeoutMs=60000}){
+ const upstreamSha256=value.display_derivation.input_files_sha256[plan.files.a.summary];
+ const identity=JSON.stringify({threadId:state.threadId,path:value.path,sha256:value.sha256,upstreamSha256,reader:sha(EPL_REFERENCE_READER)});
+ const path=join(cacheDirectory,sha(identity)+'.json');
+ try{return validateMapping(value,await readCache(path,identity));}catch{/* Only the frozen mass geometry is read on a cache miss. */}
+ if(pending.has(path))return pending.get(path);
+ const operation=(async()=>{
+  const upstream=await readReportedResult(state,plan.files.a.summaryReportId,{spawnProcess,timeoutMs:Math.min(timeoutMs,30000),cacheDirectory:resultCacheDirectory});
+  if(upstream.sha256!==upstreamSha256)throw Error('M3 lens center disagrees with the frozen Stage-A dependency.');
+  const model={kind:'epl-shear'};
+  for(const key of eplParameters)model[key]=value.result.metrics.medians?.[key];
+  for(const key of centerParameters)model[key]=upstream.result?.metrics?.medians?.[key];
+  if(![...eplParameters,...centerParameters].every(key=>Number.isFinite(model[key]))||model.theta_E<=0||model.gamma<1||model.gamma>3)throw Error('Invalid frozen EPL model.');
+  const references=await readCpuDiagnostic(EPL_REFERENCE_READER,model,spawnProcess,Math.min(timeoutMs,60000));
+  const frames=Object.fromEntries(Object.entries(mappingPlanes).map(([space,name])=>[space,Object.fromEntries(frameFields.map(key=>[key,value.planes[name][key]]))]));
+  const mapping=validateMapping(value,{schema:'tinylens.lens-mapping.v1',synthetic:false,stage:value.stage,attempt:value.attempt,
+   path:value.path,summary_sha256:value.sha256,fits_sha256:value.planes.observation.input_fits_sha256,model,frames,references});
+  await writeCache(cacheDirectory,path,identity,mapping);
+  return mapping;
+ })();
+ pending.set(path,operation);try{return await operation}finally{pending.delete(path)}
+}
+
+export async function readReportedModel(state,updateId,options={}){
+ const plan=reportedModelPlan(state,updateId);
+ const value=await readNumericalModel(state,updateId,plan,options);
+ if(plan.stage!=='m3'||value.display_mapping)return value;
+ // Geometry is optional when the remote reference reader is unavailable. The six verified arrays remain usable.
+ try{return {...value,display_mapping:await readEplMapping(state,plan,value,options)};}
+ catch(error){options.logger?.warn?.('M3 EPL mapping unavailable:',error.message);return value;}
 }
 
 export async function serveReportedModel(request,response,state,options={}){

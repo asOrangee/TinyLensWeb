@@ -1,4 +1,4 @@
-import {stages,type Parameter} from '../data/stages.ts';
+import {stages,type Parameter,type StageId} from '../data/stages.ts';
 export type ParameterCategory='lens-mass'|'lens-light'|'source-light';
 export const parameterCategories=[{id:'lens-mass',label:'Lens mass'},{id:'lens-light',label:'Lens light'},{id:'source-light',label:'Source light'}] as const;
 const mass=new Set(['theta_E','gamma','gamma1','gamma2','e1_mass','e2_mass','center_x_mass','center_y_mass']);
@@ -29,6 +29,10 @@ export function parameterNotation(parameter:Pick<Parameter,'key'|'symbol'>){
 }
 export function groupParameters(parameters:readonly Parameter[]){
  return [...parameterCategories.map(category=>({...category,parameters:parameters.filter(p=>parameterCategory(p.key)===category.id)})),{id:undefined,label:'',parameters:parameters.filter(p=>!parameterCategory(p.key))}].filter(group=>group.parameters.length>0);
+}
+export function parametersForPosterior(stage:StageId,parameters:readonly Parameter[]){
+ return parameters.filter(({role,key})=>role==='sampled'||role==='linear'||
+  (stage==='m0'&&role==='setting'&&key==='log_lambda_reg'));
 }
 export const formatParameterNumber=(value:number)=>{if(!Number.isFinite(value))return '—';const text=value.toFixed(5);return text==='-0.00000'?'0.00000':text;};
 const scalar=(value:unknown)=>{if(typeof value==='number')return Number.isFinite(value)?value:undefined;if(typeof value!=='string')return undefined;const normalized=value.trim().replaceAll('−','-');if(!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(normalized))return undefined;const number=Number(normalized);return Number.isFinite(number)?number:undefined;};

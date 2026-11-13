@@ -5,6 +5,7 @@ import { Layers3 } from 'lucide-react';
 import ParameterCards from './ParameterCards';
 import StageConfiguration from './StageConfiguration';
 import { liveParameters } from '../lib/live-parameters';
+import { parametersForPosterior } from '../lib/parameter-presentation';
 import { EvidenceChart } from './PosteriorChart';
 import { parseLiveResult, selectStageResults, type LiveResult } from '../lib/live-results';
 import { useAgentTaskId } from '../lib/agent-task-context';
@@ -34,11 +35,12 @@ function useReportedResult(update?: AgentUpdate, endpoint: 'result' | 'model' = 
 export function useLiveStageData(stage: Stage, updates: AgentUpdate[]) {
   const selection = selectStageResults(updates, stage.id);
   const summary = useReportedResult(selection.summary), posterior = useReportedResult(selection.posterior);
-  const model = useReportedResult(['a','m0','m1','m2'].includes(stage.id) ? selection.summary : undefined, 'model');
+  const modelSummary = ['a', 'm0', 'm1', 'm2', 'm3'].includes(stage.id) ? selection.summary : undefined;
+  const model = useReportedResult(modelSummary, 'model');
   return { summary: summary.data, posterior: posterior.data, error: summary.error ?? posterior.error,reports:selection,
     modelPlanes:model.data?.planes,modelResult:model.data,
     loading: !!(selection.summary || selection.posterior) && !summary.data && !posterior.data,
-    parameters: liveParameters(stage, summary.data, posterior.data,model.data) };
+    parameters: parametersForPosterior(stage.id, liveParameters(stage, summary.data, posterior.data,model.data)) };
 }
 
 export default function LiveStageData({ stage, data, view, onDetail, connection }: {
@@ -50,10 +52,9 @@ export default function LiveStageData({ stage, data, view, onDetail, connection 
   const histograms = posterior?.parameters?.filter(item => parameters.some(parameter => parameter.key === item.name&&parameter.role==='sampled')) ?? [];
   if (view === 'config') return <StageConfiguration stage={stage} live summary={summary} model={data.modelResult} onDetail={onDetail}/>;
   return <div className="live-numerical-results" data-result-attempt={source?.attempt}>
-    <div className="panel">
-      <ParameterCards parameters={parameters} histograms={histograms} live onDetail={onDetail}/>
-    </div>
-    {posterior?.kind === 'evidence_scan' ? <EvidenceChart key={posterior.sha256} data={posterior.scan} real/>
-      : (stage.id === 'b' || stage.id === 'preflight') && <div className="empty-state"><Layers3 size={28}/><h3>这个阶段没有采样后验</h3><p>{stage.id === 'b' ? '使用掩膜与覆盖信息检查本阶段结果。' : '使用预检图像和 Inspector 的证据检查本阶段结果。'}</p></div>}
+    {stage.id === 'm0' ? <EvidenceChart parameter={parameters.find(p => p.key === 'log_lambda_reg')}
+      data={posterior?.kind === 'evidence_scan' ? posterior.scan : undefined} onDetail={onDetail} real/>
+      : <div className="panel"><ParameterCards parameters={parameters} histograms={histograms} live onDetail={onDetail}/></div>}
+    {(stage.id === 'b' || stage.id === 'preflight') && <div className="empty-state"><Layers3 size={28}/><h3>这个阶段没有采样后验</h3><p>{stage.id === 'b' ? '使用掩膜与覆盖信息检查本阶段结果。' : '使用预检图像和 Inspector 的证据检查本阶段结果。'}</p></div>}
   </div>;
 }

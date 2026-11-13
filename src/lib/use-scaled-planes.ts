@@ -3,7 +3,7 @@ import type {LiveResult} from './live-results';
 import {scaleImagePlane,hasNumericRaster,type ImageScale} from './image-scale';
 import {demoModelRasters} from './demo-rasters';
 export {hasNumericRaster} from './image-scale';
-export function useScaledPlanes(base:LiveResult['planes'],scale:ImageScale,live:boolean,names:readonly ('observation'|'model'|'source-lensed')[]=['observation','model','source-lensed']){
+export function useScaledPlanes(base:LiveResult['planes'],scale:ImageScale|'original',live:boolean,names:readonly ('observation'|'model'|'source-lensed')[]=['observation','model','source-lensed']){
  const key=JSON.stringify([live,scale,names,Object.entries(base??{}).map(([name,p])=>[name,p?.values_sha256,p?.mask_base64,p?.color_lut_sha256,p?.color_stops,p?.array_y_direction,p?.shape,p?.bounds_arcsec,p?.input_fits_sha256,p?.vmin,p?.vmax,p?.stretch,p?.asinh_a])]);
  const [loaded,setLoaded]=useState<{key:string;planes:LiveResult['planes']}>();
  const available=!live||names.every(name=>hasNumericRaster(base?.[name]));

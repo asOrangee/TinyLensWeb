@@ -122,6 +122,48 @@ test('connect has no side-effect turn, preserves feedback verbatim, and tolerate
   assert.equal(journal.messages[0].delivery, 'delivered');
 });
 
+test('an explicitly missing unused thread gets a new empty session on connect', async t => {
+  const threadId = 'unused-thread';
+  const { bridge, processes, stateDirectory } = await fixture(t, (message, proc) => {
+    if (message.method !== 'thread/resume') return baseHandler(message, proc);
+    assert.equal(message.params.threadId, threadId);
+    proc.emitMessage({ id: message.id, error: { code: -32600, message: `no rollout found for thread id ${threadId}` } });
+  }, { saved: { threadId, status: 'idle' } });
+
+  await Promise.all([bridge.connect(), bridge.connect()]);
+  assert.deepEqual(processes[0].sent.map(message => message.method), ['initialize', 'initialized', 'thread/resume', 'thread/start']);
+  assert.equal(bridge.state.connection, 'connected');
+  assert.equal(bridge.state.threadId, 'thread-1');
+  assert.equal(bridge.state.turnId, null);
+  assert.deepEqual(bridge.state.messages, []);
+  const journal = JSON.parse(await readFile(join(stateDirectory, 'agent-state.json'), 'utf8'));
+  assert.equal(journal.threadId, 'thread-1');
+});
+
+test('resume failures preserve established or uncertain thread bindings', async t => {
+  const threadId = 'saved-thread';
+  const missing = `no rollout found for thread id ${threadId}`;
+  for (const [name, history, code, errorMessage] of [
+    ['saved user message', { messages: [{ id: 'u1', role: 'user', text: 'Keep this message' }] }, -32600, missing],
+    ['saved artifact', { updates: [{ kind: 'artifact', path: '/saved-result' }] }, -32600, missing],
+    ['previous turn', { lastTurnId: 'turn-1' }, -32600, missing],
+    ['unconfirmed delivery', { needsReconcile: true }, -32600, missing],
+    ['another server error', {}, -32600, 'Service unavailable'],
+    ['another thread', {}, -32600, 'no rollout found for thread id another-thread'],
+    ['another error code', {}, -32603, missing],
+  ]) await t.test(name, async t => {
+    const { bridge, processes } = await fixture(t, (message, proc) => {
+      if (message.method !== 'thread/resume') return baseHandler(message, proc);
+      proc.emitMessage({ id: message.id, error: { code, message: errorMessage } });
+    }, { saved: { threadId, status: 'idle', ...history } });
+    await assert.rejects(bridge.connect(), { message: errorMessage });
+    assert.equal(bridge.state.threadId, threadId);
+    assert.deepEqual(bridge.state.messages, history.messages ?? []);
+    assert.deepEqual(bridge.state.updates, history.updates ?? []);
+    assert.ok(processes[0].sent.every(message => !['thread/start', 'turn/start', 'turn/steer'].includes(message.method)));
+  });
+});
+
 test('server never auto-approves and rejects duplicate/stale replies and unsupported requests', async t => {
   const { bridge, processes } = await fixture(t); await bridge.connect();
   const proc = processes[0]; proc.emitMessage({ method: 'turn/started', params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'inProgress' } } }); proc.emitMessage(approval()); await tick();
@@ -158,14 +200,14 @@ test('old transports cannot alter a reconnected thread and paginated resume rest
 });
 
 test('optional AI networking is loopback-only and never places its ephemeral credential in SSH arguments', async t => {
-  const credential = 'http://tinylens:one-time-test-secret@127.0.0.1:51984';
+  const credential = 'http://tinylens:one-time-test-secret@127.0.0.1:40341';
   const captured = { args: null, firstLine: null, factory: 0, closes: 0 };
   const { bridge } = await fixture(t, baseHandler, {
     aiNetwork: true,
     networkProxyFactory: async options => {
       captured.factory += 1;
       assert.deepEqual(options, { upstreamHost: '127.0.0.1', upstreamPort: 7897 });
-      return { port: 53555, proxyUrlForRemote: port => { assert.equal(port, 51984); return credential; }, close: async () => { captured.closes += 1; } };
+      return { port: 53555, proxyUrlForRemote: port => { assert.equal(port, 40341); return credential; }, close: async () => { captured.closes += 1; } };
     },
     spawnProcess: (command, args) => {
       assert.equal(command, 'ssh'); captured.args = args;
@@ -175,19 +217,49 @@ test('optional AI networking is loopback-only and never places its ephemeral cre
         if (captured.firstLine === null) { captured.firstLine = chunk.toString(); done(); }
         else protocolInput.write(chunk, encoding, done);
       } });
+      queueMicrotask(() => {
+        proc.stderr.write('Allocated port 40340 for remote forward to 127.0.0.1:53554\r\n');
+        proc.stderr.write('Allocated port 40341 for remote');
+        proc.stderr.write(' forward to 127.0.0.1:53555\r\n');
+      });
       return proc;
     }
   });
   await bridge.connect();
   assert.equal(captured.factory, 1);
   assert.equal(captured.firstLine, credential + '\n');
-  assert.ok(captured.args.includes('127.0.0.1:51984:127.0.0.1:53555'));
+  assert.ok(captured.args.includes('127.0.0.1:0:127.0.0.1:53555'));
   assert.ok(captured.args.includes('ExitOnForwardFailure=yes'));
   assert.ok(!captured.args.join(' ').includes('one-time-test-secret'));
   assert.match(captured.args.at(-1), /IFS= read -r TINYLENS_AI_PROXY/);
   assert.equal(bridge.state.messages.length, 0);
   await bridge.close();
-  assert.ok(captured.closes >= 1);
+  assert.equal(captured.closes, 1);
+});
+
+test('a missing SSH forwarding port closes the transport and permits a new attempt', async t => {
+  const processes = [];
+  let closes = 0;
+  const { bridge } = await fixture(t, baseHandler, {
+    aiNetwork: true,
+    rpcTimeoutMs: 50,
+    networkProxyFactory: async () => ({
+      port: 53555,
+      proxyUrlForRemote: () => assert.fail('A proxy port must be allocated before sending the credential'),
+      close: async () => { closes += 1; },
+    }),
+    spawnProcess: () => {
+      const proc = fakeProcess(baseHandler);
+      processes.push(proc);
+      return proc;
+    },
+  });
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    await assert.rejects(bridge.connect(), /SSH did not allocate a port/);
+    assert.equal(processes.length, attempt);
+    assert.equal(processes.at(-1).killed, true);
+    assert.equal(closes, attempt);
+  }
 });
 
 test('ordinary messages never become config overrides or implicit skill calls', async t => {

@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { createAgentServer } from './agent-server.mjs';
+import { connectionConfig } from './connection-config.mjs';
 
 const defaultDirectory = fileURLToPath(new URL('../.local/', import.meta.url));
 export const DEFAULT_TASK_ID = 'default';
@@ -24,7 +25,7 @@ async function body(request) {
 
 /** Each task owns an unchanged single-thread bridge. Navigating or creating a
  * task never connects, sends a message, interrupts, or transfers approvals. */
-export async function createAgentTaskServer({ stateDirectory = defaultDirectory, remoteProxyPort = 51984, ...options } = {}) {
+export async function createAgentTaskServer({ stateDirectory = defaultDirectory, remoteProxyPort = connectionConfig.remoteProxyPort, ...options } = {}) {
   const registryPath = resolve(stateDirectory, 'agent-tasks.json');
   let tasks;
   try {
@@ -46,7 +47,8 @@ export async function createAgentTaskServer({ stateDirectory = defaultDirectory,
   const directory = task => task.id === DEFAULT_TASK_ID ? stateDirectory : resolve(stateDirectory, 'tasks', task.id);
   function session(task) {
     if (!sessions.has(task.id)) sessions.set(task.id, createAgentServer({ ...options, stateDirectory: directory(task),
-      remoteProxyPort: remoteProxyPort + task.proxyOffset, ...(task.id === DEFAULT_TASK_ID ? {} : { datasetPath: '' }) }));
+      remoteProxyPort: remoteProxyPort === 0 ? 0 : remoteProxyPort + task.proxyOffset,
+      ...(task.id === DEFAULT_TASK_ID ? {} : { datasetPath: '' }) }));
     return sessions.get(task.id);
   }
   // Eagerly restore only the legacy journal, at its original path, without connecting.

@@ -4,7 +4,8 @@ import { createPortal } from 'react-dom';
 import { Crosshair, RotateCcw, ZoomIn } from 'lucide-react';
 import { useDemoI18n } from '../lib/demo-i18n';
 import fixtures from '../data/preflight-demo.json';
-import type { InputDisplay, InputPlane, InputScale } from '../lib/input-display';
+import type { InputDisplay, InputPlane } from '../lib/input-display';
+import { imageScaleStretch, type ImageScale } from '../lib/image-scale';
 import ScienceColorbar from './ScienceColorbar';
 import ImageScaleControls from './ImageScaleControls';
 import PreflightFrame from './PreflightFrame';
@@ -14,11 +15,9 @@ import './preflight-viewer.css';
 
 type Group = 'image' | 'psf';
 type Position = { x: number; y: number };
-type Plane = InputPlane;
-const planes = fixtures.planes as Plane[];
 const titles = { data: '观测图像', noise: '噪声 RMS', snr: '信噪比', psf: '点扩散函数' };
 const headings = { data: 'Data image', noise: 'Noise', snr: 'SNR', psf: 'PSF' };
-const scaleLabels = { linear: '线性', log: 'Log', zscale: 'ZScale' };
+const scaleLabels = { linear: '线性', log: 'Log', asinh: 'Asinh', zscale: 'ZScale' };
 const zeroPan = (): Record<Group, Position> => ({ image: { x: 0, y: 0 }, psf: { x: 0, y: 0 } });
 
 function number(value: number): string {
@@ -27,11 +26,12 @@ function number(value: number): string {
 }
 
 /** Shared input viewer; live mode only renders validated, explicitly reported FITS. */
-export default function PreflightViewer({ toolbarTarget, missingLayers, display, scale, onScaleChange }: { toolbarTarget: HTMLDivElement | null; missingLayers?: string; display?: InputDisplay; scale:InputScale; onScaleChange:(scale:InputScale)=>void }) {
+export default function PreflightViewer({ toolbarTarget, missingLayers, display, scale, onScaleChange }: { toolbarTarget: HTMLDivElement | null; missingLayers?: string; display?: InputDisplay; scale:ImageScale; onScaleChange:(scale:ImageScale)=>void }) {
   const { t } = useDemoI18n();
   const demo=useDemoInput(missingLayers===undefined),shown=display??demo;
   const unavailable = !shown;
-  const shownPlanes: Plane[] = shown?.planes ?? (['data','noise','snr','psf'] as const).map(id=>({id,shape:[],constant:false,half_extent_arcsec:0,scale_bar_arcsec:0,variants:{linear:{src:'',vmin:0,vmax:0},log:{src:'',vmin:0,vmax:0},zscale:{src:'',vmin:0,vmax:0}}}));
+  const shownPlanes: InputPlane[] = shown?.planes ?? (['data','noise','snr','psf'] as const).map(id=>({id,shape:[],constant:false,half_extent_arcsec:0,scale_bar_arcsec:0,variants:{linear:{src:'',vmin:0,vmax:0},log:{src:'',vmin:0,vmax:0},zscale:{src:'',vmin:0,vmax:0}}}));
+  const stretch = imageScaleStretch(scale, shown?.log_a ?? fixtures.log_a);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState(zeroPan);
   const [showCrosshair, setShowCrosshair] = useState(false);
@@ -87,19 +87,20 @@ export default function PreflightViewer({ toolbarTarget, missingLayers, display,
     <div className="science-panels preflight-panels">
       {shownPlanes.map(plane => {
         const image = plane.variants[scale];
+        const src = image?.src;
         const group: Group = plane.id === 'psf' ? 'psf' : 'image';
         const position = pan[group];
         const extent = plane.half_extent_arcsec;
-        return <figure className={`science-plane preflight-plane-${plane.id}`} key={plane.id} data-plane={plane.id} data-render-origin={!unavailable?'browser-array':undefined} data-numeric-sha256={plane.numeric?.values_sha256}>
+        return <figure className={`science-plane preflight-plane-${plane.id}`} key={plane.id} data-plane={plane.id} data-render-origin={src?'browser-array':undefined} data-numeric-sha256={plane.numeric?.values_sha256}>
           <figcaption className="science-plane-heading"><strong>{headings[plane.id]}</strong></figcaption>
-          <div className="science-plane-body"><div className={`science-image-area${unavailable?' is-unavailable':''}${zoom > 1 ? ' is-zoomed' : ''}`} style={display ? { aspectRatio: `${plane.shape[1]} / ${plane.shape[0]}` } : undefined} onPointerDown={event => down(event, group)} onPointerMove={event => move(event, group)} onPointerUp={stop} onPointerCancel={stop} onLostPointerCapture={stop} onPointerLeave={() => setCrosshair(null)}>
-            {!unavailable&&<img key={image.src} src={image.src || undefined} alt={display ? `${t(titles[plane.id])}，来自已报告的 FITS` : t('{title}，合成演示图像', { title: t(titles[plane.id]) })} draggable={false} onError={() => setFailed(previous => ({ ...previous, [image.src]: true }))} style={{ transform: `translate(${position.x}%, ${position.y}%) scale(${zoom})`, visibility: failed[image.src] ? 'hidden' : undefined }}/>}
-            {failed[image.src] && <span className="preflight-image-error" role="alert">{t('图像加载失败')}</span>}
-            {unavailable?<div className="science-plane-unavailable" title={missingLayers}>—</div>:<><div className="science-ticks"><span>{coordinate(extent * (1 + position.y / 50) / zoom)}</span><span>{coordinate(extent * (-1 + position.y / 50) / zoom)}</span></div>
+          <div className="science-plane-body"><div className={`science-image-area${!src?' is-unavailable':''}${zoom > 1 ? ' is-zoomed' : ''}`} style={display ? { aspectRatio: `${plane.shape[1]} / ${plane.shape[0]}` } : undefined} onPointerDown={event => down(event, group)} onPointerMove={event => move(event, group)} onPointerUp={stop} onPointerCancel={stop} onLostPointerCapture={stop} onPointerLeave={() => setCrosshair(null)}>
+            {src&&<img key={src} src={src} alt={display ? `${t(titles[plane.id])}，来自已报告的 FITS` : t('{title}，合成演示图像', { title: t(titles[plane.id]) })} draggable={false} onError={() => setFailed(previous => ({ ...previous, [src]: true }))} style={{ transform: `translate(${position.x}%, ${position.y}%) scale(${zoom})`, visibility: failed[src] ? 'hidden' : undefined }}/>}
+            {src && failed[src] && <span className="preflight-image-error" role="alert">{t('图像加载失败')}</span>}
+            {!src?<div className="science-plane-unavailable" title={missingLayers}>—</div>:<><div className="science-ticks"><span>{coordinate(extent * (1 + position.y / 50) / zoom)}</span><span>{coordinate(extent * (-1 + position.y / 50) / zoom)}</span></div>
             <span className="science-scale" style={{ width: `${plane.scale_bar_arcsec / (2 * (plane.half_extent_x_arcsec ?? extent)) * 100 * zoom}%` }}><span>{plane.scale_bar_arcsec}″</span></span></>}
             {showCrosshair && crosshair?.group === group && <div className="science-crosshair" aria-hidden="true"><i style={{ left: `${crosshair.x}%` }}/><b style={{ top: `${crosshair.y}%` }}/></div>}
           </div>
-          {unavailable?<div className="science-colorbar-unavailable" aria-label="暂无数值色阶">—</div>:<ScienceColorbar min={image.vmin} max={image.vmax} stretch={scale==='log'?'log':'linear'} parameter={display?.log_a ?? fixtures.log_a} constant={plane.constant} gradient={shown?.colormap_src} constantColor={image.constant_color} title={display ? `${headings[plane.id]} (${plane.unit}) · ${scaleLabels[scale]} · ${image.vmin} 至 ${image.vmax}` : undefined}/>}</div>
+          {image?.src?<ScienceColorbar min={image.vmin} max={image.vmax} {...stretch} constant={plane.constant} gradient={shown?.colormap_src} constantColor={image.constant_color} title={display ? `${headings[plane.id]} (${plane.unit}) · ${scaleLabels[scale]} · ${image.vmin} 至 ${image.vmax}` : undefined}/>:<div className="science-colorbar-unavailable" aria-label="暂无数值色阶">—</div>}</div>
         </figure>;
       })}
     </div>

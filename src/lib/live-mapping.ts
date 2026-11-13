@@ -1,8 +1,10 @@
 import {mapperFromEvaluator, type PlaneFrame,type Point} from './lens-mapping.ts';
-export type LiveMapping={schema:'tinylens.lens-mapping.v1';synthetic:false;stage:string;attempt:number;path:string;summary_sha256:string;fits_sha256:string;model:{kind:'sie-shear';theta_E:number;e1_mass:number;e2_mass:number;center_x_mass:number;center_y_mass:number;gamma1:number;gamma2:number};frames:{image:PlaneFrame;source:PlaneFrame};references:{image:Point;source:Point}[]};
+import {eplMapper,type EplShearModel} from './epl-mapping.ts';
+type SieShearModel=Omit<EplShearModel,'kind'|'gamma'>&{kind:'sie-shear'};
+export type LiveMapping={schema:'tinylens.lens-mapping.v1';synthetic:false;stage:string;attempt:number;path:string;summary_sha256:string;fits_sha256:string;model:SieShearModel|EplShearModel;frames:{image:PlaneFrame;source:PlaneFrame};references:{image:Point;source:Point;determinant?:number}[]};
 
 /** Exact TinyLens SIE convention, checked against per-attempt library rays. */
-export function sieMapper(model:LiveMapping['model'],frame:PlaneFrame){
+export function sieMapper(model:SieShearModel,frame:PlaneFrame){
  if(model.kind!=='sie-shear'||Object.entries(model).some(([key,v])=>key!=='kind'&&(typeof v!=='number'||!Number.isFinite(v)))||model.theta_E<=0)throw Error('Unsupported saved mass model');
  const e1=model.e1_mass||1e-12,e2=model.e2_mass||1e-12,e=Math.min(.9999,Math.hypot(e1,e2)),q=(1-e)/(1+e),angle=Math.atan2(e2,e1)/2-Math.PI/2,c=Math.cos(angle),s=Math.sin(angle);
  const deflect=(p:Point):Point=>{
@@ -18,9 +20,20 @@ export function sieMapper(model:LiveMapping['model'],frame:PlaneFrame){
 export function verifiedLiveMapping(value:LiveMapping|undefined,binding:{stage:string;attempt:number;path:string;sha256:string;fitsSha256?:string}){
  try{
   if(!value||value.schema!=='tinylens.lens-mapping.v1'||value.synthetic!==false||value.stage!==binding.stage||value.attempt!==binding.attempt||value.path!==binding.path||value.summary_sha256!==binding.sha256||value.fits_sha256!==binding.fitsSha256)return null;
-  for(const name of ['image','source'] as const){const frame=value.frames[name];if(!Array.isArray(frame?.shape)||frame.shape.length!==2||!frame.shape.every(n=>Number.isInteger(n)&&n>0&&n<=512)||!Array.isArray(frame.bounds_arcsec)||frame.bounds_arcsec.length!==4||!frame.bounds_arcsec.every(Number.isFinite)||frame.bounds_arcsec[1]<=frame.bounds_arcsec[0]||frame.bounds_arcsec[3]<=frame.bounds_arcsec[2]||frame.half_extent_arcsec<=0||Math.abs(frame.bounds_arcsec[3]-frame.bounds_arcsec[2]-frame.half_extent_arcsec*2)>1e-10)throw Error('Uncalibrated lens frame');}
-  const mapper=sieMapper(value.model,value.frames.image);
-  if(value.references.length<5||value.references.some(ray=>{if(![ray.image?.x,ray.image?.y,ray.source?.x,ray.source?.y].every(Number.isFinite))return true;const p=mapper.sourceFor(ray.image);return !Number.isFinite(p.x)||!Number.isFinite(p.y)||Math.hypot(p.x-ray.source.x,p.y-ray.source.y)>2e-5;}))return null;
+  for(const name of ['image','source'] as const){const frame=value.frames[name];if(!Array.isArray(frame?.shape)||frame.shape.length!==2||!frame.shape.every(n=>Number.isInteger(n)&&n>0&&n<=512)||!Array.isArray(frame.bounds_arcsec)||frame.bounds_arcsec.length!==4||![...frame.bounds_arcsec,frame.half_extent_arcsec].every(Number.isFinite)||frame.bounds_arcsec[1]<=frame.bounds_arcsec[0]||frame.bounds_arcsec[3]<=frame.bounds_arcsec[2]||frame.half_extent_arcsec<=0||Math.abs(frame.bounds_arcsec[3]-frame.bounds_arcsec[2]-frame.half_extent_arcsec*2)>1e-10)throw Error('Uncalibrated lens frame');}
+  const isEpl=value.model.kind==='epl-shear';
+  if((binding.stage==='m3')!==isEpl)return null;
+  const mapper=value.model.kind==='epl-shear'?eplMapper(value.model,value.frames.image):sieMapper(value.model,value.frames.image);
+  if(!Array.isArray(value.references)||value.references.length<5)return null;
+  for(const ray of value.references){
+   if(![ray.image?.x,ray.image?.y,ray.source?.x,ray.source?.y].every(Number.isFinite))return null;
+   const p=mapper.sourceFor(ray.image);
+   if(!Number.isFinite(p.x)||!Number.isFinite(p.y)||Math.hypot(p.x-ray.source.x,p.y-ray.source.y)>2e-5)return null;
+   if(isEpl){
+    const determinant=mapper.determinantFor(ray.image),expected=ray.determinant;
+    if(typeof expected!=='number'||!Number.isFinite(expected)||!Number.isFinite(determinant)||Math.abs(determinant-expected)>2e-5*Math.max(1,Math.abs(expected)))return null;
+   }
+  }
   return {...mapper,frames:value.frames};
  }catch{return null;}
 }

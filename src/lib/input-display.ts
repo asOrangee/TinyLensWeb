@@ -1,14 +1,14 @@
 import type { AgentUpdate } from './agent-types';
 import type {LivePlane} from './live-results';
-import {hasNumericRaster} from './image-scale.ts';
+import {hasNumericRaster,type ImageScale} from './image-scale.ts';
 
-export type InputScale = 'linear' | 'log' | 'zscale';
+type InputVariant = { src: string; vmin: number; vmax: number; sha256?: string; constant_color?: string };
 export type InputPlane = {
   id: 'data' | 'noise' | 'snr' | 'psf'; shape: number[]; constant: boolean;
   half_extent_arcsec: number; half_extent_x_arcsec?: number; scale_bar_arcsec: number;
   unit?: string; data_min?: number; data_max?: number;
   numeric?:LivePlane;
-  variants: Record<InputScale, { src: string; vmin: number; vmax: number; sha256?: string; constant_color?: string }>;
+  variants: Record<Exclude<ImageScale, 'asinh'>, InputVariant> & { asinh?: InputVariant };
 };
 export type InputDisplay = {
   schema: 'tinylens.input-display.v1'; pixel_scale_arcsec: number; log_a: number;

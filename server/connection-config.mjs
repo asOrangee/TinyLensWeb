@@ -29,6 +29,7 @@ export function readConnectionConfig(env = process.env) {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.@-]*$/.test(sshHost)) throw new Error('Invalid TINYLENS_SSH_HOST; use an SSH config alias');
   const aiNetwork = env.TINYLENS_AI_NETWORK || 'off';
   if (!['off', 'loopback-proxy'].includes(aiNetwork)) throw new Error('TINYLENS_AI_NETWORK must be off or loopback-proxy');
+  const remoteProxyPort = env.TINYLENS_REMOTE_PROXY_PORT || '0';
   return Object.freeze({
     sshHost,
     workspace: absolute(env.TINYLENS_REMOTE_WORKSPACE || '/srv/TinyLensWeb/pipeline', 'TINYLENS_REMOTE_WORKSPACE'),
@@ -37,7 +38,7 @@ export function readConnectionConfig(env = process.env) {
     codex: executable(env.TINYLENS_REMOTE_CODEX || 'codex', 'TINYLENS_REMOTE_CODEX'),
     codexHome: env.TINYLENS_REMOTE_CODEX_HOME ? absolute(env.TINYLENS_REMOTE_CODEX_HOME, 'TINYLENS_REMOTE_CODEX_HOME') : '',
     aiNetwork, upstreamPort: port(env.TINYLENS_PROXY_PORT || '7897', 'TINYLENS_PROXY_PORT'),
-    remoteProxyPort: port(env.TINYLENS_REMOTE_PROXY_PORT || '51984', 'TINYLENS_REMOTE_PROXY_PORT'),
+    remoteProxyPort: remoteProxyPort === '0' ? 0 : port(remoteProxyPort, 'TINYLENS_REMOTE_PROXY_PORT'),
   });
 }
 export const connectionConfig = readConnectionConfig();

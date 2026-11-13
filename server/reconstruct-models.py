@@ -117,7 +117,7 @@ def reconstruct(request):
     if root.resolve(strict=True) != root or run.resolve(strict=True) != run or not run.is_relative_to(root / "output"):
         raise ValueError("Invalid reported run")
     stage, files, hashes = request["stage"], request["files"], {}
-    if stage not in ("a", "m0", "m1", "m2") or stage not in files:
+    if stage not in ("a", "m0", "m1", "m2", "m3") or stage not in files:
         raise ValueError("Unsupported reported model")
 
     # Guard against accidental project writes by imported numerical libraries.
@@ -310,13 +310,30 @@ def reconstruct(request):
                 ll = float(own["extra"]["log_lambda_best"])
                 kwargs, names, medians, rho = {}, ["log_lambda_reg"], {"log_lambda_reg": ll}, 0.
             else:
-                mass, shear = p._fixed_sie_from_medians(own["extra"]["mass_medians_fixed"])
-                ll, rho = float(medians["log_lambda_reg"]), float(medians["adaptive_reg_rho"])
-                kwargs, names = p._fixed_source_template_kwargs(payload("m1")["extra"]["s1"], grid), own["param_names"]
+                m1 = payload("m1")
+                if stage == "m3":
+                    if own["extra"].get("m3_mass_model") != "EPL+Shear":
+                        raise ValueError("Unsupported saved M3 mass model")
+                    fixed = own["extra"]["reg_hyperparams_fixed"]
+                    m2_medians = payload("m2")["extra"]["medians"]
+                    keys = ("log_lambda_reg", "adaptive_reg_rho")
+                    ll, rho = (float(fixed[key]) for key in keys)
+                    if not np.isfinite((ll, rho)).all() or (ll, rho) != tuple(float(m2_medians[key]) for key in keys):
+                        raise ValueError("Frozen M3 regularization disagrees with the reported M2 result")
+                    grid = p._validate_runtime_source_grid(grid)
+                    mass, shear = p._free_epl(p._stage_from_payload(m1), p._stage_from_payload(a))
+                else:
+                    mass, shear = p._fixed_sie_from_medians(own["extra"]["mass_medians_fixed"])
+                    ll, rho = float(medians["log_lambda_reg"]), float(medians["adaptive_reg_rho"])
+                kwargs, names = p._fixed_source_template_kwargs(m1["extra"]["s1"], grid), own["param_names"]
             log_lambda, reg_rho = ParamU("log_lambda_reg", ll), ParamU("adaptive_reg_rho", rho)
-            log_lambda.to_dynamic()
-            if stage == "m2":
-                reg_rho.to_dynamic()
+            if stage == "m3":
+                log_lambda.to_static()
+                reg_rho.to_static()
+            else:
+                log_lambda.to_dynamic()
+                if stage == "m2":
+                    reg_rho.to_dynamic()
             src = PixelizedSourceModel(n=grid["nsrc"], log_lambda_reg=log_lambda, regularization_type=p.REGULARIZATION_TYPE, adaptive_reg_rho=reg_rho)
             kwargs.setdefault("fixed_source_bbox", p._pixel_center_bbox(grid))
             likelihood = p._pixel_likelihood(image-lens_light, noise, psf, feature, domain, (mass, shear), src, None, **kwargs)
@@ -352,22 +369,24 @@ def reconstruct(request):
               "chi-square": display_plane(chi_square, display_valid, pixel, "RdBu_r", (0., 25. if stage == "a" else 9.), "linear",raw=True)}
     for plane in planes.values():
         plane["input_fits_sha256"] = provenance["packaged_fits_sha256"]
-    # Per-attempt mass parameters, with independent library rays for client checks.
-    from TinyLensGpu.PhysicalModel.LensImage.Parametric.Mass import SIE
-    from TinyLensGpu.PhysicalModel import Shear
-    import jax.numpy as jnp
-    mass_values = dict(a["extra"]["medians"] if stage=="m0" else own["extra"].get("mass_medians_fixed",own["extra"].get("medians",{})))
-    for key in ("center_x_mass","center_y_mass"):
-        mass_values.setdefault(key,a["extra"]["medians"][key])
-    model_values = {key:float(mass_values[key]) for key in ("theta_E","e1_mass","e2_mass","center_x_mass","center_y_mass","gamma1","gamma2")}
-    mass = SIE(theta_E=model_values["theta_E"],e1=model_values["e1_mass"],e2=model_values["e2_mass"],center_x=model_values["center_x_mass"],center_y=model_values["center_y_mass"])
-    shear = Shear(gamma1=model_values["gamma1"],gamma2=model_values["gamma2"])
-    points=np.asarray([[-2.,-1.5],[-1.2,.8],[0.,0.],[.4,-.6],[1.5,.1],[1.9,-1.2],[.3,2.]],dtype=float)
-    mx,my=mass.deriv(jnp.asarray(points[:,0]),jnp.asarray(points[:,1]));gx,gy=shear.deriv(jnp.asarray(points[:,0]),jnp.asarray(points[:,1]))
-    betas=points-np.stack([np.asarray(mx+gx),np.asarray(my+gy)],axis=1)
-    mapping={"schema":"tinylens.lens-mapping.v1","synthetic":False,"stage":stage,"attempt":files[stage]["attempt"],"path":files[stage]["summary"],"summary_sha256":hashes[files[stage]["summary"]],"fits_sha256":provenance["packaged_fits_sha256"],"model":{"kind":"sie-shear",**model_values},"frames":{"image":{key:planes["model"][key] for key in ("shape","bounds_arcsec","half_extent_arcsec")},"source":{key:planes["source"][key] for key in ("shape","bounds_arcsec","half_extent_arcsec")}},"references":[{"image":{"x":float(x),"y":float(y)},"source":{"x":float(bx),"y":float(by)}} for (x,y),(bx,by) in zip(points,betas)]}
+    mapping = {}
+    if stage != "m3":
+        # The browser verifies SIE lens mapping against these per-attempt rays.
+        from TinyLensGpu.PhysicalModel.LensImage.Parametric.Mass import SIE
+        from TinyLensGpu.PhysicalModel import Shear
+        import jax.numpy as jnp
+        mass_values = dict(a["extra"]["medians"] if stage=="m0" else own["extra"].get("mass_medians_fixed",own["extra"].get("medians",{})))
+        for key in ("center_x_mass","center_y_mass"):
+            mass_values.setdefault(key,a["extra"]["medians"][key])
+        model_values = {key:float(mass_values[key]) for key in ("theta_E","e1_mass","e2_mass","center_x_mass","center_y_mass","gamma1","gamma2")}
+        mass = SIE(theta_E=model_values["theta_E"],e1=model_values["e1_mass"],e2=model_values["e2_mass"],center_x=model_values["center_x_mass"],center_y=model_values["center_y_mass"])
+        shear = Shear(gamma1=model_values["gamma1"],gamma2=model_values["gamma2"])
+        points=np.asarray([[-2.,-1.5],[-1.2,.8],[0.,0.],[.4,-.6],[1.5,.1],[1.9,-1.2],[.3,2.]],dtype=float)
+        mx,my=mass.deriv(jnp.asarray(points[:,0]),jnp.asarray(points[:,1]));gx,gy=shear.deriv(jnp.asarray(points[:,0]),jnp.asarray(points[:,1]))
+        betas=points-np.stack([np.asarray(mx+gx),np.asarray(my+gy)],axis=1)
+        mapping["display_mapping"]={"schema":"tinylens.lens-mapping.v1","synthetic":False,"stage":stage,"attempt":files[stage]["attempt"],"path":files[stage]["summary"],"summary_sha256":hashes[files[stage]["summary"]],"fits_sha256":provenance["packaged_fits_sha256"],"model":{"kind":"sie-shear",**model_values},"frames":{"image":{key:planes["model"][key] for key in ("shape","bounds_arcsec","half_extent_arcsec")},"source":{key:planes["source"][key] for key in ("shape","bounds_arcsec","half_extent_arcsec")}},"references":[{"image":{"x":float(x),"y":float(y)},"source":{"x":float(bx),"y":float(by)}} for (x,y),(bx,by) in zip(points,betas)]}
     return {"schema": "tinylens.readonly-result.v1", "kind": "summary", "stage": stage, "attempt": files[stage]["attempt"],
-            "path": files[stage]["summary"], "sha256": hashes[files[stage]["summary"]], "result": summary, "planes": planes,"display_mapping":mapping,
+            "path": files[stage]["summary"], "sha256": hashes[files[stage]["summary"]], "result": summary, "planes": planes, **mapping,
             "display_derivation": {"schema": "tinylens.model-display-derivation.v1", "method": method,
                 "estimate": "saved_evidence_scan_choice_and_conditional_linear_solution" if stage == "m0" else "saved_posterior_medians_and_conditional_linear_solution", "model_expression": "lens_light + lensed_source",
                 "chi_square_expression": "((data - model) / noise_rms)^2", "chi_square_is_reduced": False,

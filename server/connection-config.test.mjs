@@ -12,4 +12,7 @@ test('deployment settings accept SSH aliases and correctly quote remote paths', 
 test('settings reject SSH flags, shell fragments, relative workspaces and invalid ports', () => {
   for (const env of [{TINYLENS_SSH_HOST:'-oProxyCommand=x'}, {TINYLENS_SSH_HOST:'host;id'}, {TINYLENS_REMOTE_WORKSPACE:'relative'}, {TINYLENS_REMOTE_PYTHON:'python3;id'}, {TINYLENS_REMOTE_WORKSPACE:'/tmp/\nsecret'}, {TINYLENS_REMOTE_PROXY_PORT:'1'}, {TINYLENS_PROXY_PORT:'70000'}, {TINYLENS_AI_NETWORK:'automatic'}]) assert.throws(() => readConnectionConfig(env));
   assert.equal(readConnectionConfig({}).dataset, '');
+  assert.equal(readConnectionConfig({}).remoteProxyPort, 0);
+  assert.equal(readConnectionConfig({ TINYLENS_REMOTE_PROXY_PORT: '0' }).remoteProxyPort, 0);
+  assert.equal(readConnectionConfig({ TINYLENS_REMOTE_PROXY_PORT: '51984' }).remoteProxyPort, 51984);
 });

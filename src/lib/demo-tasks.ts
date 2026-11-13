@@ -1,12 +1,13 @@
+import { parseDeletedTaskIds } from './deleted-tasks.ts';
+export { hideTask as hideLens, restoreTask as restoreLens } from './deleted-tasks.ts';
+
 export type TaskMessage = { id:string; text:string; createdAt:string };
 export type DemoTask = { id:string; name:string; createdAt:string; draft:string; messages:TaskMessage[] };
 export const tasksStorageKey='tinylens-demo-tasks-v1';
 export const activeTaskStorageKey='tinylens-demo-active-task-v1';
 export const deletedLensesStorageKey='tinylens-demo-deleted-lenses-v1';
-export function parseDeletedLenses(raw:string|null):string[]{try{const value:unknown=JSON.parse(raw??'[]');return Array.isArray(value)?[...new Set(value.filter((id):id is string=>typeof id==='string'&&(id.startsWith('task-')||/^TL-DEMO-\d+$/.test(id))))]:[];}catch{return [];}}
+export function parseDeletedLenses(raw:string|null):string[]{return parseDeletedTaskIds(raw,id=>id.startsWith('task-')||/^TL-DEMO-\d+$/.test(id));}
 export function readDeletedLenses():string[]{try{return parseDeletedLenses(localStorage.getItem(deletedLensesStorageKey));}catch{return [];}}
-export const hideLens=(deleted:string[],id:string)=>deleted.includes(id)?deleted:[...deleted,id];
-export const restoreLens=(deleted:string[],id:string)=>deleted.filter(value=>value!==id);
 const record=(value:unknown):value is Record<string,unknown>=>!!value&&typeof value==='object'&&!Array.isArray(value);
 const date=(value:unknown):value is string=>typeof value==='string'&&Number.isFinite(Date.parse(value));
 export function parseTasks(raw:string|null):DemoTask[]{

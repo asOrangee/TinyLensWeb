@@ -43,10 +43,6 @@
 .app-shell.demo-workspace[data-design] .science-toolbar{margin-bottom:8px}
 .demo-existing-workbench[hidden]{display:none}
 .blank-task-workspace{min-height:calc(100dvh - 30px);display:flex;flex-direction:column;color:var(--ink)}
-.blank-task-heading{padding:8px 12px}
-.app-shell.demo-workspace[data-design] .blank-task-heading input{max-width:100%;width:100%;margin:0;padding:2px 0 7px;background:transparent;border:0;border-bottom:1px solid transparent;border-radius:0;outline:none;box-shadow:none;color:var(--ink);font-size:20px;font-weight:600;line-height:1.5}
-.app-shell.demo-workspace[data-design] .blank-task-heading input:focus{border-bottom-color:var(--line)}
-.blank-task-heading input::placeholder{color:var(--muted)}
 .blank-task-placeholder{display:flex;flex:1;flex-direction:column;align-items:center;justify-content:center;padding:0 20px 55px;color:var(--muted);text-align:center}
 .blank-task-placeholder svg{opacity:.4}.blank-task-placeholder p{margin-top:15px;font-size:12px}
 

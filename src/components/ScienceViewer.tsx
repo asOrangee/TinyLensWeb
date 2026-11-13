@@ -25,7 +25,7 @@ function curvePath(points:Point[],closed:boolean,frame:PlaneFrame,view:PlaneView
 }
 const coordinateNumber=(value:number)=>value!==0&&Math.abs(value)<.001?value.toExponential(2):value.toFixed(3);
 
-export default function ScienceViewer({stageId,toolbarTarget,missingLayers,displayPlanes,modelResult,imageScale='original',onScaleChange=()=>{}}:{stageId:string;toolbarTarget:HTMLDivElement|null;missingLayers?:string;displayPlanes?:LiveResult['planes'];modelResult?:LiveResult;imageScale?:ImageScale;onScaleChange?:(scale:ImageScale)=>void}){
+export default function ScienceViewer({stageId,toolbarTarget,missingLayers,displayPlanes,modelResult,imageScale='linear',onScaleChange=()=>{}}:{stageId:string;toolbarTarget:HTMLDivElement|null;missingLayers?:string;displayPlanes?:LiveResult['planes'];modelResult?:LiveResult;imageScale?:ImageScale;onScaleChange?:(scale:ImageScale)=>void}){
   const {t}=useDemoI18n();
   const live=missingLayers!==undefined;
   const activeMapping=useMemo(()=>live?verifiedLiveMapping(modelResult?.display_mapping,{stage:stageId,attempt:modelResult?.attempt??-1,path:modelResult?.path??'',sha256:modelResult?.sha256??'',fitsSha256:displayPlanes?.observation?.input_fits_sha256}):mapping,[live,modelResult,stageId,displayPlanes?.observation?.input_fits_sha256]);

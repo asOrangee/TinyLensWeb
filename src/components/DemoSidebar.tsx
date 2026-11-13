@@ -35,7 +35,7 @@ export default function DemoSidebar({ lenses, selected, open, onClose, onSelect,
       <div className="lens-items">{lenses.map(lens => {const name=lens.kind==='task'?lens.name:t(lens.name);return <div className={`lens-item-row${selected===lens.id?' selected':''}`} key={lens.id}><button type="button" className="lens-item" aria-current={selected === lens.id ? 'page' : undefined} aria-label={t(lens.kind==='task'?'打开任务：{name}':'打开 lens：{name}', { name })} title={`${name} · ${lastConversation(lens.lastConversationAt)}`} onClick={() => { onSelect(lens.id); leave(); }}>
         {lens.image?<img className="lens-data-thumbnail" src={lens.image} alt={t('{name} 的观测图像', { name })}/>:<span className="lens-data-thumbnail lens-task-placeholder" aria-hidden="true"><MessageSquare size={17}/></span>}
         <span className="lens-item-meta"><strong>{name}</strong><time dateTime={lens.lastConversationAt}>{lastConversation(lens.lastConversationAt)}</time></span>
-      </button>{!live&&<button className="lens-delete-button" type="button" aria-label={t('删除 {name}',{name})} title={t('删除 {name}',{name})} onClick={()=>onDelete(lens.id)}><Trash2 size={14}/></button>}</div>;})}</div>
+      </button><button className="lens-delete-button" type="button" aria-label={t('删除 {name}',{name})} title={t('删除 {name}',{name})} onClick={()=>onDelete(lens.id)}><Trash2 size={14}/></button></div>;})}</div>
     </section>
   </aside>;
 }

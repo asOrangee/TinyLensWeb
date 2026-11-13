@@ -4,11 +4,11 @@ import { Crosshair, Download, Plus, RotateCcw, Trash2, ZoomIn } from 'lucide-rea
 import { useDemoI18n } from '../lib/demo-i18n';
 import { downloadJSON } from '../lib/workspace';
 import { pointFromImage, pointToImage, positionError, positionRequest, type PositionContext, type PositionDraft } from '../lib/position-likelihood';
-import type {InputScale} from '../lib/input-display';
+import type {ImageScale} from '../lib/image-scale';
 import ImageScaleControls from './ImageScaleControls';
 import './position-likelihood.css';
 
-type Props = { value: PositionDraft; context: PositionContext; onChange: (value: PositionDraft) => void; onReplacePrompt: () => void; manualPrompt: boolean; promptPresent: boolean; disabled?: boolean;toolbarTarget?:HTMLDivElement|null;scale?:InputScale;onScaleChange?:(scale:InputScale)=>void };
+type Props = { value: PositionDraft; context: PositionContext; onChange: (value: PositionDraft) => void; onReplacePrompt: () => void; manualPrompt: boolean; promptPresent: boolean; disabled?: boolean;toolbarTarget?:HTMLDivElement|null;scale?:ImageScale;onScaleChange?:(scale:ImageScale)=>void };
 export default function PositionLikelihoodEditor({ value, context, onChange, onReplacePrompt, manualPrompt, promptPresent, disabled = false,toolbarTarget,scale,onScaleChange }: Props) {
   const { t } = useDemoI18n();
   const [imageFailed, setImageFailed] = useState(false);

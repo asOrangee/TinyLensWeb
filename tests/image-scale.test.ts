@@ -14,6 +14,15 @@ test('frontend ZScale agrees with actual Astropy defaults including outlier reje
 });
 test('only three image-plane intensity layers are scalable and all scales retain exactly five two-decimal ticks',()=>{
  assert.deepEqual([...scalablePlanes],['observation','model','source-lensed']);
- for(const scale of ['linear','log','zscale'] as const){const values=[-.0173,.01,.3,1.2,5.91],copy=[...values],limits=imageScaleValues(values,scale);assert.deepEqual(values,copy);const ticks=colorbarTicks(limits.vmin,limits.vmax,limits.stretch,limits.parameter);assert.equal(ticks.length,5);assert.ok(ticks.every(t=>/^-?\d+\.\d{2}$/.test(formatScaleNumber(t.value))));}
+ for(const scale of ['linear','log','asinh','zscale'] as const){const values=[-.0173,.01,.3,1.2,5.91],copy=[...values],limits=imageScaleValues(values,scale);assert.deepEqual(values,copy);const ticks=colorbarTicks(limits.vmin,limits.vmax,limits.stretch,limits.parameter);assert.equal(ticks.length,5);assert.ok(ticks.every(t=>/^-?\d+\.\d{2}$/.test(formatScaleNumber(t.value))));}
  assert.throws(()=>imageScaleValues([], 'linear'));assert.throws(()=>imageScaleValues([NaN], 'log'));
+});
+
+test('Asinh selects the existing stretch over the full signed Data range', () => {
+  const limits = imageScaleValues([-.02, 0, .01, 5.91], 'asinh');
+  assert.deepEqual(limits, { vmin: -.02, vmax: 5.91, stretch: 'asinh', parameter: 25 });
+  for (const tick of colorbarTicks(limits.vmin, limits.vmax, limits.stretch, limits.parameter)) {
+    const color = Math.asinh(25 * (tick.value - limits.vmin)) / Math.asinh(25 * (limits.vmax - limits.vmin));
+    assert.ok(Math.abs(color - tick.fraction) < 1e-12);
+  }
 });

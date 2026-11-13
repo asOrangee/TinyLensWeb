@@ -1,5 +1,5 @@
 /* A quiet conversation pane, with its own history and a separate composer. */
-.app-shell[data-design]{--conversation-width:352px;--chat-surface:#fbfcfd;--chat-input:#fff;--chat-soft:#f0f3f7;--chat-accent:var(--green);--chat-ink:var(--ink);--chat-muted:var(--muted)}
+.app-shell[data-design]{--conversation-width:352px;--conversation-font:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;--chat-surface:#fbfcfd;--chat-input:#fff;--chat-soft:#f0f3f7;--chat-accent:var(--green);--chat-ink:var(--ink);--chat-muted:var(--muted)}
 .app-shell[data-design="observatory"]{--chat-surface:#141c28;--chat-input:#1b2533;--chat-soft:#202d3e}
 .app-shell[data-design="paper"]{--chat-surface:#f6f1e8;--chat-input:#fffdf7;--chat-soft:#eae3d8}
 .app-shell[data-design="studio"]{--chat-surface:#f8f9fb;--chat-input:#fff;--chat-soft:#edf0f5}
@@ -7,7 +7,7 @@
 .conversation-rail .conversation-stream{display:flex;flex:1;flex-direction:column;min-height:0;overflow:visible}
 .conversation-topbar{display:flex;align-items:center;flex:0 0 auto;min-width:0;padding:10px var(--conversation-history-inset) 14px;border:0;overflow:hidden;border-radius:calc(var(--studio-frame-radius,10px) - 1px) calc(var(--studio-frame-radius,10px) - 1px) 0 0}
 
-.conversation-rail{--conversation-font:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;--conversation-history-inset:16px;--message-user-bg:#7d9dc3;--message-assistant-bg:#f2f2f2;--message-assistant-ink:#202123}
+.conversation-rail{--conversation-history-inset:16px;--message-user-bg:#7d9dc3;--message-assistant-bg:#f2f2f2;--message-assistant-ink:#202123}
 /* Extend the scroll surface, not the fade into the original clear viewport.
    Matching extra padding preserves content positions and scroll distance. */
 .conversation-log{overflow-y:auto;overscroll-behavior:contain;overflow-anchor:none;scrollbar-width:thin;flex:1;min-height:0;margin-block:-5px;padding:25px var(--conversation-history-inset);overflow-wrap:anywhere;background:var(--chat-input);mask-image:linear-gradient(to bottom,transparent,#000 5px,#000 calc(100% - 5px),transparent)}

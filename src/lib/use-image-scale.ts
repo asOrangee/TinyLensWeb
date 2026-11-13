@@ -1,8 +1,18 @@
-import {useEffect,useState} from 'react';
-import type {ImageScale} from './image-scale';
-export function useImageScale(mode:'live'|'demo',stage:string,scope?:string){
- const key=`tinylens-${mode}-image-scales-v1${scope?':'+scope:''}`,[settings,setSettings]=useState<Record<string,ImageScale>>(()=>{try{const saved=JSON.parse(localStorage.getItem(key)??'{}');return saved&&typeof saved==='object'&&!Array.isArray(saved)?saved:{}}catch{return {}}});
- const saved=settings[stage],scale:ImageScale=['original','linear','log','zscale'].includes(saved)?saved:'original';
- useEffect(()=>{try{localStorage.setItem(key,JSON.stringify(settings))}catch{/* Optional display preference. */}},[key,settings]);
- return [scale,(value:ImageScale)=>setSettings(previous=>({...previous,[stage]:value}))] as const;
+import { useEffect, useState } from 'react';
+import { isImageScale, type ImageScale } from './image-scale';
+
+export function useImageScale(mode: 'live' | 'demo', scope?: string | null) {
+  const key = scope === null ? null : `tinylens-${mode}-image-scale-v2${scope ? ':' + scope : ''}`;
+  const [scale, setScale] = useState<ImageScale>(() => {
+    try {
+      const saved = key && localStorage.getItem(key);
+      if (isImageScale(saved)) return saved;
+    } catch { /* The viewer can still use its default scale. */ }
+    return 'linear';
+  });
+  useEffect(() => {
+    if (!key) return;
+    try { localStorage.setItem(key, scale); } catch { /* Display preferences are optional. */ }
+  }, [key, scale]);
+  return [scale, setScale] as const;
 }

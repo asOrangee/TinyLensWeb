@@ -15,7 +15,8 @@ const run=WORKSPACE+'/output/run/lens';
 const report=(stage,file,id=stage+'-'+file,attempt=0)=>({id,threadId:'bound',stage,kind:'artifact',path:run+'/attempts/'+stage+'/'+attempt+'/'+file});
 function state(stage='m1'){
  const updates=[];
- for(const tag of ['a','b','m0','m1','m2'].slice(0,['a','b','m0','m1','m2'].indexOf(stage)+1)){
+ const stages=['a','b','m0','m1','m2','m3'];
+ for(const tag of stages.slice(0,stages.indexOf(stage)+1)){
   updates.push(report(tag,'stage-result.json',tag+'-summary'));
   if(tag!=='b')updates.push(report(tag,'artifacts/stage_'+tag+'.pkl',tag+'-pkl'));
  }
@@ -42,6 +43,24 @@ test('model reconstruction is bound to explicit reported attempts and never choo
  current.updates.push(report('a','stage-result.json','later-a',1));
  assert.equal(reportedModelPlan(current,'m1-summary').files.a.attempt,0);
  assert.deepEqual(Object.keys(reportedModelPlan(state('m2'),'m2-summary').files),['a','b','m0','m1','m2']);
+});
+
+test('M3 renders six numerical planes from one attempt with the reported M2 dependency',()=>{
+ const current=state('m3'),plan=reportedModelPlan(current,'m3-summary');
+ assert.deepEqual(Object.keys(plan.files),['a','b','m0','m1','m2','m3']);
+ assert.equal(plan.files.m2.posteriorReportId,'m2-pkl');
+ const {display_mapping,...numeric}=value(plan);
+ assert.equal(validateModelDisplay(numeric,plan),numeric);
+ assert.throws(()=>validateModelDisplay({...numeric,display_mapping},plan),/Invalid frozen lens mapping/);
+ const epl={...display_mapping,model:{...display_mapping.model,kind:'epl-shear',gamma:1.95},
+  references:display_mapping.references.map(ray=>({...ray,determinant:-.1}))};
+ const {theta_E,gamma,e1_mass,e2_mass,gamma1,gamma2}=epl.model;
+ numeric.result.metrics.medians={theta_E,gamma,e1_mass,e2_mass,gamma1,gamma2};
+ assert.equal(validateModelDisplay({...numeric,display_mapping:epl},plan).display_mapping,epl);
+ assert.throws(()=>validateModelDisplay({...numeric,display_mapping:{...epl,model:{...epl.model,gamma:2}}},plan),/EPL parameters/);
+ assert.throws(()=>reportedModelPlan({...current,updates:current.updates.filter(r=>r.id!=='m2-pkl')},'m3-summary'),/pickle has not been reported/);
+ const wrongAttempt=current.updates.filter(r=>r.id!=='m3-pkl').concat(report('m3','artifacts/stage_m3.pkl','other-m3-pkl',1));
+ assert.throws(()=>reportedModelPlan({...current,updates:wrongAttempt},'m3-summary'),/pickle has not been reported/);
 });
 
 test('derived displays keep full coverage separate from the likelihood mask and verify dependencies',()=>{

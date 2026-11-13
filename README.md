@@ -56,6 +56,16 @@ pnpm preview --port 5173
 
 真实联调也请使用 5173 端口；桥接服务的本机来源校验固定允许该 Web 端口。普通 `pnpm preview` 的默认 4173 端口仅适合演示查看。
 
+### 录制合成交互演示
+
+运行 `pnpm dev` 后，可用 Playwright 和支持 `libx264` 的 FFmpeg 录制合成工作台。安装 Playwright 并准备 Edge、Chrome 或 Playwright 自带的 Chromium，然后在项目目录运行：
+
+```bash
+node scripts/record-demo.mjs --browser
+```
+
+录制展示 M1 的双向平面联动、B 的掩膜绘制和撤销，默认保存到 `artifacts/demo-recordings/`。可追加一个尚不存在的 `.mp4` 路径，并用 `TINYLENS_FFMPEG` 指定编码程序。macOS 上也可运行 `scripts/record-demo.command` 使用 Recordly 录制。
+
 ## 3. 安装 GPU 服务器上的科学环境
 
 推荐 Linux NVIDIA GPU 服务器，安装 SSH、Git、Conda、Bash 4+，以及 `flock`、`setsid`、`timeout`、`realpath`、`nvidia-smi`。工作站只运行浏览器、Node 和 SSH；科学环境留在服务器。
@@ -163,7 +173,7 @@ pnpm dev
 
 打开 [真实 AI 工作台](http://127.0.0.1:5173/?design=studio)。首次任务没有作者的旧消息和结果；通过左栏新建任务，在对话中明确给出输入、输出目录及运行要求。仅打开页面、创建任务或切换任务不会启动科学计算；发送运行要求后，执行仍由 pipeline AI 决定。
 
-默认让 GPU 服务器直接访问你自己的模型服务。如确需通过本机已有 HTTP 代理访问官方 OpenAI 服务，可设置 `TINYLENS_AI_NETWORK=loopback-proxy` 和 `TINYLENS_PROXY_PORT`。该可选通道使用临时认证并仅允许列出的官方域名；不支持任意自定义 provider，后者应配置服务器自己的网络通道。
+默认让 GPU 服务器直接访问你自己的模型服务。如确需通过本机已有 HTTP 代理访问官方 OpenAI 服务，可设置 `TINYLENS_AI_NETWORK=loopback-proxy` 和 `TINYLENS_PROXY_PORT`。该可选通道使用临时认证，默认由 SSH 分配服务器回环端口，仅允许列出的官方域名。已有部署可继续用 `TINYLENS_REMOTE_PROXY_PORT` 指定固定端口。自定义 provider 使用服务器自己的网络通道。
 
 ## 6. 准备自己的图像
 
@@ -209,6 +219,10 @@ GPU Stage Command: /srv/TinyLensWeb/pipeline/scripts/run_lens_stage_on_idle_gpu.
 Stage A 的标准 runner 还需按工作流添加 `--timeout-seconds 1800`；由 AI/阶段专家按现有规则构造实际阶段命令，前端不拼装或调用科学 CLI。原科学角色在运行期间默认使用英文，若希望中文回复，可在普通消息中提出；Web 不覆盖其永久指令。
 
 阶段计算成功、AI 回合结束、生成诊断图、硬门槛通过和科学接受是不同状态。Web 仅显示 AI 明确报告且通过受限读取器核验的产物。缺少结果显示“—”；B 不显示虚构后验，M0 的证据扫描不作为归一化后验；参数中心值 q50 是带权中位数，不标为最大似然“最优值”。
+
+新建任务后，输入框位于欢迎页中央。发送首条消息后进入 Stage 工作台。任务可从当前浏览器的侧栏移入“已删除任务”，也可从该列表恢复。切换 Stage 时保留可用页签与当前任务的色阶，可选 Linear、Log、Asinh 和 Z。
+
+A、M0、M1、M2 和 M3 可用已报告的数值产物展示六幅诊断图。M3 使用同一 attempt 的 EPL＋外剪切结果提供双向平面联动、临界线和焦散线。参数页保留采样参数与线性求解量的卡片，M0 显示扫描选定值和相对对数证据曲线。
 
 真实 B mask 编辑只保存本地草稿，并以普通用户输入交给 AI；不直接写回运行中的 FITS。重跑请求同样交给 AI，不能因点击界面或消息送达而视为执行、覆盖或接受完成。位置约束点选也不保证当前 pipeline 已将该约束应用于拟合。
 

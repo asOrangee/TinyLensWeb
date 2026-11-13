@@ -38,13 +38,10 @@ export type AgentState = {
   workspace: string;
 };
 
-export const MOCK_DATASET_PATH = '';
-export const INITIAL_AGENT_PROMPT = '';
-
 export const EMPTY_AGENT_STATE: AgentState = {
   connection: 'disconnected', threadId: null, turnId: null, remoteActive: false, status: 'idle',
   messages: [], activities: [], requests: [], updates: [], questions: [], error: null,
-  datasetPath: MOCK_DATASET_PATH, workspace: '',
+  datasetPath: '', workspace: '',
 };
 
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -71,7 +68,7 @@ export function parseAgentState(value: unknown): AgentState {
     turnId: optionalText(value.turnId) ?? null,
     remoteActive: value.remoteActive === true,
     error: optionalText(value.error) ?? null,
-    datasetPath: optionalText(value.datasetPath) ?? MOCK_DATASET_PATH,
+    datasetPath: optionalText(value.datasetPath) ?? '',
     workspace: optionalText(value.workspace) ?? '',
     messages: (value.messages as unknown[]).filter(record).filter(item => typeof item.id === 'string' && ['user', 'assistant'].includes(String(item.role)) && typeof item.text === 'string').map(item => ({ id: item.id as string, role: item.role as 'user' | 'assistant', text: item.text as string, phase: optionalText(item.phase), complete: typeof item.complete === 'boolean' ? item.complete : undefined })),
     activities: (value.activities as unknown[]).filter(record).filter(item => ['id', 'type', 'title', 'status'].every(key => typeof item[key] === 'string')).map(item => ({ id: item.id as string, type: item.type as string, title: item.title as string, status: item.status as string, detail: optionalText(item.detail), output: optionalText(item.output) })),
