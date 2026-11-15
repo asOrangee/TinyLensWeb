@@ -11,6 +11,15 @@ test('only explicit preflight input reports are selected, with the latest report
   assert.equal(selectInputReport([report, { ...report, id: 'new' }, { ...report, id: 'wrong-stage', stage: 'a' }, { ...report, id: 'note', kind: 'note' }])?.id, 'new');
   assert.equal(selectInputReport([{ ...report, path: '/private/other.fits' }]), undefined);
 });
+test('a new reported preflight audit uses the current run and requires its own report identity', () => {
+  const audit = { ...report, id: 'audit', path: '/project/output/new/lens/preflight/preflight_6panel.png' };
+  assert.equal(selectInputReport([report, audit, { ...audit, id: 'arbitrary', path: '/project/output/new/lens/preflight/other.png' }])?.id, audit.id);
+  const response = fixture();
+  const resolved = { ...response, source: { ...response.source, report_path: audit.path, provenance_path: '/project/output/inputs/lens/input-provenance.json' } };
+  assert.doesNotThrow(() => parseInputDisplay(resolved, audit));
+  assert.throws(() => parseInputDisplay(resolved, report), /不匹配/);
+  assert.throws(() => parseInputDisplay(response, audit), /不匹配/);
+});
 test('input display refuses another run, missing images, false geometry or external image URLs', () => {
   assert.equal(parseInputDisplay(fixture(), report).planes.length, 4);
   const another = fixture(); another.source.provenance_path += '.old'; assert.throws(() => parseInputDisplay(another, report));

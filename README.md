@@ -179,7 +179,7 @@ pnpm dev
 
 底层 pipeline 输入为 `<lens_id>/<lens_id>.fits`，扩展必须包含 `VIS_FLUX`、`VIS_RMS`、`VIS_PSF`。`VIS_RMS` 是严格为正的 **1σ RMS**，不是 inverse variance、权重图或方差。图像与噪声需同形，PSF 需同采样；当前几何适配支持方形、轴对齐、等像素尺度的图像及独立轴翻转。
 
-Web 的输入与模型查看还需要相邻的 `input-provenance.json`。在服务器上运行随仓库补齐的封装工具，例如：
+Web 通过 `input-provenance.json` 校验封装输入。数据预览也能从 AI 已报告的预检记录或登记的诊断图定位同次运行清单，再找到其中绑定的输入；同时支持记录了 `VIS_FLUX` 与 `VIS_BGSUB` 别名及数组校验值的 Euclid 输入。在服务器上可用随仓库提供的封装工具准备输入，例如：
 
 ```bash
 cd /srv/TinyLensWeb
@@ -254,7 +254,7 @@ CUDA_VISIBLE_DEVICES= JAX_PLATFORMS=cpu python -m pytest -q
 | --- | --- |
 | 演示能打开，真实页连接失败 | 确认桥接 5184、SSH 别名、远程工作目录、Codex 程序和自己的登录 |
 | `python3`/`codex` 不存在 | 为 `.env.local` 填写服务器上的绝对程序路径；非交互 SSH 不一定加载 Conda/PATH |
-| 没有输入图像 | 先封装输入，再让 AI 显式报告 `input-provenance.json`；只报告一张诊断 PNG 不足以显示数值图位 |
+| 没有输入图像 | 核对输入封装及校验值。让 AI 显式报告 `input-provenance.json` 或同次预检记录；工作台从绑定的 FITS 数组绘图 |
 | 某阶段图位为空 | 核对同一会话是否已报告对应 summary/PKL、冻结依赖和输入；不要用演示图替代 |
 | `YOUR_MODEL_ID` 错误 | 执行 `scripts/configure_agents.py`，同时核对主 Codex 配置及 provider 支持的模型 |
 | API 在交互 shell 可用，Web 不可用 | 检查 SSH 启动环境、私有 key 文件及包装器；不要把 key 放入 `VITE_*` |

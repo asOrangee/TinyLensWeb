@@ -37,6 +37,15 @@ test('position picking uses the reported Data FITS preview and its native .05 ar
  assert.deepEqual(pointFromImage(.75,.25,context.frame!),{x:1.8875,y:1.8875});
  assert.equal(positionError({...draft,points:[draft.points[0],{...draft.points[1],x:'3.76'}]},context.frame), '位置点必须位于图像范围内。');
 });
+test('a preflight audit binds position picking to the FITS and actual provenance, independent of its PNG path', () => {
+ const audit = { ...report, id: 'audit', path: '/run/result/lens/preflight/preflight_6panel.png' };
+ const anchored = { ...display, source: { ...display.source, report_path: audit.path } };
+ const context = inputPositionContext(anchored, audit, '/fallback');
+ assert.equal(context.source?.report_id, audit.id);
+ assert.equal(context.source?.provenance_path, display.source.provenance_path);
+ assert.equal(context.imageReference, display.source.fits_path + '#VIS_FLUX');
+ assert.equal(inputPositionContext(anchored, report, '/fallback').image, undefined);
+});
 test('live requests distinguish preview rows from canonical coordinates and carry hashes without embedding image bytes',()=>{
  const context=inputPositionContext(display,report,'/broad/dataset'),request=positionRequest(draft,context);
  assert.equal(request.coordinate_system.y_direction,'increasing');assert.equal(request.coordinate_system.array_frame,'canonical');

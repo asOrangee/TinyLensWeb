@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { AgentUpdate } from './agent-types';
-import { parseInputDisplay, selectInputReport, type InputDisplay } from './input-display';
+import { inputMatchesReport, parseInputDisplay, selectInputReport, type InputDisplay } from './input-display';
 import {renderInputDisplay} from './render-input';
 import { useAgentTaskId } from './agent-task-context';
 import { agentTaskUrl } from './live-tasks';
@@ -9,6 +9,7 @@ export async function fetchReportedInput(taskId: string, report: AgentUpdate, si
   if (!report.id) throw new Error('等待 AI 报告输入来源。');
   const url = agentTaskUrl(`/api/agent/input?updateId=${encodeURIComponent(report.id)}`, taskId);
   const response = await fetch(url, { signal });
+  if (response.status === 503) throw new Error('无法连接 GPU 服务器，恢复连接后可刷新预览。');
   if (!response.ok) throw new Error('暂时无法读取输入 FITS。');
   return parseInputDisplay(await response.json(), report);
 }
@@ -29,6 +30,6 @@ export function useReportedInput(updates: AgentUpdate[], enabled = true) {
     return()=>controller.abort();
   },[enabled,id,report?.path,taskId]);
   const current=loaded.id===id?loaded:{};
-  const display=current.data?.source.provenance_path===report?.path?current.data:undefined;
+  const display=inputMatchesReport(current.data,report)?current.data:undefined;
   return {id,report,display,loading:current.loading,error:current.error,missing:current.loading?'正在读取输入 FITS…':current.error??(id?'正在准备 FITS 四图。':'等待 AI 报告输入来源。')};
 }
