@@ -215,6 +215,10 @@ def test_stage_writes_attempt_local_artifacts_and_manifest(
         "status": "started",
     }
     assert (attempt_dir / "stage-result.json").is_file()
+    display = json.loads((attempt_dir / "display-manifest.json").read_text())
+    assert display["stage"] == "a" and display["attempt"] == 0 and display["upstream"] == []
+    assert set(display["planes"]) == {"observation"}
+    assert (attempt_dir / "display.fits").is_file()
     manifest = json.loads((attempt_dir / "manifest.json").read_text())
     assert manifest == {
         "schema_version": "attempt_artifact_manifest.v1",

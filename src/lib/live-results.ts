@@ -28,21 +28,51 @@ export function resultIdentity(update: AgentUpdate) {
   return match && normalize(update.stage) === match[2] ? { key: `${match[1]}/attempts/${match[2]}/${match[3]}`, stage: match[2], attempt: Number(match[3]) } : null;
 }
 
-/** All displayed files must refer to one explicitly reported run and attempt. */
-export function selectStageResults(updates: AgentUpdate[], stage: string) {
-  const reports = updates.filter(update => normalize(update.stage) === stage);
-  const identity = reports.map(resultIdentity).filter(item => item !== null).at(-1) ?? null;
-  const bound = identity ? reports.filter(update => resultIdentity(update)?.key === identity.key) : reports.filter(update => !resultIdentity(update));
+export function isNumericalStageReport(update: AgentUpdate) {
+  if (!update.id || !resultIdentity(update)) return false;
+  if (update.path?.endsWith('/display-manifest.json')) return update.kind === 'artifact';
+  if (/\/artifacts\/stage_(a|m0|m1|m2|m3)\.pkl$/.test(update.path ?? '')) return update.kind === 'artifact';
+  return /\/(?:preflight\/(?:inspector|inspection)|stage-result)\.json$/.test(update.path ?? '');
+}
+
+const runKey = (identity: NonNullable<ReturnType<typeof resultIdentity>>) =>
+  identity.key.replace(/\/(?:preflight|attempts\/(?:a|b|m0|m1|m2|m3)\/\d+)$/, '');
+
+function selection(reports: AgentUpdate[], identity: ReturnType<typeof resultIdentity>, stage: string) {
+  const bound = identity ? reports.filter(update => resultIdentity(update)?.key === identity.key) : [];
   const latestImages = new Map<string, AgentUpdate>();
   for (const update of bound) if (update.kind === 'artifact' && update.id && /\.(png|jpe?g|webp|gif)$/i.test(update.path ?? '')) {
-    latestImages.delete(update.path!); latestImages.set(update.path!, update);
+    latestImages.delete(update.path!);
+    latestImages.set(update.path!, update);
   }
   return {
     identity,
-    summary: bound.filter(update => update.id && (stage==='preflight'?/\/preflight\/(inspector|inspection)\.json$/:/\/stage-result\.json$/).test(update.path ?? '')).at(-1),
-    posterior: bound.filter(update => update.id && update.kind === 'artifact' && /\/artifacts\/stage_(a|m0|m1|m2|m3)\.pkl$/.test(update.path ?? '')).at(-1),
+    published: bound.filter(update => update.id && update.kind === 'artifact' && update.path?.endsWith('/display-manifest.json')).at(-1),
+    summary: bound.filter(update => update.id && (stage === 'preflight'
+      ? /\/preflight\/(?:inspector|inspection)\.json$/ : /\/stage-result\.json$/).test(update.path ?? '')).at(-1),
+    posterior: bound.filter(update => update.id && update.kind === 'artifact'
+      && update.path?.endsWith('/artifacts/stage_' + stage + '.pkl')).at(-1),
     images: [...latestImages.values()],
   };
+}
+
+export function stageDisplayCandidates(updates: AgentUpdate[], stage: string, historical?: string) {
+  const reports = updates.filter(update => normalize(update.stage) === stage);
+  const latest = reports.map(resultIdentity).filter(identity => identity !== null).at(-1);
+  const identities = new Map<string, NonNullable<ReturnType<typeof resultIdentity>>>();
+  for (const report of reports.filter(isNumericalStageReport)) {
+    const identity = resultIdentity(report)!;
+    if (historical ? identity.key === historical : latest && runKey(identity) === runKey(latest)) {
+      identities.delete(identity.key);
+      identities.set(identity.key, identity);
+    }
+  }
+  const candidates = [...identities.values()].reverse().map(identity => selection(reports, identity, stage));
+  return candidates.length ? candidates : [selection(reports, historical ? null : latest ?? null, stage)];
+}
+
+export function selectStageResults(updates: AgentUpdate[], stage: string) {
+  return stageDisplayCandidates(updates, stage)[0];
 }
 
 export function parseLiveResult(value: unknown, update: AgentUpdate): LiveResult {

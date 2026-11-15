@@ -87,6 +87,9 @@ def _cmd_preflight(args: argparse.Namespace) -> None:
         run_manifest.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     packet = build_inspection_packet(lens_dir, output_dir / "preflight", geometry=geometry)
     print(packet)
+    display = packet.with_name("display-manifest.json")
+    if display.is_file():
+        print(f"Workbench display manifest: {display.resolve()}", file=sys.stderr)
 
 
 def _cmd_mask(args: argparse.Namespace) -> None:
@@ -150,6 +153,9 @@ def _cmd_stage(args: argparse.Namespace) -> None:
     except StageInputError as error:
         print(json.dumps(operation_result("preparation_blocked", error)), file=sys.stderr)
         raise SystemExit(2) from None
+    display = args.output_dir.resolve() / "attempts" / args.stage / str(args.attempt) / "display-manifest.json"
+    if result.get("status") == "success" and not args.preview_only and display.is_file():
+        result = {**result, "display_manifest": str(display)}
     try:
         print(json.dumps(result, indent=2), flush=True)
     except BrokenPipeError:

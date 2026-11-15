@@ -24,7 +24,7 @@ import BlankTaskWorkspace from './BlankTaskWorkspace';
 import { agentTaskUrl, defaultLiveTaskId, liveTaskPreferenceKey, type LiveTask } from '../lib/live-tasks';
 import { catalogParameters } from '../lib/parameter-catalog';
 import { ParameterDetail } from './ParameterTable';
-import { resultIdentity, selectStageResults } from '../lib/live-results';
+import { isNumericalStageReport, resultIdentity } from '../lib/live-results';
 import { useDemoI18n } from '../lib/demo-i18n';
 import { stageNavigationTitle, supportsStageTab, workbenchStageCopy, type StageTab } from '../lib/stage-navigation';
 import { emptyPositionDraft, mergePositionPrompt, positionError, positionPrompt, validStoredPositionDraft, type PositionContext, type PositionDraft } from '../lib/position-likelihood';
@@ -116,7 +116,8 @@ export default function AgentWorkspace({ task, tasks, deletedTasks, taskError, t
   const composer = useRef<HTMLTextAreaElement>(null);
   const [copyNotice, setCopyNotice] = useState('');
   const selectedStage = stages.find(stage => stage.id === stageId)!;
-  const stageData = useLiveStageData(selectedStage, state.updates);
+  const [historyAttempt, setHistoryAttempt] = useState<string>();
+  const stageData = useLiveStageData(selectedStage, state.updates, historyAttempt);
   const parameter = stageData.parameters.find(item => item.key === parameterKey)??catalogParameters(selectedStage).find(item=>item.key===parameterKey);
   const showParameter = (item: Parameter) => { setParameterKey(item.key); setWorkspacePanel('parameter'); };
   const input=useReportedInput(state.updates,stageId==='preflight');
@@ -288,7 +289,8 @@ export default function AgentWorkspace({ task, tasks, deletedTasks, taskError, t
     try { localStorage.setItem('tinylens-design-v1', id); } catch { /* Visual preference is optional. */ }
   }
 
-  function chooseStage(id: StageId) {
+  function chooseStage(id: StageId, attempt?: string) {
+    setHistoryAttempt(attempt);
     setStageId(id);
     setTab(current => supportsStageTab(id, current) ? current : 'results');
     setExpanded(false);
@@ -299,8 +301,7 @@ export default function AgentWorkspace({ task, tasks, deletedTasks, taskError, t
   function addPrompt(text: string) { draftTouched.current = true; setDraft(previous => previous.trim() ? `${previous}\n\n${text}` : text); composer.current?.focus(); }
   async function copyPath(path: string) { try { await navigator.clipboard.writeText(path); setCopyNotice('已复制 AI 报告的文件路径。'); } catch { setCopyNotice('无法访问剪贴板，请选中文件路径复制。'); } }
 
-  const selectedResults = selectStageResults(state.updates, stageId);
-  const historyAttempts = [...new Map(state.updates.map(update => { const identity = resultIdentity(update); return identity&&identity.attempt!==null ? [identity.key, identity] as const : null; }).filter((item): item is NonNullable<typeof item> => !!item)).values()];
+  const historyAttempts = [...new Map(state.updates.filter(isNumericalStageReport).map(update => { const identity = resultIdentity(update); return identity&&identity.attempt!==null ? [identity.key, identity] as const : null; }).filter((item): item is NonNullable<typeof item> => !!item)).values()];
   const displayTitle = (id: StageId) => t(workbenchStageCopy[id]?.title ?? stages.find(stage => stage.id === id)!.title);
   const indicators = stageIndicators(state);
   const closePanel = () => { setShowDesigns(false); setWorkspacePanel(null); };
@@ -335,7 +336,7 @@ export default function AgentWorkspace({ task, tasks, deletedTasks, taskError, t
           <div className="tab-panel" role="tabpanel" aria-label="位置约束" hidden={tab!=='positions'}><PositionLikelihoodEditor value={positionValue} context={positionContext} onChange={updatePositions} onReplacePrompt={() => updatePositions(positionValue, true)} manualPrompt={positionManual} promptPresent={!!generatedPositionPrompt && !positionManual} disabled={isBusy || action !== null||!!input.loading} toolbarTarget={tab==='positions'?viewerToolbarTarget:null} scale={imageScale} onScaleChange={setImageScale}/></div>
         </>}
         {tab === 'results' && stageId!=='preflight' && <div className="tab-panel" role="tabpanel" aria-label="结果预览">
-          {stageId === 'b' ? <LiveMaskEditor report={stageData.reports.summary} threadId={state.threadId??''} summary={stageData.summary} toolbarTarget={viewerToolbarTarget} scale={imageScale} onScaleChange={setImageScale} onPromptChange={updateMaskPrompt} disabled={isBusy||action!==null}/> : <ScienceViewer stageId={stageId} toolbarTarget={viewerToolbarTarget} missingLayers="—" displayPlanes={stageData.modelPlanes} modelResult={stageData.modelResult} imageScale={imageScale} onScaleChange={setImageScale}/>}
+          {stageId === 'b' ? <LiveMaskEditor source={stageData.mask} report={stageData.reports.summary ?? stageData.reports.published} threadId={state.threadId??''} summary={stageData.summary} toolbarTarget={viewerToolbarTarget} scale={imageScale} onScaleChange={setImageScale} onPromptChange={updateMaskPrompt} disabled={isBusy||action!==null}/> : <ScienceViewer stageId={stageId} toolbarTarget={viewerToolbarTarget} missingLayers="—" displayPlanes={stageData.modelPlanes} modelResult={stageData.modelResult} imageScale={imageScale} onScaleChange={setImageScale}/>}
         </div>}
         {tab === 'parameters' && <div className="tab-panel" role="tabpanel" aria-label="参数后验"><LiveStageData stage={selectedStage} data={stageData} view="parameters" onDetail={showParameter}/></div>}
         {tab === 'config' && <div className="tab-panel" role="tabpanel" aria-label="模型配置"><LiveStageData stage={selectedStage} data={stageData} view="config" onDetail={showParameter} connection={connectionNames[state.connection]}/></div>}
@@ -348,8 +349,8 @@ export default function AgentWorkspace({ task, tasks, deletedTasks, taskError, t
       {workspacePanel === 'trash' && <DeletedTaskList tasks={deletedTasks} onRestore={onRestoreTask}/>}
       {workspacePanel === 'manual' && <ParameterManual stages={stages} onSelect={(next, item) => { chooseStage(next.id); setParameterKey(item.key); setWorkspacePanel('parameter'); }}/> }
       {workspacePanel === 'parameter' && parameter && <ParameterDetail parameter={parameter} live/>}
-      {workspacePanel === 'history' && <div className="run-history branch-history">{historyAttempts.map(item => <div className="branch-entry" key={item.key}><button disabled={selectStageResults(state.updates,item.stage).identity?.key !== item.key} onClick={() => { chooseStage(item.stage as StageId); closePanel(); }}><span className="run-icon"><Layers3 size={19}/></span><div><strong>Stage {item.stage.toUpperCase()} · attempt {item.attempt}</strong><small className="branch-origin">{item.key.split('/').slice(-5, -3).join('/')}</small></div><ChevronRight size={16}/></button></div>)}</div>}
-      {workspacePanel === 'guide' && <div className="live-guide-copy"><p>使用与原型相同的 Stage 导航、页签、主题和对话分栏，展示当前任务已报告的科学结果。</p><p>当前展示已有诊断图、参数摘要、带权后验和 M0 证据扫描。缺少的产物先略过；图像及后验不使用合成样例补齐。</p><p>问题与审批位于右侧会话栏。修改意见作为普通消息交给 Pipeline AI，不直接调度科学阶段。</p><p>连接状态：{connectionNames[state.connection]}；{turnNames[state.status]}</p>{taskId && state.connection !== 'connected' && <button className="button secondary" onClick={() => void perform('connect')}>连接 Pipeline AI</button>}</div>}
+      {workspacePanel === 'history' && <div className="run-history branch-history">{historyAttempts.map(item => <div className="branch-entry" key={item.key}><button aria-current={stageData.reports.identity?.key === item.key ? 'true' : undefined} onClick={() => { chooseStage(item.stage as StageId, item.key); closePanel(); }}><span className="run-icon"><Layers3 size={19}/></span><div><strong>Stage {item.stage.toUpperCase()} · attempt {item.attempt}</strong><small className="branch-origin">{item.key.split('/').slice(-5, -3).join('/')}</small></div><ChevronRight size={16}/></button></div>)}</div>}
+      {workspacePanel === 'guide' && <div className="live-guide-copy"><p>使用与原型相同的 Stage 导航、页签、主题和对话分栏，展示当前任务已报告的科学结果。</p><p>当前展示数值图层、参数摘要、带权后验和 M0 证据扫描。缺少的产物先略过；图像及后验不使用合成样例补齐。</p><p>问题与审批位于右侧会话栏。修改意见作为普通消息交给 Pipeline AI，不直接调度科学阶段。</p><p>连接状态：{connectionNames[state.connection]}；{turnNames[state.status]}</p>{taskId && state.connection !== 'connected' && <button className="button secondary" onClick={() => void perform('connect')}>连接 Pipeline AI</button>}</div>}
       {showDesigns && <div className="agent-design-options">{designs.map(design => <button key={design.id} onClick={() => chooseDesign(design.id)}>{design.name}</button>)}</div>}
     </div></dialog>
     {copyNotice && <div className="agent-notice" role="status">{copyNotice}</div>}

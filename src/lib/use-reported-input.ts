@@ -4,9 +4,15 @@ import { inputMatchesReport, parseInputDisplay, selectInputReport, type InputDis
 import {renderInputDisplay} from './render-input';
 import { useAgentTaskId } from './agent-task-context';
 import { agentTaskUrl } from './live-tasks';
+import { fetchPublishedDisplay, isDisplayManifest } from './published-display';
 
 export async function fetchReportedInput(taskId: string, report: AgentUpdate, signal: AbortSignal) {
   if (!report.id) throw new Error('等待 AI 报告输入来源。');
+  if (isDisplayManifest(report)) {
+    const { input } = await fetchPublishedDisplay(taskId, report, signal);
+    if (!input) throw Error('预检清单缺少输入图层。');
+    return input;
+  }
   const url = agentTaskUrl(`/api/agent/input?updateId=${encodeURIComponent(report.id)}`, taskId);
   const response = await fetch(url, { signal });
   if (response.status === 503) throw new Error('无法连接 GPU 服务器，恢复连接后可刷新预览。');

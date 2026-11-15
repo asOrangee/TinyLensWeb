@@ -18,10 +18,14 @@ export type InputDisplay = {
   rendered_from?:'numeric-array';
 };
 
-const inputReportPath = /\/(?:input-provenance\.json|preflight\/(?:inspection\.json|preflight_[26]panel\.png))$/;
+const inputReportPath = /\/(?:input-provenance\.json|preflight\/(?:inspection\.json|preflight_[26]panel\.png|display-manifest\.json))$/;
 
 export function selectInputReport(updates: AgentUpdate[]) {
-  return updates.filter(update => update.id && update.kind === 'artifact' && update.stage?.trim().toLowerCase() === 'preflight' && update.path && inputReportPath.test(update.path)).at(-1);
+  const reports = updates.filter(update => update.id && update.kind === 'artifact'
+    && update.stage?.trim().toLowerCase() === 'preflight' && update.path && inputReportPath.test(update.path));
+  const latest = reports.at(-1);
+  const directory = latest?.path?.match(/^(.*\/preflight)\//)?.[1];
+  return (directory && reports.filter(update => update.path === directory + '/display-manifest.json').at(-1)) || latest;
 }
 
 export function inputMatchesReport(display: InputDisplay | undefined, report: AgentUpdate | undefined) {
@@ -30,7 +34,7 @@ export function inputMatchesReport(display: InputDisplay | undefined, report: Ag
 const png = (value: unknown): value is string => typeof value === 'string' && /^data:image\/png;base64,[a-zA-Z0-9+/]+=*$/.test(value);
 export function parseInputDisplay(value: unknown, report: AgentUpdate): InputDisplay {
   const data = value as InputDisplay;
-  if (!data || data.schema !== 'tinylens.input-display.v1' || !inputMatchesReport(data, report) || !data.source?.provenance_path?.endsWith('/input-provenance.json') || !/^[a-f0-9]{64}$/.test(data.source?.fits_sha256 ?? '') || !Number.isFinite(data.pixel_scale_arcsec) || data.pixel_scale_arcsec <= 0 || !Number.isFinite(data.log_a) || data.log_a <= 0 || !Number.isFinite(data.psf_sum) || data.x_direction !== 'increasing' || data.y_direction !== 'decreasing') throw new Error('FITS 预览与已报告的输入不匹配。');
+  if (!data || data.schema !== 'tinylens.input-display.v1' || !inputMatchesReport(data, report) || !/\/(?:input-provenance|display-manifest)\.json$/.test(data.source?.provenance_path ?? '') || !/^[a-f0-9]{64}$/.test(data.source?.fits_sha256 ?? '') || !Number.isFinite(data.pixel_scale_arcsec) || data.pixel_scale_arcsec <= 0 || !Number.isFinite(data.log_a) || data.log_a <= 0 || !Number.isFinite(data.psf_sum) || data.x_direction !== 'increasing' || data.y_direction !== 'decreasing') throw new Error('FITS 预览与已报告的输入不匹配。');
   if (!Array.isArray(data.planes) || data.planes.map(p => p.id).join() !== 'data,noise,snr,psf') throw new Error('FITS 四图预览不完整。');
   for (const plane of data.planes) {
     if (!Array.isArray(plane.shape) || plane.shape.length !== 2 || !plane.shape.every(n => Number.isInteger(n) && n > 0 && n <= 512) || !Number.isFinite(plane.half_extent_arcsec) || plane.half_extent_arcsec <= 0 || !Number.isFinite(plane.scale_bar_arcsec) || plane.scale_bar_arcsec <= 0) throw new Error('FITS 图像几何无效。');

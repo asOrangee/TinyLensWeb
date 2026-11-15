@@ -151,7 +151,7 @@ export function restoreThread(state, thread, turns = thread?.turns || []) {
 }
 export const reportTool = {
   type: 'function', name: 'tinylens_ui_report',
-  description: 'Optionally report verified stage status, an existing artifact path, or a note to the TinyLens interface. This tool only updates the UI. It does not run stages, interpret files, approve results, or change scientific decisions. Never equate command success with scientific acceptance. ' + QUESTION_FORMAT,
+  description: 'Optionally report verified stage status, an existing artifact path, or a note to the TinyLens interface. When a stage has published display-manifest.json, report its absolute path as an artifact for that stage. This tool only updates the UI. It does not run stages, interpret files, approve results, or change scientific decisions. Never equate command success with scientific acceptance. ' + QUESTION_FORMAT,
   inputSchema: { type: 'object', properties: {
     kind: { type: 'string', enum: ['stage', 'artifact', 'note'] }, stage: { type: 'string' }, status: { type: 'string' },
     title: { type: 'string' }, message: { type: 'string' }, path: { type: 'string' }

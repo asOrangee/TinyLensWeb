@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import warnings
 from inspect import signature
 from pathlib import Path
@@ -447,6 +448,16 @@ def _three_sigma_segmentation(data_bkgsub: np.ndarray, std: float) -> np.ndarray
 def build_inspection_packet(
     lens_dir: Path, output_dir: Path, *, geometry: InputGeometry | None = None
 ) -> Path:
+    directory = output_dir.resolve()
+    input_sha256 = None
+    if directory.name == "preflight" and (directory.parent / "run-manifest.json").is_file():
+        from ..workbench_display import file_sha256, publish_display
+
+        try:
+            frozen_input = lens_dir.resolve() / f"{lens_dir.resolve().name}.fits"
+            input_sha256 = file_sha256(frozen_input)
+        except OSError as error:
+            logging.getLogger(__name__).warning(f"Workbench input checksum unavailable: {error}")
     data = load_lens_data(lens_dir, geometry=geometry)
     input_geometry = InputGeometry(
         pixel_scale_arcsec=data.pixel_scale_arcsec,
@@ -494,6 +505,12 @@ def build_inspection_packet(
     }
     target = output_dir / "inspection.json"
     target.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    if input_sha256 is not None:
+        try:
+            publish_display(directory.parent, directory, "preflight", None, data,
+                            input_sha256=input_sha256)
+        except Exception as error:
+            logging.getLogger(__name__).warning(f"Workbench preflight export unavailable: {error}")
     return target
 
 

@@ -1,7 +1,7 @@
 import {numericalFixture} from './fixtures/numerical-plane.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { selectStageResults, parseLiveResult } from '../src/lib/live-results.ts';
+import { selectStageResults, stageDisplayCandidates, parseLiveResult } from '../src/lib/live-results.ts';
 import type { AgentUpdate } from '../src/lib/agent-types.ts';
 import { parseReportedPanels } from '../src/lib/reported-panels.ts';
 
@@ -44,9 +44,23 @@ test('changing run or attempt never mixes old posterior, summary or diagnostic i
   assert.deepEqual(selected.images.map(item => item.id), ['new-image']);
   updates.push(artifact('attempt1', 'run2', 1, 'effective-config.json'));
   const next = selectStageResults(updates, 'a');
-  assert.equal(next.identity?.attempt, 1);
-  assert.equal(next.summary, undefined);
-  assert.deepEqual(next.images, []);
+  assert.equal(next.identity?.attempt, 0);
+  assert.equal(next.summary?.id, 'new-json');
+  assert.deepEqual(next.images.map(item => item.id), ['new-image']);
+});
+test('a diagnostic-only attempt cannot replace the current numeric result in the same run', () => {
+  const original = artifact('original', 'run1', 0, 'stage-result.json', 'm3');
+  const originalSample = artifact('samples', 'run1', 0, 'artifacts/stage_m3.pkl', 'm3');
+  const png = artifact('png', 'run1', 1, 'diagnostics/stage_m3_model.png', 'm3');
+  const published = artifact('next', 'run1', 1, 'display-manifest.json', 'm3');
+  assert.equal(selectStageResults([original, originalSample, png], 'm3').summary?.id, 'original');
+  const candidates = stageDisplayCandidates([original, originalSample, published, png], 'm3');
+  assert.deepEqual(candidates.map(item => item.identity?.attempt), [1, 0]);
+  assert.equal(candidates[0].published?.id, 'next');
+  assert.equal(candidates[0].posterior, undefined);
+  assert.equal(stageDisplayCandidates([original, published], 'm3', candidates[1].identity?.key)[0].summary?.id, 'original');
+  const otherRun = artifact('other', 'run2', 0, 'display-manifest.json', 'm3');
+  assert.deepEqual(stageDisplayCandidates([original, published, otherRun], 'm3').map(item => item.published?.id), ['other']);
 });
 test('latest report of the same image replaces only that image and never infers stage from a filename', () => {
   const image = artifact('first', 'run1', 0, 'diagnostics/model.png');

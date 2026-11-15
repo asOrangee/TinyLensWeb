@@ -213,7 +213,7 @@ GPU Stage Command: /srv/TinyLensWeb/pipeline/scripts/run_lens_stage_on_idle_gpu.
 
 请先核验 input-provenance.json、原始图像和输入标定；本例为 0.05 arcsec/pixel，x 随列递增、y 随行递减，请核对后用于预检并冻结。按照现有工作流进行三名 Inspector、综合判断、A、B、M0、M1、M2、M3 及科学审查。不要修改 pipeline 源码、科学门槛或原始输入；保留已有结果，遇到待答问题或命令审批时等待我的真实选择。
 
-请用 tinylens_ui_report 明确报告阶段状态，并逐项报告 input-provenance.json、preflight/inspector.json、各阶段 stage-result.json 及存在的 PKL 产物。只有你核验正式接受头后才报告接受；没有的结果不要补造。
+请用 tinylens_ui_report 明确报告阶段状态。每个阶段发布 display-manifest.json 后，以 kind=artifact 和对应的 stage 报告它的绝对路径。旧运行可报告 input-provenance.json、preflight/inspector.json、各阶段 stage-result.json 和 PKL。科学接受由你核验正式接受头后明确报告。
 ```
 
 Stage A 的标准 runner 还需按工作流添加 `--timeout-seconds 1800`；由 AI/阶段专家按现有规则构造实际阶段命令，前端不拼装或调用科学 CLI。原科学角色在运行期间默认使用英文，若希望中文回复，可在普通消息中提出；Web 不覆盖其永久指令。
@@ -223,6 +223,14 @@ Stage A 的标准 runner 还需按工作流添加 `--timeout-seconds 1800`；由
 新建任务后，输入框位于欢迎页中央。发送首条消息后进入 Stage 工作台。任务可从当前浏览器的侧栏移入“已删除任务”，也可从该列表恢复。切换 Stage 时保留可用页签与当前任务的色阶，可选 Linear、Log、Asinh 和 Z。
 
 A、M0、M1、M2 和 M3 可用已报告的数值产物展示六幅诊断图。M3 使用同一 attempt 的 EPL＋外剪切结果提供双向平面联动、临界线和焦散线。参数页保留采样参数与线性求解量的卡片，M0 显示扫描选定值和相对对数证据曲线。
+
+#### 阶段展示文件
+
+同时更新前端工程和 GPU 主机上的 `pipeline/` 源码后，新预检和工作台支持的建模阶段会在本次预检目录或 attempt 目录下生成 `display.fits`，校验后发布 `display-manifest.json`。预检导出 Data、1σ RMS、SNR 和 PSF。Stage B 导出 Data、弧支持掩膜和有效域，展示掩膜的 1 表示纳入。A、M0–M3 导出六图已经得到的数值、独立源平面边界及可用的参考射线。像素化模型用该次求得的源像素做同一算子的全网格投影，并对照原拟合区保存的预测。参数文件记录带权后验或 M0 证据扫描。
+
+清单记录本次 run、Stage、attempt、输入哈希和实际用到的上游 attempt。预检命令会输出清单路径，建模命令的结果包含 `display_manifest`。桥接按 AI 报告读取固定路径、核对依赖和图层，网页从数值绘图。新 attempt 只有诊断文件或校验失败时，同次运行已有的数值结果继续可见。可通过分支历史打开先前 attempt。原始诊断图由后端审查使用，网页图像接口仅提供数值产物。
+
+已有会话继续支持原来的报告和缓存。旧 attempt 缺少可核验的依赖时，对应图位保留“—”。新清单只在新预检或阶段计算完成后的导出步骤生成。
 
 真实 B mask 编辑只保存本地草稿，并以普通用户输入交给 AI；不直接写回运行中的 FITS。重跑请求同样交给 AI，不能因点击界面或消息送达而视为执行、覆盖或接受完成。位置约束点选也不保证当前 pipeline 已将该约束应用于拟合。
 
@@ -255,7 +263,7 @@ CUDA_VISIBLE_DEVICES= JAX_PLATFORMS=cpu python -m pytest -q
 | 演示能打开，真实页连接失败 | 确认桥接 5184、SSH 别名、远程工作目录、Codex 程序和自己的登录 |
 | `python3`/`codex` 不存在 | 为 `.env.local` 填写服务器上的绝对程序路径；非交互 SSH 不一定加载 Conda/PATH |
 | 没有输入图像 | 核对输入封装及校验值。让 AI 显式报告 `input-provenance.json` 或同次预检记录；工作台从绑定的 FITS 数组绘图 |
-| 某阶段图位为空 | 核对同一会话是否已报告对应 summary/PKL、冻结依赖和输入；不要用演示图替代 |
+| 某阶段图位为空 | 核对同一会话是否报告了对应的展示清单，以及 FITS、阶段摘要和冻结依赖是否通过校验；旧运行可核对原 summary/PKL 报告 |
 | `YOUR_MODEL_ID` 错误 | 执行 `scripts/configure_agents.py`，同时核对主 Codex 配置及 provider 支持的模型 |
 | API 在交互 shell 可用，Web 不可用 | 检查 SSH 启动环境、私有 key 文件及包装器；不要把 key 放入 `VITE_*` |
 | `No idle unlocked GPU is available` | runner 正按现有门槛等待；不会自动放宽资源门槛或把查询错误当作空闲 |

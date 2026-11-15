@@ -46,6 +46,7 @@ from .morphology_audit import (
 )
 from .predicted_image_family import build_predicted_image_family
 from .source_grid import source_grid_spec, validate_source_grid_spec
+from .workbench_planes import capture_parametric, capture_pixelized
 
 
 OUT_DIR = Path("output")
@@ -810,6 +811,7 @@ def _parametric_planes(
         use_linear=True, return_intensity=True, ret_each_plane=True,
         image_map=likelihood.image_data, noise_map=likelihood.noise_map,
     )
+    capture_parametric(likelihood, result)
     return np.asarray(result[0]), np.asarray(result[1])
 
 
@@ -1466,6 +1468,7 @@ def _plot_pixel_stage(
     medians: dict[str, float],
     names: list[str],
     subhalo_marker: bool = False,
+    workbench_input: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> None:
     image = np.asarray(likelihood.image_data)
     mask = ~np.asarray(likelihood.unmask, dtype=bool)
@@ -1529,6 +1532,8 @@ def _plot_pixel_stage(
     # _solve_source has already exited its temporary parameter context.
     with ck.ActiveContext(likelihood):
         likelihood.fill_params(jnp.asarray([medians[name] for name in names]))
+        if workbench_input is not None:
+            capture_pixelized(likelihood, solved, source_extent, *workbench_input)
         overlay_critical_and_caustics(
             image_axes=[axes[0], axes[1]],
             source_ax=axes[3],
@@ -1699,6 +1704,7 @@ def run_stage_m0(
     _plot_pixel_stage(
         "Stage M0", likelihood, solved, DIAGNOSTICS_DIR / "stage_m0_model.png",
         source_grid, medians={"log_lambda_reg": best}, names=["log_lambda_reg"],
+        workbench_input=(image, lens_light_model),
     )
     _plot_source_grid_review(
         solved, source_grid, DIAGNOSTICS_DIR / "stage_m0_source_grid.png"
@@ -1753,6 +1759,7 @@ def run_stage_m1(
     _plot_pixel_stage(
         "Stage M1", likelihood, solved, DIAGNOSTICS_DIR / "stage_m1_model.png",
         source_grid, medians=medians, names=stage.param_names,
+        workbench_input=(image, lens_light_model),
     )
     return stage, medians, s1_package
 
@@ -1802,6 +1809,7 @@ def run_stage_m2(
     _plot_pixel_stage(
         "Stage M2", likelihood, solved, DIAGNOSTICS_DIR / "stage_m2_model.png",
         source_grid, medians=medians, names=stage.param_names,
+        workbench_input=(image, lens_light_model),
     )
     return stage, medians, reg
 
@@ -1848,5 +1856,6 @@ def run_stage_m3(
     _plot_pixel_stage(
         "Stage M3", likelihood, solved, DIAGNOSTICS_DIR / "stage_m3_model.png",
         source_grid, medians=medians, names=stage.param_names,
+        workbench_input=(image, lens_light_model),
     )
     return stage, medians

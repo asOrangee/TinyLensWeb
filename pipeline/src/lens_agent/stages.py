@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import logging
 import math
 import os
 import pickle
@@ -33,6 +34,7 @@ from .modeling.predicted_image_family import (
     validate_predicted_image_family,
 )
 from .models import STAGE_DEPENDENCY_ORDER, StageName
+from .workbench_display import MODEL_STAGES, capture_model_planes, file_sha256, publish_display
 
 
 def _load_packaged_pipeline() -> ModuleType:
@@ -703,6 +705,13 @@ def _execute_stage(
     )
     os.replace(execution_temporary, execution_path)
     started = time.monotonic()
+    input_sha256 = None
+    if stage.value in (*MODEL_STAGES, "b"):
+        try:
+            frozen_input = lens_dir.resolve() / f"{lens_dir.resolve().name}.fits"
+            input_sha256 = file_sha256(frozen_input)
+        except OSError as error:
+            logging.getLogger(__name__).warning(f"Workbench input checksum unavailable: {error}")
     result: dict[str, Any] = {
         "lens_id": lens_dir.resolve().name,
         "stage": stage.value,
@@ -753,7 +762,8 @@ def _execute_stage(
                         f"modeling mask shape {mask.shape} does not match "
                         f"image shape {data.image.shape}"
                     )
-                RUNNERS[stage](pipeline, data.image, data.noise, data.psf, mask)
+                with capture_model_planes() as display:
+                    RUNNERS[stage](pipeline, data.image, data.noise, data.psf, mask)
                 artifacts, metrics = _summarize(artifact_dir, diagnostics_dir, stage)
                 if stage == StageName.M0:
                     validate_source_grid_spec(
@@ -795,4 +805,16 @@ def _execute_stage(
         json.dumps(result, indent=2) + "\n", encoding="utf-8"
     )
     os.replace(result_temporary, result_path)
+    if result["status"] == "success" and input_sha256 is not None:
+        try:
+            posterior = None
+            if stage.value in MODEL_STAGES:
+                # This is the local attempt's own payload, also used by _summarize.
+                with (artifact_dir / f"stage_{stage.value}.pkl").open("rb") as handle:
+                    posterior = pickle.load(handle)
+            publish_display(output_dir, attempt_root, stage.value, attempt, data,
+                            upstream=upstream_dirs, capture=display, domain_mask=mask,
+                            result=result, posterior_payload=posterior, input_sha256=input_sha256)
+        except Exception as error:
+            logging.getLogger(__name__).warning(f"Workbench stage export unavailable: {error}")
     return result

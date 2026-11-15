@@ -1,7 +1,7 @@
 import http from 'node:http';
-import { serveReportedImage } from './agent-artifacts.mjs';
 import { serveReportedResult } from './agent-results.mjs';
 import { serveReportedInput } from './agent-inputs.mjs';
+import { serveReportedDisplay } from './agent-display.mjs';
 import { serveReportedModel } from './agent-models.mjs';
 import {serveReportedMask} from './agent-masks.mjs';
 import { spawn } from 'node:child_process';
@@ -398,14 +398,14 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
   async function routeRequest(request, response) {
     const path = request.url?.split('?')[0];
     if (request.method === 'GET' && path === '/api/agent/state') return json(response, 200, state);
-    if (request.method === 'GET' && path === '/api/agent/artifact') return serveReportedImage(request, response, state);
     if (request.method === 'GET' && path === '/api/agent/result') return serveReportedResult(request, response, state, { cacheDirectory: resolve(stateDirectory, 'result-cache') });
     if (request.method === 'GET' && path === '/api/agent/model') return serveReportedModel(request, response, state, {
       cacheDirectory: resolve(stateDirectory, 'model-cache'), resultCacheDirectory: resolve(stateDirectory, 'result-cache'), logger,
     });
     if (request.method === 'GET' && path === '/api/agent/mask') return serveReportedMask(request, response, state, { cacheDirectory: resolve(stateDirectory, 'mask-cache') });
+    if (request.method === 'GET' && path === '/api/agent/display') return serveReportedDisplay(request, response, state, { cacheDirectory: resolve(stateDirectory, 'display-cache') });
     if (request.method === 'GET' && path === '/api/agent/input') return serveReportedInput(request, response, state, { cacheDirectory: resolve(stateDirectory, 'input-cache') });
-    if (request.method === 'GET' && path === '/api/agent/panels') return json(response,410,{error:'Scientific image panels require numerical outputs.'});
+    if (request.method === 'GET' && ['/api/agent/artifact', '/api/agent/panels'].includes(path)) return json(response,410,{error:'Scientific image panels require numerical outputs.'});
     if (request.method === 'GET' && path === '/api/agent/events') {
       response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
       response.write(`event: state\ndata: ${JSON.stringify(state)}\n\n`); clients.add(response);
