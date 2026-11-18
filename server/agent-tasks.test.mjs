@@ -36,7 +36,7 @@ async function fixture(t) {
   const cached = {schema:'tinylens.readonly-result.v1',kind:'summary',stage:'a',attempt:0,path:saved.updates[1].path,sha256:'a'.repeat(64)};
   await storeReportedResult(saved,'legacy-summary',cached,{cacheDirectory:join(directory,'result-cache')});
   const processes = [];
-  const options = { stateDirectory: directory, rpcTimeoutMs: 1000, logger: { error() {} }, spawnProcess: () => {
+  const options = { stateDirectory: directory, rpcTimeoutMs: 1000, logger: { error() {} }, stageScopeLookup: async () => undefined, spawnProcess: () => {
     const proc = fakeProcess(`new-thread-${processes.length + 1}`); processes.push(proc); return proc;
   } };
   let bridge = await createAgentTaskServer(options);

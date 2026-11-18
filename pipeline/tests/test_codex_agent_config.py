@@ -116,7 +116,7 @@ def test_orchestrator_runs_three_inspections_then_text_only_synthesis() -> None:
     assert "rerun all three inspections and synthesis" in normalized
 
 
-def test_lens_run_agents_require_english_for_all_natural_language_outputs() -> None:
+def test_lens_run_agents_default_to_chinese_for_user_facing_output() -> None:
     repository_policy = (REPOSITORY_ROOT / "AGENTS.md").read_text(encoding="utf-8")
     orchestrator = (
         REPOSITORY_ROOT / ".codex" / "skills" / "lens-model-orchestrator" / "SKILL.md"
@@ -137,22 +137,16 @@ def test_lens_run_agents_require_english_for_all_natural_language_outputs() -> N
     )["developer_instructions"]
 
     normalized_policy = " ".join(repository_policy.split())
-    assert "During a Lens Run, use English only" in normalized_policy
-    assert "user-facing and inter-agent" in normalized_policy
-    assert "agent-generated natural-language fields" in normalized_policy
+    assert "Communicate with the user in clear Chinese" in normalized_policy
+    assert "internal delegation and structured scientific records" in normalized_policy
 
     normalized_orchestrator = " ".join(orchestrator.split())
-    assert "Use English only for every Lens Orchestrator message" in (
-        normalized_orchestrator
-    )
-    assert "delegation tasks, corrections, progress updates" in normalized_orchestrator
-    assert "final Markdown summary" in normalized_orchestrator
+    assert "Use clear Chinese by default in messages and reports shown to the user" in normalized_orchestrator
+    assert "Follow the user's explicit reply language preference" in normalized_orchestrator
 
     normalized_manual = " ".join(stage_expert_manual.split())
-    assert "Use concise scientific English for every Stage Expert message" in (
-        normalized_manual
-    )
-    assert "every agent-authored natural-language field" in normalized_manual
+    assert "Use clear Chinese by default for Stage Expert progress and explanations addressed to the user" in normalized_manual
+    assert "agent-authored natural-language fields in the strict JSON response" in normalized_manual
 
     normalized_inspector = " ".join(inspector.split())
     assert "Use concise scientific English for all agent-authored text" in (

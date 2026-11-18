@@ -2,6 +2,8 @@ import http from 'node:http';
 import { serveReportedResult } from './agent-results.mjs';
 import { serveReportedInput } from './agent-inputs.mjs';
 import { serveReportedDisplay } from './agent-display.mjs';
+import { readDisplayPublications, withDisplayPublications } from './display-publications.mjs';
+import { serveAcceptedDisplay } from './agent-accepted-stage.mjs';
 import { serveReportedModel } from './agent-models.mjs';
 import {serveReportedMask} from './agent-masks.mjs';
 import { spawn } from 'node:child_process';
@@ -15,6 +17,7 @@ import { prepareQuestionAnswer } from './agent-questions.mjs';
 import { initialState, receiveNotification, receiveReport, receiveRequest, validateReply, validateRequestScope,
   restoreThread, applyTurn, hasBlockingRequest, normalizeStage, disconnected, reportTool, WORKSPACE } from './agent-state.mjs';
 import { connectionConfig, appServerCommand } from './connection-config.mjs';
+import { readStageScope } from './stage-reports.mjs';
 const defaultDirectory = fileURLToPath(new URL('../.local/', import.meta.url));
 function unusedThread(state) {
   return state.status === 'idle' && !state.turnId && !state.lastTurnId && !state.remoteActive && !state.needsReconcile
@@ -38,15 +41,25 @@ async function allocatedProxyPort(stderr, localPort, timeoutMs) {
 }
 // Injection is solely for local protocol tests; the executable entry point uses SSH.
 export async function createAgentServer({ stateDirectory = defaultDirectory, spawnProcess = spawn, rpcTimeoutMs = 60000, logger = console,
-  aiNetwork = false, networkProxyFactory = createAiNetworkProxy, remoteProxyPort = connectionConfig.remoteProxyPort, datasetPath } = {}) {
+  aiNetwork = false, networkProxyFactory = createAiNetworkProxy, remoteProxyPort = connectionConfig.remoteProxyPort, datasetPath,
+  stageScopeLookup = readStageScope, approvalsReviewer = connectionConfig.approvalsReviewer } = {}) {
   if (!Number.isInteger(remoteProxyPort) || (remoteProxyPort !== 0 && remoteProxyPort < 1024) || remoteProxyPort > 65535) throw new Error('Invalid remote proxy port');
   const statePath = `${stateDirectory}/agent-state.json`;
   let saved;
   try { saved = JSON.parse(await readFile(statePath, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') logger.error('Previous UI state could not be read:', error.message); }
   const state = initialState(saved), clients = new Set(), pending = new Map();
+  const displayPublications = await readDisplayPublications(stateDirectory, logger);
+  const publicState = () => withDisplayPublications(state, displayPublications);
   if (typeof datasetPath === 'string') state.datasetPath = datasetPath;
+  const turnSettings = {
+    model: connectionConfig.model,
+    effort: connectionConfig.reasoningEffort,
+    serviceTier: connectionConfig.serviceTier,
+    approvalsReviewer,
+  };
   let transport, sequence = 0, connecting, changing = false, publishTimer, saveTimer, closed = false;
   let saveChain = Promise.resolve();
+  let reportChain = Promise.resolve();
   function persist() {
     const snapshot = JSON.stringify(state);
     const operation = saveChain.catch(() => {}).then(async () => {
@@ -61,7 +74,7 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
     if (closed) return;
     if (!publishTimer) publishTimer = setTimeout(() => {
       publishTimer = null;
-      const event = `event: state\ndata: ${JSON.stringify(state)}\n\n`;
+      const event = `event: state\ndata: ${JSON.stringify(publicState())}\n\n`;
       for (const client of clients) if (!client.destroyed) client.write(event);
     }, 100);
     if (!saveTimer) saveTimer = setTimeout(() => {
@@ -176,8 +189,16 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
         if (message.method === 'item/tool/call') {
           // A tool failure is acknowledged as such; it never grants permissions.
           try {
-            receiveReport(state, message.params);
-            await persist();
+            const recordReport = reportChain.then(async () => {
+              validateRequestScope(state, message.params);
+              if (message.params.tool !== reportTool.name || message.params.namespace != null || typeof message.params.callId !== 'string') throw Error('Unexpected report source');
+              if (state.updates.some(update => update.callId === message.params.callId && update.turnId === message.params.turnId)) return;
+              const scope = await stageScopeLookup(message.params.arguments, WORKSPACE);
+              receiveReport(state, message.params, scope);
+              await persist();
+            });
+            reportChain = recordReport.catch(() => {});
+            await recordReport;
             const isQuestion = message.params.arguments?.kind === 'note' && message.params.arguments?.status === 'awaiting_user';
             const acknowledgement = isQuestion
               ? 'Question displayed and persisted in the TinyLens webpage. This acknowledgement is not a user answer or approval. Stop actions that depend on the answer and wait for the user to respond in this thread through the webpage.'
@@ -269,14 +290,16 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
           await rpc('initialize', { clientInfo: { name: 'tinylens_frontend', title: 'TinyLens Workbench', version: '0.2.0' }, capabilities: { experimentalApi: true } });
           await send({ method: 'initialized' }, current); current.initialized = true;
         }
-        const permissions = { cwd: WORKSPACE, approvalPolicy: 'on-request', approvalsReviewer: 'user', sandbox: 'workspace-write' };
-        const startThread = () => rpc('thread/start', { ...permissions, ephemeral: false, dynamicTools: [reportTool] });
+        const { effort, ...sessionDefaults } = turnSettings;
+        const sessionSettings = { ...sessionDefaults, config: { model_reasoning_effort: effort },
+          cwd: WORKSPACE, approvalPolicy: 'on-request', sandbox: 'workspace-write' };
+        const startThread = () => rpc('thread/start', { ...sessionSettings, ephemeral: false, dynamicTools: [reportTool] });
         let result;
         let target = state;
         if (previousThreadId) {
           try {
             result = await rpc('thread/resume', { threadId: previousThreadId, excludeTurns: true,
-              initialTurnsPage: { limit: 30, sortDirection: 'desc', itemsView: 'full' }, ...permissions });
+              initialTurnsPage: { limit: 30, sortDirection: 'desc', itemsView: 'full' }, ...sessionSettings });
           } catch (error) {
             // A thread opened before the first turn can disappear when its app-server exits.
             if (!wasUnused || transport !== current || error.rpcCode !== -32600
@@ -306,12 +329,22 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
     if (changing) throw new Error('Another message is being submitted');
     if (hasBlockingRequest(state)) throw new Error('Answer the pending AI request first');
     if (state.remoteActive && !state.turnId) throw new Error('The existing AI turn is still active; its turn id has not been recovered');
-    if (!data || typeof data !== 'object' || Array.isArray(data) || Object.keys(data).some(key => !['text', 'stage'].includes(key))) throw new Error('Messages only accept text and an optional stage; AI configuration cannot be set from the webpage');
+    if (!data || typeof data !== 'object' || Array.isArray(data) || Object.keys(data).some(key => !['text', 'stage', 'expectedTurnId'].includes(key))) throw new Error('Messages only accept text, an optional stage, and an optional expected turn ID');
     if (typeof data?.text !== 'string' || !data.text.trim() || data.text.length > 30000) throw new Error('Message must contain 1–30000 characters');
     // Validate legacy metadata without inserting it into the user's message.
     if (data.stage !== undefined) normalizeStage(data.stage);
+    const { expectedTurnId, text } = data;
+    const threadId = state.threadId;
+    function verifySteeringTurn() {
+      if (expectedTurnId === undefined) return;
+      if (typeof expectedTurnId !== 'string' || !expectedTurnId || state.turnId !== expectedTurnId || state.threadId !== threadId
+          || state.connection !== 'connected' || state.needsReconcile) {
+        throw new Error('当前 AI 回合已结束、切换或断开。引导消息未发送。');
+      }
+      if (hasBlockingRequest(state)) throw new Error('Answer the pending AI request first');
+    }
+    verifySteeringTurn();
     changing = true;
-    const text = data.text;
     const input = [{ type: 'text', text }];
     const userMessage = { id: randomUUID(), role: 'user', text, delivery: 'pending', at: new Date().toISOString() };
     if (question) { userMessage.questionId = question.id; question.answerMessageId = userMessage.id; }
@@ -319,10 +352,13 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
     try {
       state.messages.push(userMessage); publish();
       // Wait for the durable journal before dispatch; never automatically resend an unknown delivery.
-      await persist(); sent = true;
-      const result = state.turnId
-        ? await rpc('turn/steer', { threadId: state.threadId, expectedTurnId: state.turnId, input, clientUserMessageId: userMessage.id })
-        : await rpc('turn/start', { threadId: state.threadId, input, clientUserMessageId: userMessage.id });
+      await persist();
+      verifySteeringTurn();
+      sent = true;
+      const turnId = expectedTurnId ?? state.turnId;
+      const result = turnId
+        ? await rpc('turn/steer', { threadId: state.threadId, expectedTurnId: turnId, input, clientUserMessageId: userMessage.id })
+        : await rpc('turn/start', { threadId: state.threadId, input, clientUserMessageId: userMessage.id, ...turnSettings });
       userMessage.delivery = 'delivered';
       state.error = null;
       if (result.turn) applyTurn(state, result.turn);
@@ -397,18 +433,19 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
   // The task router also calls this handler, after applying its own local-origin guard.
   async function routeRequest(request, response) {
     const path = request.url?.split('?')[0];
-    if (request.method === 'GET' && path === '/api/agent/state') return json(response, 200, state);
+    if (request.method === 'GET' && path === '/api/agent/state') return json(response, 200, publicState());
     if (request.method === 'GET' && path === '/api/agent/result') return serveReportedResult(request, response, state, { cacheDirectory: resolve(stateDirectory, 'result-cache') });
     if (request.method === 'GET' && path === '/api/agent/model') return serveReportedModel(request, response, state, {
       cacheDirectory: resolve(stateDirectory, 'model-cache'), resultCacheDirectory: resolve(stateDirectory, 'result-cache'), logger,
     });
     if (request.method === 'GET' && path === '/api/agent/mask') return serveReportedMask(request, response, state, { cacheDirectory: resolve(stateDirectory, 'mask-cache') });
-    if (request.method === 'GET' && path === '/api/agent/display') return serveReportedDisplay(request, response, state, { cacheDirectory: resolve(stateDirectory, 'display-cache') });
+    if (request.method === 'GET' && path === '/api/agent/display') return serveReportedDisplay(request, response, publicState(), { cacheDirectory: resolve(stateDirectory, 'display-cache') });
+    if (request.method === 'GET' && path === '/api/agent/accepted-stage') return serveAcceptedDisplay(request, response, state, { cacheDirectory: resolve(stateDirectory, 'model-cache') });
     if (request.method === 'GET' && path === '/api/agent/input') return serveReportedInput(request, response, state, { cacheDirectory: resolve(stateDirectory, 'input-cache') });
     if (request.method === 'GET' && ['/api/agent/artifact', '/api/agent/panels'].includes(path)) return json(response,410,{error:'Scientific image panels require numerical outputs.'});
     if (request.method === 'GET' && path === '/api/agent/events') {
       response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
-      response.write(`event: state\ndata: ${JSON.stringify(state)}\n\n`); clients.add(response);
+      response.write(`event: state\ndata: ${JSON.stringify(publicState())}\n\n`); clients.add(response);
       const heartbeat = setInterval(() => { if (!response.destroyed) response.write(': heartbeat\n\n'); }, 15000);
       response.on('close', () => { clients.delete(response); clearInterval(heartbeat); }); return;
     }
@@ -421,7 +458,7 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
       else if (path === '/api/agent/interrupt') await interrupt();
       else if (path === '/api/agent/reply') await reply(data);
       else return json(response, 404, { error: 'Not found' });
-      json(response, 200, state);
+      json(response, 200, publicState());
     } catch (error) { json(response, 400, { error: error.message }); }
   }
   const server = http.createServer((request, response) => {

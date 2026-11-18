@@ -1,25 +1,26 @@
 import type { AgentConnection, AgentState, AgentUpdate } from './agent-types';
 import type { StageId } from '../data/stages';
+import { activeRun, attemptStatus, currentStageAttempt, stageAttempts, workbenchStage } from './stage-attempts.ts';
 
-export type StageIndicatorState = 'pending' | 'completed' | 'running' | 'blocked' | 'failed';
+export type StageIndicatorState = 'pending' | 'completed' | 'running' | 'review' | 'blocked' | 'failed';
 export type StageIndicator = { state: StageIndicatorState; report?: AgentUpdate; waitingForUser: boolean };
 const stageIds: StageId[] = ['preflight', 'a', 'b', 'm0', 'm1', 'm2', 'm3'];
-const running = new Set(['running', 'preparing', 'reviewing', 'retrying']);
+const running = new Set(['running', 'preparing', 'retrying']);
+const review = new Set(['awaiting_review', 'reviewing']);
 const blocked = new Set(['blocked', 'preparation_blocked', 'awaiting_user', 'awaiting_input', 'awaiting_approval', 'waiting', 'human_review', 'awaiting_review', 'queued', 'paused', 'interrupted']);
 const completed = new Set(['accepted', 'completed', 'complete']);
 const failed = new Set(['failed', 'error', 'rejected']);
 const normalizedStatus = (status?: string) => status?.trim().toLowerCase() ?? '';
 
 export function indicatorStage(value?: string): StageId | undefined {
-  const id = value?.trim().toLowerCase().replace(/^stage[\s_-]+/, '');
-  if (id === 'p') return 'preflight';
-  return stageIds.includes(id as StageId) ? id as StageId : undefined;
+  return workbenchStage(value);
 }
 
 export function reportedStageIndicator(status?: string): StageIndicatorState {
   const value = normalizedStatus(status);
   if (completed.has(value)) return 'completed';
   if (failed.has(value)) return 'failed';
+  if (review.has(attemptStatus(value))) return 'review';
   if (blocked.has(value)) return 'blocked';
   if (running.has(value)) return 'running';
   // Preparation, execution success and artifacts do not establish stage completion.
@@ -27,17 +28,25 @@ export function reportedStageIndicator(status?: string): StageIndicatorState {
 }
 
 export function stageIndicators(state: Pick<AgentState, 'threadId' | 'updates' | 'questions' | 'requests'>): Map<StageId, StageIndicator> {
+  const reports = state.updates.filter(update => !update.threadId || update.threadId === state.threadId);
+  const attempts = stageAttempts(reports);
   const latest = new Map<StageId, AgentUpdate>();
-  for (const report of state.updates) {
+  for (const report of reports) {
     const stage = indicatorStage(report.stage);
     if (report.kind === 'stage' && stage) latest.set(stage, report);
+  }
+  if (activeRun(attempts)?.runId) {
+    for (const stage of stageIds) {
+      const report = currentStageAttempt(attempts, stage)?.report;
+      if (report) latest.set(stage, report); else latest.delete(stage);
+    }
   }
   const waiting = new Set<StageId>();
   function waitForTurn(turnId?: string) {
     if (!turnId) return;
     // Only a unique active stage in this verified turn can own an unlabelled request.
     const candidates = [...latest].filter(([, report]) => report.turnId === turnId &&
-      (running.has(normalizedStatus(report.status)) || blocked.has(normalizedStatus(report.status)) || normalizedStatus(report.status) === 'prepared'));
+      (running.has(normalizedStatus(report.status)) || review.has(attemptStatus(report.status)) || blocked.has(normalizedStatus(report.status)) || normalizedStatus(report.status) === 'prepared'));
     if (candidates.length === 1) waiting.add(candidates[0][0]);
   }
   for (const question of state.questions) {

@@ -47,4 +47,9 @@ test('explicit fixed metadata wins over a carried median or quantile field',()=>
  const mixed=structuredClone(summary);mixed.result!.metrics={posterior_quantiles:{theta_E:{q16:1,q50:2,q84:3}}};
  const posterior={fixed_parameters:{theta_E:1.4}} as LiveResult;const fixed=liveParameters(stage,mixed,posterior).find(p=>p.key==='theta_E')!;
  assert.equal(fixed.role,'fixed');assert.equal(fixed.rawValue,'1.4');assert.equal(fixed.quantiles,undefined);assert.equal(fixed.interval,undefined);
+ const named:LiveResult={...mixed,parameter_contract:'tinylens.stage-parameters.v1',fixed_parameters:{theta_E:1.6}};
+ const fromNamed=liveParameters(stage,named,posterior).find(p=>p.key==='theta_E')!;
+ assert.equal(fromNamed.rawValue,'1.6');assert.equal(fromNamed.quantiles,undefined);
+ const missing:LiveResult={...named,result:{...named.result!,metrics:{}},fixed_parameters:undefined,config:undefined};
+ assert.equal(liveParameters(stage,missing,posterior).find(p=>p.key==='theta_E')!.value,'—');
 });

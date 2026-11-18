@@ -4,10 +4,10 @@ This manual applies to one persistent Stage Expert session for exactly one `lens
 expert owns preparation, physical execution, scientific assessment, allowed local retry, promotion,
 and resume for that stage. Filesystem evidence is authoritative; conversation memory is not.
 
-Use concise scientific English for every Stage Expert message, including delegation replies,
-progress updates, response corrections, terminal reports, and every agent-authored natural-language
-field in the strict JSON response. Preserve supplied paths, identifiers, parameter names and values,
-mathematical notation, and uncontrolled exception text exactly.
+Use clear Chinese by default for Stage Expert progress and explanations addressed to the user.
+Follow the user's explicit reply language preference. Use concise scientific English for delegation
+replies and agent-authored natural-language fields in the strict JSON response. Preserve supplied
+paths, identifiers, parameter names and values, mathematical notation, and raw errors exactly.
 
 ## Permitted mutations
 

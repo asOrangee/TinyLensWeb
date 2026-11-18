@@ -24,7 +24,7 @@ import BlankTaskWorkspace from './BlankTaskWorkspace';
 import { agentTaskUrl, defaultLiveTaskId, liveTaskPreferenceKey, type LiveTask } from '../lib/live-tasks';
 import { catalogParameters } from '../lib/parameter-catalog';
 import { ParameterDetail } from './ParameterTable';
-import { isNumericalStageReport, resultIdentity } from '../lib/live-results';
+import { attemptStatus, stageAttempts, type StageAttempt } from '../lib/stage-attempts';
 import { useDemoI18n } from '../lib/demo-i18n';
 import { stageNavigationTitle, supportsStageTab, workbenchStageCopy, type StageTab } from '../lib/stage-navigation';
 import { emptyPositionDraft, mergePositionPrompt, positionError, positionPrompt, validStoredPositionDraft, type PositionContext, type PositionDraft } from '../lib/position-likelihood';
@@ -33,7 +33,7 @@ import './live-workbench.css';
 
 const connectionNames = { disconnected: '尚未连接', connecting: '正在连接', connected: 'AI 已连接', error: '连接异常' };
 const turnNames = { idle: '等待你的指令', running: 'AI 正在处理', waiting: '等待你的答复', completed: 'AI 回合已结束', failed: 'AI 回合异常', interrupted: 'AI 回合已中断' };
-const stageNames: Record<string, string> = { pending: '等待', not_started: '尚未开始', running: '运行中', preparing: '准备中', prepared: '准备完成', awaiting_review: '等待审查', reviewing: '审查中', accepted: '已接受', completed: '已完成', complete: '已完成', success: '执行成功', failed: '失败', human_review: '需要人工判断', retry: '重试', interrupted: '已中断', blocked: '受阻', preparation_blocked: '准备受阻', paused: '已暂停', queued: '等待资源', awaiting_user: '等待你的答复', awaiting_input: '等待你的答复', awaiting_approval: '等待批准', waiting: '等待你的答复', retrying: '正在重试', error: '失败', rejected: '未通过审查' };
+const stageNames: Record<string, string> = { pending: '等待', not_started: '尚未开始', running: '运行中', preparing: '准备中', prepared: '准备完成', awaiting_review: '等待审查', reviewing: '审查中', accepted: '已接受', executed: '执行完成', failed: '失败', human_review: '需要人工判断', retry: '重试', interrupted: '已中断', blocked: '受阻', preparation_blocked: '准备受阻', paused: '已暂停', queued: '等待资源', awaiting_user: '等待你的答复', awaiting_input: '等待你的答复', awaiting_approval: '等待批准', waiting: '等待你的答复', retrying: '正在重试', rejected: '未通过审查' };
 const hiddenReasoning = (kind: string | undefined) => /reasoning|chain.?of.?thought|(^|[\s_/-])analysis([\s_/-]|$)/i.test(kind ?? '');
 const normalStage = (value?: string) => {
   const stage = value?.trim().toLowerCase().replace(/^stage[\s_-]+/, '');
@@ -58,7 +58,7 @@ function readPreferences(taskId?: string): { stageId: StageId; draft?: string; p
   return { stageId: 'preflight' };
 }
 const reportKey = (update: AgentUpdate, index: number) => update.id ?? `${index}-${update.kind}-${update.path ?? update.title ?? ''}`;
-const stageLabel = (update?: AgentUpdate) => update ? stageNames[update.status ?? ''] ?? update.status ?? 'AI 已报告' : 'AI 尚未报告';
+const stageLabel = (update?: AgentUpdate) => update ? stageNames[attemptStatus(update.status)] ?? update.status ?? 'AI 已报告' : 'AI 尚未报告';
 const reportTime = (time?: string) => time && Number.isFinite(Date.parse(time)) ? new Date(time).toLocaleString('zh-CN', { hour12: false }) : time;
 
 
@@ -117,10 +117,14 @@ export default function AgentWorkspace({ task, tasks, deletedTasks, taskError, t
   const [copyNotice, setCopyNotice] = useState('');
   const selectedStage = stages.find(stage => stage.id === stageId)!;
   const [historyAttempt, setHistoryAttempt] = useState<string>();
-  const stageData = useLiveStageData(selectedStage, state.updates, historyAttempt);
-  const parameter = stageData.parameters.find(item => item.key === parameterKey)??catalogParameters(selectedStage).find(item=>item.key===parameterKey);
+  const resultReports = state.updates.filter(update => !update.threadId || update.threadId === state.threadId);
+  const attempts = stageAttempts(resultReports);
+  const stageData = useLiveStageData(selectedStage, resultReports, historyAttempt);
+  const viewed = attempts.find(item => item.identity.key === stageData.reports.identity?.key);
+  const parameter = stageData.parameterDetails.find(item => item.key === parameterKey)??catalogParameters(selectedStage).find(item=>item.key===parameterKey);
   const showParameter = (item: Parameter) => { setParameterKey(item.key); setWorkspacePanel('parameter'); };
-  const input=useReportedInput(state.updates,stageId==='preflight');
+  const input = useReportedInput(resultReports, stageId === 'preflight', historyAttempt ?? (viewed?.identity.runId ? viewed.identity.key : undefined),
+    stageId === 'preflight' ? stageData.reports.published : undefined, stageData.reports.legacyReadable);
   const [imageScale,setImageScale]=useImageScale('live',taskId===defaultLiveTaskId?undefined:taskId??null);
   function updateMaskPrompt(next:string){draftTouched.current=true;setDraft(previous=>mergeMaskPrompt(previous,generatedMaskPrompt,next));setGeneratedMaskPrompt(next);}
   const inputContext=inputPositionContext(input.display,input.report,state.datasetPath,imageScale);
@@ -138,6 +142,7 @@ export default function AgentWorkspace({ task, tasks, deletedTasks, taskError, t
     if (!merged.manual) setGeneratedPositionPrompt(prompt);
   }
   const isBusy = state.status === 'running' || state.status === 'waiting';
+  const steerTurnId = state.connection === 'connected' && state.status === 'running' ? state.turnId : null;
   const showTaskWelcome = !!taskId && taskId !== defaultLiveTaskId && !task?.lastConversationAt
     && state.messages.length === 0 && state.updates.length === 0 && state.questions.length === 0 && state.requests.length === 0;
   const blankWorkspace = !taskId || showTaskWelcome;
@@ -233,12 +238,13 @@ export default function AgentWorkspace({ task, tasks, deletedTasks, taskError, t
 
   async function sendMessage() {
     const text = draft;
-    if (!preferenceKey || !text.trim() || !stateReady || state.connection !== 'connected' && !canInitialize || action || messageSending.current || isBusy) return;
+    if (!preferenceKey || !text.trim() || !stateReady || state.connection !== 'connected' && !canInitialize
+        || action || messageSending.current || (isBusy && !steerTurnId)) return;
     pinConversation.current = true;
     messageSending.current = true;
     try {
       if (state.connection !== 'connected' && !await perform('connect')) return;
-      const sent = await perform('message', { text });
+      const sent = await perform('message', steerTurnId ? { text, expectedTurnId: steerTurnId } : { text });
       if (sent) {
         // A user can navigate away while delivery is in flight. Clear only the
         // confirmed message's matching saved draft, even if this view unmounted.
@@ -301,7 +307,13 @@ export default function AgentWorkspace({ task, tasks, deletedTasks, taskError, t
   function addPrompt(text: string) { draftTouched.current = true; setDraft(previous => previous.trim() ? `${previous}\n\n${text}` : text); composer.current?.focus(); }
   async function copyPath(path: string) { try { await navigator.clipboard.writeText(path); setCopyNotice('已复制 AI 报告的文件路径。'); } catch { setCopyNotice('无法访问剪贴板，请选中文件路径复制。'); } }
 
-  const historyAttempts = [...new Map(state.updates.filter(isNumericalStageReport).map(update => { const identity = resultIdentity(update); return identity&&identity.attempt!==null ? [identity.key, identity] as const : null; }).filter((item): item is NonNullable<typeof item> => !!item)).values()];
+  const historyAttempts = attempts.slice().reverse();
+  function versionLabel(item: StageAttempt) {
+    const { identity, status, archived } = item;
+    const label = identity.attempt === null ? t('数据预览') : `attempt ${identity.attempt}`;
+    const runLabel = identity.runId?.slice(0, 8) ?? identity.runPath.split('/').slice(-2).join('/');
+    return [label, status && t(stageNames[status] ?? status), archived && t('已归档'), runLabel].filter(Boolean).join(' · ');
+  }
   const displayTitle = (id: StageId) => t(workbenchStageCopy[id]?.title ?? stages.find(stage => stage.id === id)!.title);
   const indicators = stageIndicators(state);
   const closePanel = () => { setShowDesigns(false); setWorkspacePanel(null); };
@@ -313,9 +325,9 @@ export default function AgentWorkspace({ task, tasks, deletedTasks, taskError, t
     </button>}
     messages={messages} value={draft} onChange={text => { draftTouched.current = true; setDraft(text); }}
     onSubmit={() => void sendMessage()} textareaId="pipeline-message" inputRef={composer}
-    disabled={!stateReady || state.connection !== 'connected' && !canInitialize || action !== null} busy={isBusy}
+    disabled={!stateReady || state.connection !== 'connected' && !canInitialize || action !== null} busy={isBusy} steerAvailable={!!steerTurnId}
     error={localError ?? state.error ?? (taskError || null) ?? (storageUnavailable ? '草稿暂存在页面内' : '')}
-    interruptAvailable={isBusy} onInterrupt={() => perform('interrupt')} attentionCount={openQuestions.length + state.requests.length}
+    interruptAvailable={!!state.turnId} onInterrupt={() => perform('interrupt')} attentionCount={openQuestions.length + state.requests.length}
     attention={(openQuestions.length > 0 || state.requests.length > 0) && <section id="agent-pending-questions" className="agent-question-deck live-attention-deck" aria-label="等待你的决定">
       {openQuestions.map(question => <QuestionCard key={`${question.threadId}:${question.id}`} question={question} connected={state.connection === 'connected'} busy={action !== null || answerLocks.current.has(questionKey(question.id))} onAnswer={answer => answerQuestion(question.id, answer)}/>)}
       {state.requests.map(request => <RequestCard key={`${state.threadId}:${typeof request.id}:${request.id}`} request={request} busy={action !== null || state.connection !== 'connected'} reply={result => perform('reply', { requestId: request.id, result })}/>)}
@@ -336,7 +348,7 @@ export default function AgentWorkspace({ task, tasks, deletedTasks, taskError, t
           <div className="tab-panel" role="tabpanel" aria-label="位置约束" hidden={tab!=='positions'}><PositionLikelihoodEditor value={positionValue} context={positionContext} onChange={updatePositions} onReplacePrompt={() => updatePositions(positionValue, true)} manualPrompt={positionManual} promptPresent={!!generatedPositionPrompt && !positionManual} disabled={isBusy || action !== null||!!input.loading} toolbarTarget={tab==='positions'?viewerToolbarTarget:null} scale={imageScale} onScaleChange={setImageScale}/></div>
         </>}
         {tab === 'results' && stageId!=='preflight' && <div className="tab-panel" role="tabpanel" aria-label="结果预览">
-          {stageId === 'b' ? <LiveMaskEditor source={stageData.mask} report={stageData.reports.summary ?? stageData.reports.published} threadId={state.threadId??''} summary={stageData.summary} toolbarTarget={viewerToolbarTarget} scale={imageScale} onScaleChange={setImageScale} onPromptChange={updateMaskPrompt} disabled={isBusy||action!==null}/> : <ScienceViewer stageId={stageId} toolbarTarget={viewerToolbarTarget} missingLayers="—" displayPlanes={stageData.modelPlanes} modelResult={stageData.modelResult} imageScale={imageScale} onScaleChange={setImageScale}/>}
+          {stageId === 'b' ? <LiveMaskEditor source={stageData.mask} report={stageData.maskReport} threadId={state.threadId??''} summary={stageData.summary} toolbarTarget={viewerToolbarTarget} scale={imageScale} onScaleChange={setImageScale} onPromptChange={updateMaskPrompt} disabled={isBusy||action!==null||viewed?.archived===true}/> : <ScienceViewer stageId={stageId} toolbarTarget={viewerToolbarTarget} missingLayers="—" displayPlanes={stageData.modelPlanes} modelResult={stageData.modelResult} imageScale={imageScale} onScaleChange={setImageScale}/>}
         </div>}
         {tab === 'parameters' && <div className="tab-panel" role="tabpanel" aria-label="参数后验"><LiveStageData stage={selectedStage} data={stageData} view="parameters" onDetail={showParameter}/></div>}
         {tab === 'config' && <div className="tab-panel" role="tabpanel" aria-label="模型配置"><LiveStageData stage={selectedStage} data={stageData} view="config" onDetail={showParameter} connection={connectionNames[state.connection]}/></div>}
@@ -349,7 +361,7 @@ export default function AgentWorkspace({ task, tasks, deletedTasks, taskError, t
       {workspacePanel === 'trash' && <DeletedTaskList tasks={deletedTasks} onRestore={onRestoreTask}/>}
       {workspacePanel === 'manual' && <ParameterManual stages={stages} onSelect={(next, item) => { chooseStage(next.id); setParameterKey(item.key); setWorkspacePanel('parameter'); }}/> }
       {workspacePanel === 'parameter' && parameter && <ParameterDetail parameter={parameter} live/>}
-      {workspacePanel === 'history' && <div className="run-history branch-history">{historyAttempts.map(item => <div className="branch-entry" key={item.key}><button aria-current={stageData.reports.identity?.key === item.key ? 'true' : undefined} onClick={() => { chooseStage(item.stage as StageId, item.key); closePanel(); }}><span className="run-icon"><Layers3 size={19}/></span><div><strong>Stage {item.stage.toUpperCase()} · attempt {item.attempt}</strong><small className="branch-origin">{item.key.split('/').slice(-5, -3).join('/')}</small></div><ChevronRight size={16}/></button></div>)}</div>}
+      {workspacePanel === 'history' && <div className="run-history branch-history">{historyAttempts.map(item => <div className="branch-entry" key={item.identity.key}><button aria-current={viewed?.identity.key === item.identity.key ? 'true' : undefined} onClick={() => { chooseStage(item.identity.stage, item.identity.key); closePanel(); }}><span className="run-icon"><Layers3 size={19}/></span><div><strong>{stageNavigationTitle(stages.find(stage => stage.id === item.identity.stage)!)} · {versionLabel(item)}</strong><small className="branch-origin">{item.identity.runPath.split('/').slice(-2).join('/')}</small></div><ChevronRight size={16}/></button></div>)}</div>}
       {workspacePanel === 'guide' && <div className="live-guide-copy"><p>使用与原型相同的 Stage 导航、页签、主题和对话分栏，展示当前任务已报告的科学结果。</p><p>当前展示数值图层、参数摘要、带权后验和 M0 证据扫描。缺少的产物先略过；图像及后验不使用合成样例补齐。</p><p>问题与审批位于右侧会话栏。修改意见作为普通消息交给 Pipeline AI，不直接调度科学阶段。</p><p>连接状态：{connectionNames[state.connection]}；{turnNames[state.status]}</p>{taskId && state.connection !== 'connected' && <button className="button secondary" onClick={() => void perform('connect')}>连接 Pipeline AI</button>}</div>}
       {showDesigns && <div className="agent-design-options">{designs.map(design => <button key={design.id} onClick={() => chooseDesign(design.id)}>{design.name}</button>)}</div>}
     </div></dialog>
@@ -536,7 +548,7 @@ function ActivityCard({ activity }: { activity: AgentActivity }) {
 }
 
 function ReportCard({ update, copyPath }: { update: AgentUpdate; copyPath: (path: string) => void }) {
-  return <article className={`agent-report report-${update.kind}`}><div><span>{update.kind === 'artifact' ? '产物引用' : update.kind === 'stage' ? `阶段 ${update.stage ?? ''}` : 'AI 说明'}</span>{update.status && <small>{stageNames[update.status] ?? update.status}</small>}</div>{update.title && <h3>{update.title}</h3>}{update.message && <p>{update.message}</p>}{update.at && <time dateTime={update.at}>{reportTime(update.at)}</time>}{update.path && <><code className="agent-path">{update.path}</code><button onClick={() => copyPath(update.path!)}>复制 AI 提供的路径</button></>}</article>;
+  return <article className={`agent-report report-${update.kind}`}><div><span>{update.kind === 'artifact' ? '产物引用' : update.kind === 'stage' ? `阶段 ${update.stage ?? ''}` : 'AI 说明'}</span>{update.status && <small>{stageLabel(update)}</small>}</div>{update.title && <h3>{update.title}</h3>}{update.message && <p>{update.message}</p>}{update.at && <time dateTime={update.at}>{reportTime(update.at)}</time>}{update.path && <><code className="agent-path">{update.path}</code><button onClick={() => copyPath(update.path!)}>复制 AI 提供的路径</button></>}</article>;
 }
 
 type InputQuestion = { id: string; header: string; question: string; options: { label: string; description: string }[] };

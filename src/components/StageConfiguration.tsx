@@ -11,7 +11,7 @@ import './model-configuration.css';
 const optimizationGroups = [
   { role: 'sampled', label: '采样' },
   { role: 'scan', label: '网格扫描' },
-  { role: 'linear', label: '线性采样' },
+  { role: 'linear', label: '线性求解' },
   { role: 'fixed', label: '固定' },
 ] as const;
 

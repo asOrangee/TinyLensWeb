@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { initialState, applyTurn, receiveReport, receiveNotification, restoreThread } from './agent-state.mjs';
 import { parseQuestionReport, prepareQuestionAnswer } from './agent-questions.mjs';
 import { createAgentServer } from './agent-server.mjs';
+import { connectionConfig } from './connection-config.mjs';
 const envelope = (patch = {}) => ({ tinylens_ui_question: 1, id: 'input-decision', question: 'Which input treatment do you choose?', context: 'The AI is waiting for a user decision.', options: [{ id: 'first', label: 'First option', description: 'Description supplied by AI' }, { id: 'second', label: 'Second option' }], ...patch });
 const questionReport = (patch = {}, outer = {}) => ({ kind: 'note', status: 'awaiting_user', title: 'Input decision', stage: 'preparation', message: JSON.stringify(envelope(patch)), ...outer });
 const params = (patch = {}, outer = {}) => ({ threadId: 'thread-1', turnId: 'turn-1', callId: 'question-call', tool: 'tinylens_ui_report', arguments: questionReport(patch, outer) });
@@ -157,15 +158,18 @@ test('active-turn answers use steer, and pending native approvals cannot be bypa
   assert.equal(steer.params.threadId, 'thread-1'); assert.equal(proc.sent.some(message => message.method === 'turn/start'), false);
 });
 
-test('start and resume never inject instruction or configuration overrides or start a turn', async t => {
+test('start and resume use the server profile without injecting instructions or starting a turn', async t => {
   const { bridge, processes } = await fixture(t); await bridge.connect();
   const start = processes[0].sent.find(message => message.method === 'thread/start');
-  for (const key of ['developerInstructions', 'baseInstructions', 'config', 'collaborationMode', 'model', 'effort']) assert.equal(key in start.params, false);
   assert.match(start.params.dynamicTools[0].description, /tinylens_ui_question/);
   assert.deepEqual(start.params.dynamicTools[0].inputSchema.properties.kind.enum, ['stage', 'artifact', 'note']);
   processes[0].emit('exit', 255); await bridge.connect();
   const resume = processes[1].sent.find(message => message.method === 'thread/resume');
-  for (const key of ['developerInstructions', 'baseInstructions', 'config', 'collaborationMode', 'model', 'effort']) assert.equal(key in resume.params, false);
+  for (const request of [start, resume]) {
+    for (const key of ['developerInstructions', 'baseInstructions', 'collaborationMode', 'effort']) assert.equal(key in request.params, false);
+    assert.equal(request.params.model, connectionConfig.model);
+    assert.deepEqual(request.params.config, { model_reasoning_effort: connectionConfig.reasoningEffort });
+  }
   assert.equal('dynamicTools' in resume.params, false);
   for (const proc of processes) assert.equal(proc.sent.some(message => ['turn/start', 'turn/steer', 'config/value/write', 'config/batchWrite', 'thread/settings/update', 'turn/settings/update'].includes(message.method)), false);
 });

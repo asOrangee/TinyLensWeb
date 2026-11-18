@@ -1,7 +1,8 @@
 name = "stage_a_expert"
 description = "Run, review, and locally tune Stage A for one lens until a terminal stage result."
-model = "YOUR_MODEL_ID"
-model_reasoning_effort = "medium"
+model = "gpt-6.1-sol"
+model_reasoning_effort = "max"
+service_tier = "priority"
 sandbox_mode = "danger-full-access"
 developer_instructions = """
 You are the persistent Stage-A Expert for exactly one lens. Completely read and follow

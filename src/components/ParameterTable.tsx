@@ -13,7 +13,15 @@ export default function ParameterTable({ parameters, onDetail, live = false }: {
   return <div className="table-scroll"><table className={`parameter-table${live ? ' live-numeric-table' : ''}`}><thead><tr><th>{t('主要参数 / 物理含义')}</th><th>{t('求解方式')}</th><th>{live ? t('后验中位数 / 当前值') : t('示例值')}</th><th>{t('单位')}</th></tr></thead>{groupParameters(parameters).map(group=><tbody className="parameter-group" data-category={group.id} key={group.id??'settings'}>{group.label&&<tr className="parameter-group-heading"><th colSpan={4} scope="rowgroup">{group.label}</th></tr>}{group.parameters.map(p => <tr key={p.key} data-parameter={p.key}><td><button className="parameter-name" onClick={() => onDetail(p)}><span className="parameter-symbol">{p.symbol}</span><span>{p.name}</span><CircleHelp size={12}/></button></td><td><span className={`role-tag role-${p.role}`}>{roleLabel(p.role, t)}</span></td><td className="number-cell"><ParameterEstimate parameter={p} live={live}/></td><td className="parameter-unit">{p.unit === '—' ? '' : t(p.unit)}</td></tr>)}</tbody>)}</table></div>;
 }
 
-export function ParameterDetail({ parameter }: { parameter: Parameter; live?: boolean }) {
+export function ParameterDetail({ parameter, live = false }: { parameter: Parameter; live?: boolean }) {
   const { t } = useDemoI18n();
-  return <div className="parameter-detail"><span className="parameter-large-symbol"><ParameterSymbol parameter={parameter}/></span><div className="detail-tags"><span className="tag">{parameter.unit === '—' ? t('无单位 / 不适用') : t(parameter.unit)}</span></div><p>{t(parameter.description)}</p>{parameter.reference && <a className="reference-button" href={parameter.reference} target="_blank" rel="noreferrer"><BookOpen size={15}/>{t('查阅相关论文')}<ExternalLink size={13}/></a>}</div>;
+  return <div className="parameter-detail">
+    <span className="parameter-large-symbol"><ParameterSymbol parameter={parameter}/></span>
+    <div className="detail-tags"><span className="tag">{parameter.unit === '—' ? t('无单位 / 不适用') : t(parameter.unit)}</span></div>
+    {live && parameter.rawValue !== undefined && <p>{parameter.linearValues?.length
+      ? parameter.linearValues.map(formatParameterNumber).join(', ')
+      : <ParameterEstimate parameter={parameter} live/>}</p>}
+    <p>{t(parameter.description)}</p>
+    {parameter.reference && <a className="reference-button" href={parameter.reference} target="_blank" rel="noreferrer"><BookOpen size={15}/>{t('查阅相关论文')}<ExternalLink size={13}/></a>}
+  </div>;
 }

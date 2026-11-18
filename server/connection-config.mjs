@@ -29,6 +29,8 @@ export function readConnectionConfig(env = process.env) {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.@-]*$/.test(sshHost)) throw new Error('Invalid TINYLENS_SSH_HOST; use an SSH config alias');
   const aiNetwork = env.TINYLENS_AI_NETWORK || 'off';
   if (!['off', 'loopback-proxy'].includes(aiNetwork)) throw new Error('TINYLENS_AI_NETWORK must be off or loopback-proxy');
+  const approvalsReviewer = env.TINYLENS_APPROVALS_REVIEWER || 'auto_review';
+  if (!['user', 'auto_review'].includes(approvalsReviewer)) throw new Error('TINYLENS_APPROVALS_REVIEWER must be user or auto_review');
   const remoteProxyPort = env.TINYLENS_REMOTE_PROXY_PORT || '0';
   return Object.freeze({
     sshHost,
@@ -37,7 +39,10 @@ export function readConnectionConfig(env = process.env) {
     python: executable(env.TINYLENS_REMOTE_PYTHON || 'python3', 'TINYLENS_REMOTE_PYTHON'),
     codex: executable(env.TINYLENS_REMOTE_CODEX || 'codex', 'TINYLENS_REMOTE_CODEX'),
     codexHome: env.TINYLENS_REMOTE_CODEX_HOME ? absolute(env.TINYLENS_REMOTE_CODEX_HOME, 'TINYLENS_REMOTE_CODEX_HOME') : '',
-    aiNetwork, upstreamPort: port(env.TINYLENS_PROXY_PORT || '7897', 'TINYLENS_PROXY_PORT'),
+    model: text(env.TINYLENS_AI_MODEL || 'gpt-6.1-sol', 'TINYLENS_AI_MODEL'),
+    reasoningEffort: text(env.TINYLENS_AI_REASONING_EFFORT || 'max', 'TINYLENS_AI_REASONING_EFFORT'),
+    serviceTier: text(env.TINYLENS_AI_SERVICE_TIER || 'priority', 'TINYLENS_AI_SERVICE_TIER'),
+    aiNetwork, approvalsReviewer, upstreamPort: port(env.TINYLENS_PROXY_PORT || '7897', 'TINYLENS_PROXY_PORT'),
     remoteProxyPort: remoteProxyPort === '0' ? 0 : port(remoteProxyPort, 'TINYLENS_REMOTE_PROXY_PORT'),
   });
 }

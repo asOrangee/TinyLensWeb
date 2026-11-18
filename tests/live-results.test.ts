@@ -1,9 +1,10 @@
 import {numericalFixture} from './fixtures/numerical-plane.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { selectStageResults, stageDisplayCandidates, parseLiveResult } from '../src/lib/live-results.ts';
+import { legacyAcceptanceReport, selectStageResults, stageDisplayCandidates, parseLiveResult } from '../src/lib/live-results.ts';
 import type { AgentUpdate } from '../src/lib/agent-types.ts';
 import { parseReportedPanels } from '../src/lib/reported-panels.ts';
+import { currentStageAttempt, stageAttempts } from '../src/lib/stage-attempts.ts';
 
 test('native diagnostic display is bound to one image and cannot claim numeric model or chi-square planes',()=>{
  const update=artifact('png','run',0,'diagnostics/stage_a_model.png');
@@ -61,6 +62,60 @@ test('a diagnostic-only attempt cannot replace the current numeric result in the
   assert.equal(stageDisplayCandidates([original, published], 'm3', candidates[1].identity?.key)[0].summary?.id, 'original');
   const otherRun = artifact('other', 'run2', 0, 'display-manifest.json', 'm3');
   assert.deepEqual(stageDisplayCandidates([original, published, otherRun], 'm3').map(item => item.published?.id), ['other']);
+});
+
+test('the default accepted attempt survives running and review and advances only with explicit acceptance', () => {
+  const run_path = '/project/output/run/lens';
+  const report = (run_id: string, attempt: number, status: string, manifest = false): AgentUpdate => ({
+    id: `${run_id}-${attempt}-${status}`, schema: 'tinylens.stage-report.v1', kind: 'stage', stage: 'a',
+    run_id, run_path, lens_id: 'lens', attempt, status,
+    ...(manifest && { display_manifest: `${run_path}/attempts/a/${attempt}/display-manifest.json` }),
+  });
+  const a0 = report('original', 0, 'accepted', true);
+  const a1 = report('original', 1, 'running');
+  const review = report('original', 1, 'awaiting_review', true);
+  const accepted = report('original', 1, 'accepted', true);
+  for (const reports of [[a0, a1], [a0, a1, review]]) {
+    assert.equal(selectStageResults(reports, 'a').identity?.attempt, 0);
+    assert.equal(currentStageAttempt(stageAttempts(reports), 'a')?.status, reports.at(-1)?.status);
+  }
+  const preview = stageAttempts([a0, a1, review]).find(item => item.identity.attempt === 1)!;
+  assert.equal(stageDisplayCandidates([a0, a1, review], 'a', preview.identity.key)[0].published?.id, review.id);
+  assert.equal(selectStageResults([a0, a1, review, accepted, a1], 'a').identity?.attempt, 1);
+  assert.equal(currentStageAttempt(stageAttempts([a0, accepted, a1]), 'a')?.status, 'accepted');
+
+  const archive: AgentUpdate = { ...report('original', 0, 'archived'), kind: 'artifact', stage: 'preflight', attempt: null,
+    path: '/project/output/run/_archive/lens_old_0/run-manifest.json' };
+  const rerun = report('fresh', 0, 'running');
+  const nextReview = report('fresh', 0, 'awaiting_review', true);
+  const versions = [a0, archive, rerun, nextReview];
+  assert.equal(selectStageResults(versions, 'a').identity?.runId, 'original');
+  assert.equal(currentStageAttempt(stageAttempts(versions), 'a')?.identity.runId, 'fresh');
+  assert.equal(selectStageResults([...versions, report('fresh', 0, 'accepted', true), accepted], 'a').identity?.runId, 'fresh');
+  assert.equal(stageAttempts(versions).find(item => item.identity.runId === 'original')?.archived, true);
+});
+
+test('a legacy accepted head can bind a unique earlier attempt in the same turn and run', () => {
+  const result = { ...artifact('result', 'run1', 0, 'stage-result.json'), turnId: 'verified-turn' };
+  const accepted: AgentUpdate = { kind: 'stage', stage: 'a', status: 'accepted', turnId: 'verified-turn', path: '/project/output/run1/lens/accepted/a.json' };
+  assert.equal(stageAttempts([result, accepted])[0].status, 'accepted');
+  assert.equal(stageAttempts([result, { ...accepted, turnId: 'different' }])[0].status, undefined);
+  assert.ok(stageAttempts([result, { ...artifact('other', 'run1', 1, 'stage-result.json'), turnId: 'verified-turn' }, accepted])
+    .every(item => item.status !== 'accepted'));
+});
+
+test('legacy decisions and acceptance reports restore numeric displays only in the same unversioned run', () => {
+  const decision = artifact('decision', 'run', 0, 'decision.json');
+  const run = '/project/output/run/lens';
+  const archive = { ...decision, id: 'archive', path: '/project/output/run/_archive/lens_old_0/attempts/a/0/decision.json' };
+  const accepted: AgentUpdate = { id: 'accepted', kind: 'stage', stage: 'm0', status: 'accepted', verified_attempt: 0,
+    path: run + '/accepted/m0.json' };
+  assert.equal(selectStageResults([decision, archive], 'a').summary?.id, 'decision');
+  assert.equal(legacyAcceptanceReport([decision, archive, accepted], 'b')?.id, 'accepted');
+  assert.equal(legacyAcceptanceReport([decision, accepted], 'm0', run + '/attempts/m0/0')?.id, 'accepted');
+  assert.equal(legacyAcceptanceReport([decision, accepted], 'm0', run + '/attempts/m0/1'), undefined);
+  const modern: AgentUpdate = { ...decision, schema: 'tinylens.stage-report.v1', run_id: 'new-run', run_path: run, lens_id: 'lens', attempt: 0 };
+  assert.equal(legacyAcceptanceReport([decision, accepted, modern], 'b'), undefined);
 });
 test('latest report of the same image replaces only that image and never infers stage from a filename', () => {
   const image = artifact('first', 'run1', 0, 'diagnostics/model.png');

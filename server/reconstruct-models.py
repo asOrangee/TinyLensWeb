@@ -53,17 +53,32 @@ def full_operator_image(likelihood, pixels):
     sim = likelihood.sim_obj
     data = sim.precompute_operator_data(xmin, xmax, ymin, ymax, _betas_sub=(bx, by))
     height, width = sim.image_shape
-    lensed = op._apply_L_jit(jnp.asarray(pixels), data.weights, data.indices,
-                            data.flat_indices, height, width, data.nsub,
-                            data.agg_segment_ids, data.agg_n_active)
-    result = op._psf_convolve_full_jit(lensed, sim._psf_fft, height, width)
-    active = sim.forward_model(jnp.asarray(pixels), xmin, xmax, ymin, ymax, op_data=data)
-    if not np.array_equal(np.asarray(result)[np.asarray(sim.flat_indices)], np.asarray(active)):
+    source = jnp.asarray(pixels)
+    psf_response = getattr(sim, "psf_response", None)
+    if psf_response is None:
+        lensed = op._apply_L_jit(source, data.weights, data.indices, data.flat_indices,
+                                height, width, data.nsub, data.agg_segment_ids, data.agg_n_active)
+        projection = op._psf_convolve_full_jit(lensed, sim._psf_fft, height, width)
+    else:
+        brightness = op.render_source(source, data.weights, data.indices,
+                                      data.render_parents, data.nsub, data.n_render)
+        projection = psf_response.full_image(brightness)
+    full = np.array(projection, dtype=float, copy=True).reshape(-1)
+    indices = np.asarray(sim.flat_indices)
+    projected = full[indices]
+    active = np.asarray(sim.forward_model(source, xmin, xmax, ymin, ymax, op_data=data))
+    # The newer operator can use different FFT grids for the fit and full cutout.
+    if psf_response is None:
+        matches = np.array_equal(projected, active)
+    else:
+        matches = projected.shape == active.shape and np.allclose(projected, active, rtol=2e-5, atol=1e-6)
+    if not matches:
         raise ValueError("Full output differs from the original scientific operator")
-    image = np.asarray(result, dtype=float).reshape(height, width)
-    if not np.isfinite(image).all():
+    if not np.isfinite(full).all():
         raise ValueError("Nonfinite complete operator image")
-    return image, {"path": op.__file__, "sha256": hashlib.sha256(Path(op.__file__).read_bytes()).hexdigest()}
+    full[indices] = active
+    implementation = {"path": op.__file__, "sha256": hashlib.sha256(Path(op.__file__).read_bytes()).hexdigest()}
+    return full.reshape(height, width), implementation
 
 
 def png_url(array):
@@ -113,6 +128,7 @@ class ArraysOnly(pickle.Unpickler):
 
 def reconstruct(request):
     from astropy.io import fits
+    from read_frozen_input import load_frozen_input
     root, run = Path(request["root"]), Path(request["run"])
     if root.resolve(strict=True) != root or run.resolve(strict=True) != run or not run.is_relative_to(root / "output"):
         raise ValueError("Invalid reported run")
@@ -151,16 +167,30 @@ def reconstruct(request):
             raise ValueError("Dependency attempt identity mismatch")
         if Path(entry["summary"]).name != "stage-result.json":
             raise ValueError("A reported summary is required")
+        if entry.get("decision") and Path(entry["decision"]) != base / "decision.json":
+            raise ValueError("Reported decision identity mismatch")
         if entry.get("posterior") and Path(entry["posterior"]) != base / "artifacts" / ("stage_"+tag+".pkl"):
             raise ValueError("Dependency pickle identity mismatch")
         return base
 
     saved_payloads = {}
+    decisions = {}
+
+    def read_attempt_file(tag, path):
+        base = attempt(tag)
+        raw = read(path, base)
+        if tag in decisions:
+            from read_attempt_evidence import verify_decision_file
+            name = str(Path(path).relative_to(base))
+            key = "artifact:" + name if name.startswith("artifacts/") else name
+            verify_decision_file(decisions[tag], key, raw)
+        return raw
+
     def payload(tag):
         if tag in saved_payloads:
             return saved_payloads[tag]
         attempt(tag)
-        result = ArraysOnly(io.BytesIO(read(files[tag]["posterior"]))).load()
+        result = ArraysOnly(io.BytesIO(read_attempt_file(tag, files[tag]["posterior"]))).load()
         if not isinstance(result, dict) or not isinstance(result.get("extra"), dict):
             raise ValueError("Invalid saved model payload")
         saved_payloads[tag] = result
@@ -168,43 +198,62 @@ def reconstruct(request):
 
     for tag, entry in files.items():
         attempt(tag)
-        declared = read_json(entry["summary"])
+        if entry.get("acceptedHead"):
+            head = run / "accepted" / f"{tag}.json"
+            if Path(entry["acceptedHead"]) != head or hashlib.sha256(read(head)).hexdigest() != entry["acceptedHeadSha256"]:
+                raise ValueError("The accepted attempt changed")
+        if entry.get("decision"):
+            from read_attempt_evidence import decision_evidence
+            raw_decision = read(entry["decision"], attempt(tag))
+            if entry.get("acceptedHead") and (
+                hashlib.sha256(raw_decision).hexdigest() != entry["decisionSha256"] or json.loads(raw_decision).get("decision") != "accept"
+            ):
+                raise ValueError("The accepted decision changed")
+            decisions[tag] = decision_evidence(raw_decision, tag, entry["attempt"])
+        declared = json.loads(read_attempt_file(tag, entry["summary"]))
         if declared.get("stage") != tag or declared.get("attempt") != entry["attempt"] or declared.get("lens_id") != run.name:
             raise ValueError("Declared upstream summary identity mismatch")
+        if entry.get("posteriorFromSummary") and declared.get("artifacts", {}).get("stage_pickle") != f"artifacts/stage_{tag}.pkl":
+            raise ValueError("The reported summary does not declare its saved model")
         if entry.get("posterior"):
             payload(tag)
 
     own_dir = attempt(stage)
-    summary = read_json(files[stage]["summary"])
+    summary = json.loads(read_attempt_file(stage, files[stage]["summary"]))
     if summary.get("stage") != stage or summary.get("attempt") != files[stage]["attempt"] or summary.get("lens_id") != run.name:
         raise ValueError("Reported summary identity mismatch")
-    config = read_json(own_dir / "effective-config.json")
-    if config.get("schema_version") != "lens_pipeline_config.v5" or config.get("pipeline_release_id") != "input-geometry.v1":
+    config = json.loads(read_attempt_file(stage, own_dir / "effective-config.json"))
+    releases = {"input-geometry.v1"}
+    if stage == "a" or (stage in {"m0", "m1"} and files[stage].get("acceptedHead")):
+        # The position term constrains the fit. At the saved medians the image
+        # operator still has to reproduce the saved residual statistics below.
+        releases.add("user-position-likelihood.v1")
+    if config.get("schema_version") != "lens_pipeline_config.v5" or config.get("pipeline_release_id") not in releases:
         raise ValueError("Unsupported saved diagnostic configuration")
     settings = config["settings"]
     manifest = read_json(run / "run-manifest.json")
-    if manifest.get("schema_version") != "lens_run_manifest.v1" or manifest.get("pipeline_release_id") != "input-geometry.v1":
+    if manifest.get("schema_version") != "lens_run_manifest.v1" or manifest.get("pipeline_release_id") not in releases:
         raise ValueError("Unsupported frozen run")
     lens = Path(manifest["lens_dir"])
-    provenance = read_json(lens / "input-provenance.json", root / "output")
-    frozen_fits = Path(provenance["packaged_fits_path"])
-    if frozen_fits.parent != lens or provenance.get("schema_version") != "mock_input_provenance.v1":
-        raise ValueError("Invalid frozen input reference")
-    fits_raw = read(frozen_fits, root / "output")
-    if hashlib.sha256(fits_raw).hexdigest() != provenance["packaged_fits_sha256"]:
-        raise ValueError("Frozen input checksum mismatch")
     geometry = manifest["input_geometry"]
-    if geometry != provenance["input_geometry"] or any(settings.get(k) != v for k, v in geometry.items()):
+    if lens.name != run.name or any(settings.get(k) != v for k, v in geometry.items()):
         raise ValueError("Frozen input geometry mismatch")
-    with fits.open(io.BytesIO(fits_raw), memmap=False) as hdus:
-        image, noise, psf = [np.asarray(hdus[name].data, dtype=float) for name in ("VIS_FLUX", "VIS_RMS", "VIS_PSF")]
+    provenance_path = lens / "input-provenance.json"
+    frozen = load_frozen_input(provenance_path, root / "output", lens_id=run.name, expected_geometry=geometry, file_limit=64 * 1024 * 1024)
+    input_fits_sha256 = frozen["fits_sha256"]
+    if request.get("inputSha256") and request["inputSha256"] != input_fits_sha256:
+        raise ValueError("Frozen FITS changed since the accepted display was verified")
+    hashes[str(provenance_path)] = frozen["provenance_sha256"]
+    hashes[str(frozen["fits_path"])] = input_fits_sha256
+    image, noise, psf = (frozen["arrays"][name] for name in ("data", "noise", "psf"))
     if geometry["input_x_direction"] == "decreasing":
         image, noise, psf = [np.fliplr(a) for a in (image, noise, psf)]
     if geometry["input_y_direction"] == "decreasing":
         image, noise, psf = [np.flipud(a) for a in (image, noise, psf)]
 
-    def mask(path):
-        with fits.open(io.BytesIO(read(path)), memmap=False) as hdus:
+    def mask(path, tag=None):
+        raw = read_attempt_file(tag, path) if tag is not None else read(path)
+        with fits.open(io.BytesIO(raw), memmap=False) as hdus:
             data, header = np.asarray(hdus[0].data), hdus[0].header
         # Older preflight masks omit GEOMFRM; their complete positive-axis,
         # centered arcsec WCS below explicitly identifies the canonical frame.
@@ -215,7 +264,10 @@ def reconstruct(request):
                 raise ValueError("Mask geometry disagrees with frozen image")
         return data.astype(bool)
 
-    domain = mask(run / "preflight" / "modeling_mask.fits")
+    domain_path = run / "preflight" / "modeling_mask.fits"
+    domain = mask(domain_path)
+    if request.get("domainSha256") and request["domainSha256"] != hashes[str(domain_path)]:
+        raise ValueError("Frozen domain changed since the accepted display was verified")
     own, a = payload(stage), payload("a")
     for saved in (own, a):
         g = saved["extra"]["input_geometry"]
@@ -231,7 +283,7 @@ def reconstruct(request):
             raise ValueError("Arc mask report identity mismatch")
         if b_summary.get("artifacts", {}).get("feature_mask_fits") != "artifacts/feature_mask.fits":
             raise ValueError("An explicit standard feature mask reference is required")
-        feature = mask(b_dir / "artifacts" / "feature_mask.fits")
+        feature = mask(b_dir / "artifacts" / "feature_mask.fits", "b")
         valid = ~(domain | feature)
         if int((~feature).sum()) != b_summary["metrics"]["included_arc_pixels"] or np.any((~feature) & domain):
             raise ValueError("Arc mask count mismatch")
@@ -293,8 +345,10 @@ def reconstruct(request):
         if stage == "a":
             likelihood = p.build_stage_a_likelihood(image, noise, psf, domain)
             likelihood.set_values([medians[name] for name in own["param_names"]])
-            lensed, light, intensities = likelihood.forward_model(use_linear=True, return_intensity=True, ret_each_plane=True, image_map=likelihood.image_data, noise_map=likelihood.noise_map)
-            source, lens_light = np.asarray(lensed, dtype=float), np.asarray(light, dtype=float)
+            lensed, _, intensities = likelihood.forward_model(use_linear=True, return_intensity=True, ret_each_plane=True, image_map=likelihood.image_data, noise_map=likelihood.noise_map)
+            # Stage A saved the foreground light from the original joint solve.
+            # Reuse it and verify the reconstructed source against the saved residual.
+            source = np.asarray(lensed, dtype=float)
             from TinyLensGpu.ForwardSimulation.LensImage.config import make_grid_2d
             sx, sy = make_grid_2d(200, .01, 1)
             components = []
@@ -304,7 +358,7 @@ def reconstruct(request):
             source_image = np.stack(components, axis=-1).sum(axis=-1)
             source_bounds = [-1.,1.,-1.,1.]
         else:
-            grid = read_json(attempt("m0") / "artifacts" / "source_grid_spec.json")
+            grid = json.loads(read_attempt_file("m0", attempt("m0") / "artifacts" / "source_grid_spec.json"))
             if stage == "m0":
                 mass, shear = p._fixed_sie(p._stage_from_payload(a))
                 ll = float(own["extra"]["log_lambda_best"])
@@ -368,7 +422,7 @@ def reconstruct(request):
               "source":display_plane(source_image,np.ones_like(source_image,dtype=bool),pixel,"magma" if stage=="m1" else "inferno",(float(source_image.min()),float(source_image.max())),"linear",bounds=source_bounds,raw=True),
               "chi-square": display_plane(chi_square, display_valid, pixel, "RdBu_r", (0., 25. if stage == "a" else 9.), "linear",raw=True)}
     for plane in planes.values():
-        plane["input_fits_sha256"] = provenance["packaged_fits_sha256"]
+        plane["input_fits_sha256"] = input_fits_sha256
     mapping = {}
     if stage != "m3":
         # The browser verifies SIE lens mapping against these per-attempt rays.
@@ -384,9 +438,12 @@ def reconstruct(request):
         points=np.asarray([[-2.,-1.5],[-1.2,.8],[0.,0.],[.4,-.6],[1.5,.1],[1.9,-1.2],[.3,2.]],dtype=float)
         mx,my=mass.deriv(jnp.asarray(points[:,0]),jnp.asarray(points[:,1]));gx,gy=shear.deriv(jnp.asarray(points[:,0]),jnp.asarray(points[:,1]))
         betas=points-np.stack([np.asarray(mx+gx),np.asarray(my+gy)],axis=1)
-        mapping["display_mapping"]={"schema":"tinylens.lens-mapping.v1","synthetic":False,"stage":stage,"attempt":files[stage]["attempt"],"path":files[stage]["summary"],"summary_sha256":hashes[files[stage]["summary"]],"fits_sha256":provenance["packaged_fits_sha256"],"model":{"kind":"sie-shear",**model_values},"frames":{"image":{key:planes["model"][key] for key in ("shape","bounds_arcsec","half_extent_arcsec")},"source":{key:planes["source"][key] for key in ("shape","bounds_arcsec","half_extent_arcsec")}},"references":[{"image":{"x":float(x),"y":float(y)},"source":{"x":float(bx),"y":float(by)}} for (x,y),(bx,by) in zip(points,betas)]}
+        mapping["display_mapping"]={"schema":"tinylens.lens-mapping.v1","synthetic":False,"stage":stage,"attempt":files[stage]["attempt"],"path":files[stage].get("decision", files[stage]["summary"]),"summary_sha256":hashes[files[stage]["summary"]],"fits_sha256":input_fits_sha256,"model":{"kind":"sie-shear",**model_values},"frames":{"image":{key:planes["model"][key] for key in ("shape","bounds_arcsec","half_extent_arcsec")},"source":{key:planes["source"][key] for key in ("shape","bounds_arcsec","half_extent_arcsec")}},"references":[{"image":{"x":float(x),"y":float(y)},"source":{"x":float(bx),"y":float(by)}} for (x,y),(bx,by) in zip(points,betas)]}
+    for entry in files.values():
+        if entry.get("acceptedHead") and hashes[entry["acceptedHead"]] != hashlib.sha256(read(entry["acceptedHead"])).hexdigest():
+            raise ValueError("The accepted attempt changed during display reconstruction")
     return {"schema": "tinylens.readonly-result.v1", "kind": "summary", "stage": stage, "attempt": files[stage]["attempt"],
-            "path": files[stage]["summary"], "sha256": hashes[files[stage]["summary"]], "result": summary, "planes": planes, **mapping,
+            "path": files[stage].get("decision", files[stage]["summary"]), "sha256": hashes[files[stage]["summary"]], "result": summary, "planes": planes, **mapping,
             "display_derivation": {"schema": "tinylens.model-display-derivation.v1", "method": method,
                 "estimate": "saved_evidence_scan_choice_and_conditional_linear_solution" if stage == "m0" else "saved_posterior_medians_and_conditional_linear_solution", "model_expression": "lens_light + lensed_source",
                 "chi_square_expression": "((data - model) / noise_rms)^2", "chi_square_is_reduced": False,

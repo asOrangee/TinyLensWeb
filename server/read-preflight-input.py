@@ -50,6 +50,8 @@ def resolve_report(report, output):
 
     run = report.parent.parent
     packet = json.loads(read_exact(report.parent / "inspection.json", output, MAX_METADATA))
+    if packet.get("display", {}).get("schema") in ("tinylens.stage-display.v2", "tinylens.stage-display.v3"):
+        raise ValueError("Preflight declares the named FITS display")
     manifest = json.loads(read_exact(run / "run-manifest.json", output, MAX_METADATA))
     lens_dir = Path(manifest["lens_dir"])
     if (

@@ -1,7 +1,14 @@
-import {mapperFromEvaluator, type PlaneFrame,type Point} from './lens-mapping.ts';
+import {mapperFromEvaluator, type LensCurvePair, type PlaneFrame,type Point} from './lens-mapping.ts';
 import {eplMapper,type EplShearModel} from './epl-mapping.ts';
+import type { LiveResult } from './live-results.ts';
 type SieShearModel=Omit<EplShearModel,'kind'|'gamma'>&{kind:'sie-shear'};
-export type LiveMapping={schema:'tinylens.lens-mapping.v1';synthetic:false;stage:string;attempt:number;path:string;summary_sha256:string;fits_sha256:string;model:SieShearModel|EplShearModel;frames:{image:PlaneFrame;source:PlaneFrame};references:{image:Point;source:Point;determinant?:number}[]};
+type Frames = { image: PlaneFrame; source: PlaneFrame };
+type MappingIdentity = { synthetic: false; stage: string; attempt: number; path: string; run_id?: string; summary_sha256: string; fits_sha256: string;
+  model: SieShearModel | EplShearModel; frames: Frames; references: { image: Point; source: Point; determinant?: number }[] };
+export type LiveMapping = MappingIdentity & ({ schema: 'tinylens.lens-mapping.v1' } | {
+  schema: 'tinylens.lens-mapping.v2'; curves: LensCurvePair[] | null; mapping_source: { path: string; sha256: string };
+});
+type MappingBinding = { stage: string; attempt: number; path: string; sha256: string; fitsSha256?: string; runId?: string; frames?: Frames };
 
 /** Exact TinyLens SIE convention, checked against per-attempt library rays. */
 export function sieMapper(model:SieShearModel,frame:PlaneFrame){
@@ -17,9 +24,9 @@ export function sieMapper(model:SieShearModel,frame:PlaneFrame){
  const mapping=mapperFromEvaluator(evaluate,frame);
  return {...mapping,criticalCurves:()=>mapping.criticalCurves().filter(curve=>curve.critical.some(p=>Math.hypot(p.x-model.center_x_mass,p.y-model.center_y_mass)>1e-3))};
 }
-export function verifiedLiveMapping(value:LiveMapping|undefined,binding:{stage:string;attempt:number;path:string;sha256:string;fitsSha256?:string}){
+export function verifiedLiveMapping(value: LiveMapping | undefined, binding: MappingBinding) {
  try{
-  if(!value||value.schema!=='tinylens.lens-mapping.v1'||value.synthetic!==false||value.stage!==binding.stage||value.attempt!==binding.attempt||value.path!==binding.path||value.summary_sha256!==binding.sha256||value.fits_sha256!==binding.fitsSha256)return null;
+  if(!value||!['tinylens.lens-mapping.v1','tinylens.lens-mapping.v2'].includes(value.schema)||value.synthetic!==false||value.stage!==binding.stage||value.attempt!==binding.attempt||value.path!==binding.path||value.summary_sha256!==binding.sha256||value.fits_sha256!==binding.fitsSha256)return null;
   for(const name of ['image','source'] as const){const frame=value.frames[name];if(!Array.isArray(frame?.shape)||frame.shape.length!==2||!frame.shape.every(n=>Number.isInteger(n)&&n>0&&n<=512)||!Array.isArray(frame.bounds_arcsec)||frame.bounds_arcsec.length!==4||![...frame.bounds_arcsec,frame.half_extent_arcsec].every(Number.isFinite)||frame.bounds_arcsec[1]<=frame.bounds_arcsec[0]||frame.bounds_arcsec[3]<=frame.bounds_arcsec[2]||frame.half_extent_arcsec<=0||Math.abs(frame.bounds_arcsec[3]-frame.bounds_arcsec[2]-frame.half_extent_arcsec*2)>1e-10)throw Error('Uncalibrated lens frame');}
   const isEpl=value.model.kind==='epl-shear';
   if((binding.stage==='m3')!==isEpl)return null;
@@ -34,6 +41,28 @@ export function verifiedLiveMapping(value:LiveMapping|undefined,binding:{stage:s
     if(typeof expected!=='number'||!Number.isFinite(expected)||!Number.isFinite(determinant)||Math.abs(determinant-expected)>2e-5*Math.max(1,Math.abs(expected)))return null;
    }
   }
+  if (value.schema === 'tinylens.lens-mapping.v2') {
+    const sameFrame = (a: PlaneFrame, b: PlaneFrame) => JSON.stringify(a.shape) === JSON.stringify(b.shape)
+      && JSON.stringify(a.bounds_arcsec) === JSON.stringify(b.bounds_arcsec);
+    const displayDirectory = binding.path.replace(/\/(?:display\/?|display-manifest\.json|stage-result\.json)$/, '') + '/display/';
+    if (value.run_id !== binding.runId || !value.mapping_source?.path?.startsWith(displayDirectory)
+        || !/^[^/]+\.json$/.test(value.mapping_source.path.slice(displayDirectory.length))
+        || !/^[a-f0-9]{64}$/.test(value.mapping_source.sha256)
+        || (binding.frames && (!sameFrame(value.frames.image, binding.frames.image) || !sameFrame(value.frames.source, binding.frames.source)))) return null;
+    const curves = value.curves;
+    if (curves !== null && (!Array.isArray(curves) || curves.some(pair => !Array.isArray(pair?.critical) || !Array.isArray(pair.caustic)
+      || pair.critical.length < 2 || pair.critical.length !== pair.caustic.length || typeof pair.closed !== 'boolean'
+      || [...pair.critical, ...pair.caustic].some(point => !Number.isFinite(point?.x) || !Number.isFinite(point?.y))))) return null;
+    return { ...mapper, frames: value.frames, criticalCurves: () => curves ?? [] };
+  }
   return {...mapper,frames:value.frames};
  }catch{return null;}
+}
+
+export function verifiedResultMapping(result?: LiveResult, stage = result?.stage) {
+  if (!result || stage !== result.stage || result.attempt === null) return null;
+  const { observation, source } = result.planes ?? {};
+  if (result.display_mapping?.schema === 'tinylens.lens-mapping.v2' && (!observation || !source)) return null;
+  return verifiedLiveMapping(result.display_mapping, { stage, attempt: result.attempt, path: result.path, sha256: result.sha256,
+    runId: result.run_id, fitsSha256: observation?.input_fits_sha256, frames: observation && source ? { image: observation, source } : undefined });
 }

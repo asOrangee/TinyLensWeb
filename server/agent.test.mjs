@@ -5,8 +5,9 @@ import { PassThrough, Writable } from 'node:stream';
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { initialState, receiveNotification, receiveReport, receiveRequest, validateReply, restoreThread, applyTurn, hasBlockingRequest } from './agent-state.mjs';
+import { initialState, receiveNotification, receiveReport, receiveRequest, validateReply, restoreThread, applyTurn, hasBlockingRequest, WORKSPACE } from './agent-state.mjs';
 import { createAgentServer } from './agent-server.mjs';
+import { connectionConfig } from './connection-config.mjs';
 const tick = () => new Promise(resolve => setImmediate(resolve));
 function live() { const state = initialState({ threadId: 'thread-1' }); applyTurn(state, { id: 'turn-1', status: 'inProgress' }); return state; }
 const report = (arguments_ = { kind: 'stage', stage: 'a', status: 'accepted', message: 'Canonical accepted head exists.' }) => ({ threadId: 'thread-1', turnId: 'turn-1', callId: 'call-1', tool: 'tinylens_ui_report', arguments: arguments_ });
@@ -30,10 +31,37 @@ async function fixture(t, handler = baseHandler, options = {}) {
   const stateDirectory = await mkdtemp(join(tmpdir(), 'tinylens-agent-test-'));
   const processes = [];
   if (options.saved) await writeFile(join(stateDirectory, 'agent-state.json'), JSON.stringify(options.saved));
-  const bridge = await createAgentServer({ stateDirectory, spawnProcess: () => { const proc = fakeProcess(handler); processes.push(proc); return proc; }, rpcTimeoutMs: 1000, logger: { error() {} }, ...options });
+  const bridge = await createAgentServer({ stateDirectory, spawnProcess: () => { const proc = fakeProcess(handler); processes.push(proc); return proc; }, rpcTimeoutMs: 1000, logger: { error() {} }, stageScopeLookup: async () => undefined, ...options });
   t.after(async () => { await bridge.close(); await rm(stateDirectory, { recursive: true, force: true }); });
   return { bridge, processes, stateDirectory };
 }
+
+test('the configured task profile is applied to new sessions, resumed sessions and new turns', async t => {
+  for (const method of ['thread/start', 'thread/resume']) {
+    const options = { approvalsReviewer: 'auto_review',
+      ...(method === 'thread/resume' && { saved: { threadId: 'thread-1' } }) };
+    const { bridge, processes } = await fixture(t, (message, proc) => {
+      baseHandler(message, proc);
+      if (message.method === 'turn/start') {
+        proc.emitMessage({ id: message.id, result: { turn: { id: 'profile-turn', status: 'inProgress' } } });
+      }
+    }, options);
+    await bridge.connect();
+    const request = processes[0].sent.find(message => message.method === method);
+    assert.equal(request.params.approvalsReviewer, 'auto_review');
+    assert.equal(request.params.approvalPolicy, 'on-request');
+    assert.equal(request.params.sandbox, 'workspace-write');
+    assert.equal(request.params.model, connectionConfig.model);
+    assert.equal(request.params.serviceTier, connectionConfig.serviceTier);
+    assert.deepEqual(request.params.config, { model_reasoning_effort: connectionConfig.reasoningEffort });
+    await bridge.submitMessage({ text: 'A simulated new turn.' });
+    const turn = processes[0].sent.find(message => message.method === 'turn/start').params;
+    assert.equal(turn.model, connectionConfig.model);
+    assert.equal(turn.effort, connectionConfig.reasoningEffort);
+    assert.equal(turn.serviceTier, connectionConfig.serviceTier);
+    assert.equal(turn.approvalsReviewer, 'auto_review');
+  }
+});
 
 test('events and dynamic reports cannot cross thread or active-turn boundaries', () => {
   const state = live(); const before = structuredClone(state);
@@ -62,6 +90,26 @@ test('report tool validates the declared schema, stage/artifact payload, and ide
   assert.equal(receiveReport(state, report()), true); assert.equal(receiveReport(state, report()), false);
   assert.equal(state.updates.length, 1); assert.equal(state.updates[0].stage, 'a');
   assert.equal(state.status, 'running');
+});
+
+test('versioned stage reports bind lifecycle, evidence and display to one attempt and retain history', () => {
+  const state = live();
+  const run_path = `${WORKSPACE}/output/run/lens`;
+  const accepted = { kind: 'stage', schema: 'tinylens.stage-report.v1', stage: 'a', attempt: 0,
+    status: 'accepted', run_id: 'run-0', run_path, lens_id: 'lens', message: 'Accepted head verified.',
+    path: `${run_path}/accepted/a.json`, display_manifest: `${run_path}/attempts/a/0/display-manifest.json` };
+  for (const bad of [
+    { attempt: 1 }, { status: 'complete' }, { lens_id: 'other' }, { run_id: '../outside' },
+    { path: `${run_path}/attempts/a/0/stage-result.json` }, { path: `${run_path}/accepted/b.json` },
+  ]) assert.throws(() => receiveReport(state, report({ ...accepted, ...bad })));
+  assert.equal(receiveReport(state, report(accepted)), true);
+  const running = { ...accepted, attempt: 1, status: 'running', path: `${run_path}/attempts/a/1/stage-execution.json`, display_manifest: undefined };
+  assert.equal(receiveReport(state, { ...report(running), callId: 'new-attempt' }), true);
+  for (let i = 0; i < 410; i++) receiveReport(state, { ...report({ kind: 'note', message: 'Update.' }), callId: `memo-${i}` });
+  assert.deepEqual(state.updates.filter(update => update.kind === 'stage').map(update => [update.run_id, update.attempt, update.status]),
+    [['run-0', 0, 'accepted'], ['run-0', 1, 'running']]);
+  const restored = initialState(state);
+  assert.equal(restored.updates[0].display_manifest, accepted.display_manifest);
 });
 
 test('real AI preparation report remains a report and is not rejected or mapped to a scientific stage', () => {
@@ -268,7 +316,7 @@ test('ordinary messages never become config overrides or implicit skill calls', 
     if (message.method === 'turn/start' || message.method === 'turn/steer') proc.emitMessage({ id: message.id, result: message.method === 'turn/start' ? { turn: { id: 'text-turn', status: 'inProgress' } } : { turnId: 'text-turn' } });
   });
   await bridge.connect();
-  for (const key of ['developerInstructions', 'baseInstructions', 'config', 'model', 'modelProvider', 'effort', 'sandboxPolicy', 'approvalPolicy', 'collaborationMode', 'input', 'tools', 'skill', 'cwd']) {
+  for (const key of ['developerInstructions', 'baseInstructions', 'config', 'model', 'modelProvider', 'effort', 'serviceTier', 'sandboxPolicy', 'approvalPolicy', 'approvalsReviewer', 'collaborationMode', 'input', 'tools', 'skill', 'cwd']) {
     await assert.rejects(bridge.submitMessage({ text: 'Visible user text', [key]: 'not permitted' }), /only accept text/);
   }
   assert.equal(processes[0].sent.some(message => message.method === 'turn/start'), false);
@@ -283,7 +331,34 @@ test('ordinary messages never become config overrides or implicit skill calls', 
   assert.equal(messages[1].params.input[0].text, '继续解释这个参数。');
   assert.deepEqual(bridge.state.messages.map(message => message.text), [firstText, '继续解释这个参数。']);
   for (const message of messages) assert.deepEqual(Object.keys(message.params).sort(), (message.method === 'turn/start'
-    ? ['threadId', 'input', 'clientUserMessageId'] : ['threadId', 'input', 'clientUserMessageId', 'expectedTurnId']).sort());
+    ? ['threadId', 'input', 'clientUserMessageId', 'model', 'effort', 'serviceTier', 'approvalsReviewer']
+    : ['threadId', 'input', 'clientUserMessageId', 'expectedTurnId']).sort());
+});
+
+test('steering stays on the selected turn even if it finishes while the message is being saved', async t => {
+  const { bridge, processes } = await fixture(t, (message, proc) => {
+    baseHandler(message, proc);
+    if (message.method === 'turn/start') proc.emitMessage({ id: message.id, result: { turn: { id: 'guided-turn', status: 'inProgress' } } });
+    if (message.method === 'turn/steer') proc.emitMessage({ id: message.id, result: { turnId: 'guided-turn' } });
+  });
+  await bridge.connect();
+  await bridge.submitMessage({ text: 'Begin the simulated turn.' });
+  const text = '  请同时核对图像坐标。\n';
+  const receipt = await bridge.submitMessage({ text, expectedTurnId: 'guided-turn' });
+  assert.equal(receipt.delivery, 'delivered');
+  assert.equal(bridge.state.turnId, 'guided-turn');
+  const steer = processes[0].sent.find(message => message.method === 'turn/steer');
+  assert.equal(steer.params.threadId, 'thread-1');
+  assert.equal(steer.params.expectedTurnId, 'guided-turn');
+  assert.deepEqual(steer.params.input, [{ type: 'text', text }]);
+
+  const racing = bridge.submitMessage({ text: 'A draft for the original turn.', expectedTurnId: 'guided-turn' });
+  assert.equal(receiveNotification(bridge.state, 'turn/completed', { threadId: 'thread-1', turn: { id: 'guided-turn', status: 'completed' } }), true);
+  await assert.rejects(racing, /引导消息未发送/);
+  assert.equal(bridge.state.messages.at(-1).delivery, 'rejected');
+
+  await assert.rejects(bridge.submitMessage({ text: 'Outdated steering.', expectedTurnId: 'guided-turn' }), /引导消息未发送/);
+  assert.deepEqual(processes[0].sent.map(message => message.method).filter(method => method?.startsWith('turn/')), ['turn/start', 'turn/steer']);
 });
 
 test('position constraints travel verbatim as ordinary user text, never as scientific configuration or a file command', async t => {
@@ -297,7 +372,7 @@ test('position constraints travel verbatim as ordinary user text, never as scien
   await bridge.submitMessage({ stage: 'preflight', text });
   const sent = processes[0].sent.find(message => message.method === 'turn/start');
   assert.deepEqual(sent.params.input, [{ type: 'text', text }]);
-  assert.deepEqual(Object.keys(sent.params).sort(), ['clientUserMessageId', 'input', 'threadId']);
+  assert.deepEqual(Object.keys(sent.params).sort(), ['approvalsReviewer', 'clientUserMessageId', 'effort', 'input', 'model', 'serviceTier', 'threadId']);
   assert.equal(bridge.state.messages[0].delivery, 'delivered');
   assert.deepEqual(bridge.state.updates, []);
 });
@@ -310,7 +385,9 @@ test('HTTP connect/reply ignore extra configuration instead of forwarding it; me
   const extra = { developerInstructions: 'Browser override', baseInstructions: 'Browser base', config: { developer_instructions: 'hidden override' }, model: 'browser-model', cwd: '/browser-path' };
   const connect = await post('connect', extra); assert.equal(connect.status, 200); await connect.json();
   const proc = processes[0]; const start = proc.sent.find(message => message.method === 'thread/start');
-  for (const key of ['developerInstructions', 'baseInstructions', 'config', 'model']) assert.equal(key in start.params, false);
+  for (const key of ['developerInstructions', 'baseInstructions']) assert.equal(key in start.params, false);
+  assert.equal(start.params.model, connectionConfig.model);
+  assert.deepEqual(start.params.config, { model_reasoning_effort: connectionConfig.reasoningEffort });
   assert.notEqual(start.params.cwd, extra.cwd);
   const rejected = await post('message', { text: 'No config change', ...extra }); assert.equal(rejected.status, 400); await rejected.json();
   assert.equal(proc.sent.some(message => message.method === 'turn/start'), false);

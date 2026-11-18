@@ -9,7 +9,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--model', required=True, help='Your provider model ID (must support tools and images)')
     parser.add_argument('--review-model', help='Optional different model for inspector/synthesis')
-    parser.add_argument('--effort', choices=['minimal', 'low', 'medium', 'high', 'xhigh'], default='medium')
+    parser.add_argument('--effort', choices=['minimal', 'low', 'medium', 'high', 'xhigh', 'max'], default='max')
     parser.add_argument('--pipeline', type=Path, default=Path(__file__).resolve().parents[1] / 'pipeline')
     args = parser.parse_args()
     for value in [args.model, args.review_model or args.model]:

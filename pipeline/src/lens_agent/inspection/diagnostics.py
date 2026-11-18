@@ -451,7 +451,7 @@ def build_inspection_packet(
     directory = output_dir.resolve()
     input_sha256 = None
     if directory.name == "preflight" and (directory.parent / "run-manifest.json").is_file():
-        from ..workbench_display import file_sha256, publish_display
+        from ..workbench_display import DISPLAY_REFERENCE, file_sha256, publish_display
 
         try:
             frozen_input = lens_dir.resolve() / f"{lens_dir.resolve().name}.fits"
@@ -504,7 +504,16 @@ def build_inspection_packet(
         },
     }
     target = output_dir / "inspection.json"
-    target.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+    published_packet = None
+    if input_sha256 is not None:
+        if (directory / "display-manifest.json").is_file() and target.is_file():
+            published_packet = json.loads(target.read_text(encoding="utf-8"))
+            if "display" in published_packet:
+                packet["display"] = published_packet["display"]
+        else:
+            packet["display"] = DISPLAY_REFERENCE
+    if published_packet != packet:
+        target.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
     if input_sha256 is not None:
         try:
             publish_display(directory.parent, directory, "preflight", None, data,
@@ -549,5 +558,7 @@ def materialize_modeling_mask(
     outside_modeling_region = np.hypot(xx - center_x, yy - center_y) > radius_pixels
     mask = outside_modeling_region | np.isin(labels, contaminant_ids)
     target = output_dir / "modeling_mask.fits"
-    fits.writeto(target, mask.astype(np.uint8), header=_canonical_geometry_header(mask.shape, geometry), overwrite=True)
+    header = _canonical_geometry_header(mask.shape, geometry)
+    header["MODELRAD"] = (float(modeling_radius_arcsec), "Modeling radius in arcsec")
+    fits.writeto(target, mask.astype(np.uint8), header=header, overwrite=True)
     return target

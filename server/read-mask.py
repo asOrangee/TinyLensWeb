@@ -11,6 +11,8 @@ from astropy.io import fits
 from matplotlib import colormaps
 from PIL import Image
 
+from read_frozen_input import load_frozen_input
+
 def read_mask(request):
     root, path = Path(request['root']), Path(request['path'])
     if request['stage'] != 'b' or request['kind'] != 'summary' or root.resolve(strict=True) != root:
@@ -35,31 +37,18 @@ def read_mask(request):
     if manifest.get('schema_version') != 'lens_run_manifest.v1' or Path(manifest.get('lens_dir', '')).name != summary.get('lens_id') or run.name != summary.get('lens_id'):
         raise ValueError('Mask run mismatch')
     lens = Path(manifest['lens_dir'])
-    provenance = read_json(lens/'input-provenance.json', root/'output')
-    frozen = Path(provenance['packaged_fits_path'])
-    if frozen.parent != lens:
-        raise ValueError('Input FITS manifest mismatch')
-    fits_raw = read(frozen, root/'output')
-    fits_sha = hashlib.sha256(fits_raw).hexdigest()
-    g = provenance['input_geometry']
+    provenance_path = lens/'input-provenance.json'
+    frozen = load_frozen_input(provenance_path, root/'output', lens_id=run.name,
+                               expected_geometry=manifest['input_geometry'])
+    fits_sha = frozen['fits_sha256']
+    hashes[str(provenance_path)] = frozen['provenance_sha256']
+    hashes[str(frozen['fits_path'])] = fits_sha
+    g = frozen['geometry']
     pixel = float(g['pixel_scale_arcsec'])
     settings = config['settings']
-    if fits_sha != provenance['packaged_fits_sha256'] or manifest['input_geometry'] != g or any(settings.get(k) != v for k, v in g.items()) or not np.isfinite(pixel) or pixel <= 0:
+    if any(settings.get(k) != v for k, v in g.items()):
         raise ValueError('Mask input geometry mismatch')
-    with fits.open(io.BytesIO(fits_raw), memmap=False) as hdus:
-        image = np.asarray(hdus['VIS_FLUX'].data, dtype=float)
-        header = hdus['VIS_FLUX'].header
-        if image.ndim != 2 or image.shape[0] != image.shape[1] or not 1 <= image.shape[0] <= 512 or not np.isfinite(image).all():
-            raise ValueError('Unsupported mask image')
-        for axis, key in [(1, 'input_x_direction'), (2, 'input_y_direction')]:
-            if g[key] not in ['increasing', 'decreasing']:
-                raise ValueError('Invalid image axes')
-            if 'CDELT'+str(axis) in header and (not np.isclose(header['CDELT'+str(axis)], pixel*(1 if g[key] == 'increasing' else -1)) or header.get('CUNIT'+str(axis), 'arcsec').lower() != 'arcsec'):
-                raise ValueError('Input WCS mismatch')
-            if 'CRPIX'+str(axis) in header and not np.isclose(header['CRPIX'+str(axis)], (image.shape[2-axis]+1)/2):
-                raise ValueError('Unsupported image origin')
-            if abs(float(header.get('CRVAL'+str(axis), 0))) > 1e-10:
-                raise ValueError('Unsupported image origin')
+    image = frozen['arrays']['data']
     if g['input_y_direction'] == 'decreasing':
         image = np.flipud(image)
     if g['input_x_direction'] == 'decreasing':
@@ -93,8 +82,8 @@ def read_mask(request):
     def encoded(array):
         return base64.b64encode(np.ascontiguousarray(array).tobytes()).decode()
     raw_values = np.ascontiguousarray(image, dtype='<f8').tobytes()
-    half = image.shape[0]*pixel/2
-    radius = float(settings['modeling_radius']) if 'modeling_radius' in settings else None
+    half_y, half_x = (dimension * pixel / 2 for dimension in image.shape)
+    radius = fits.getheader(io.BytesIO(domain_raw)).get('MODELRAD', settings.get('modeling_radius'))
     if radius is not None and (not np.isfinite(radius) or radius <= 0):
         raise ValueError('Invalid modeling radius')
     return {'schema': 'tinylens.mask-edit.v1', 'stage': 'b', 'attempt': request['attempt'], 'path': str(path), 'sha256': hashes[str(path)],
@@ -105,7 +94,7 @@ def read_mask(request):
             'included_base64': encoded(np.flipud(mask == 0).astype(np.uint8)),
             'domain_base64': encoded(np.flipud(domain == 0).astype(np.uint8)), 'display_y_direction': 'decreasing',
             'plane': {'src': png(np.flipud(colormaps['magma'](norm, bytes=True)[..., :3])), 'shape': list(image.shape),
-                      'bounds_arcsec': [-half, half, -half, half], 'half_extent_arcsec': half, 'vmin': lo, 'vmax': hi,
+                      'bounds_arcsec': [-half_x, half_x, -half_y, half_y], 'half_extent_arcsec': half_y, 'vmin': lo, 'vmax': hi,
                       'data_min': lo, 'data_max': hi, 'stretch': 'asinh', 'asinh_a': 25, 'colormap': 'magma',
                       'colormap_src': png(colormaps['magma'](np.linspace(1, 0, 256)[:, None], bytes=True)[..., :3]),
                       'input_fits_sha256': fits_sha, 'values_base64': base64.b64encode(raw_values).decode(),

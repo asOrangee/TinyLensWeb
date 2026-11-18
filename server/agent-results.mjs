@@ -6,8 +6,10 @@ import { createHash,randomUUID } from 'node:crypto';
 import { mkdir,readFile,writeFile,rename } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { WORKSPACE } from './agent-state.mjs';
+import { withAttemptEvidenceReader } from './attempt-evidence-reader.mjs';
 
 const MAX_RESPONSE = 2 * 1024 * 1024;
+const MAX_SCAN_RESPONSE = 12 * 1024 * 1024;
 const PYTHON = connectionConfig.python;
 const cache = new Map();
 const resultCacheDirectory=fileURLToPath(new URL('../.local/result-cache/',import.meta.url));
@@ -21,14 +23,15 @@ export function reportedResult(state, updateId) {
   const path = posix.normalize(update.path);
   if (!path.startsWith(WORKSPACE + '/output/')) throw new Error('Result is outside the pipeline output directory.');
   if (/\/preflight\/(inspector|inspection)\.json$/.test(path) && normalizeStage(update.stage) === 'preflight') return { path, stage: 'preflight', attempt: null, kind: 'preflight' };
-  const match = path.match(/\/attempts\/(a|b|m0|m1|m2|m3)\/(0|[1-9]\d*)\/(stage-result\.json|artifacts\/stage_(a|m0|m1|m2|m3)\.pkl)$/);
+  const match = path.match(/\/attempts\/(a|b|m0|m1|m2|m3)\/(0|[1-9]\d*)\/(stage-result\.json|decision\.json|artifacts\/stage_(a|m0|m1|m2|m3)\.pkl)$/);
   if (!match || normalizeStage(update.stage) !== match[1] || (match[4] && (match[4] !== match[1] || update.kind !== 'artifact'))) throw new Error('An explicit matching stage result report is required.');
+  if (match[3] === 'decision.json' && (match[1] === 'b' || update.kind !== 'artifact' || path !== update.path)) throw new Error('An explicit matching modeling decision is required.');
   return { path, stage: match[1], attempt: Number(match[2]), kind: match[4] ? 'posterior' : 'summary' };
 }
 
 // This reader is sent over SSH stdin as data. It imports no pipeline modules,
 // executes no science stage, and writes neither source nor result files.
-export const REMOTE_RESULT_READER = `import sys,json,io,pickle,hashlib
+export const REMOTE_RESULT_READER = withAttemptEvidenceReader(`import sys,json,io,pickle,hashlib
 from pathlib import Path
 import numpy as np
 request=json.loads(sys.stdin.readline())
@@ -43,33 +46,23 @@ def read_local(p,base,limit=16*1024*1024):
  resolved=p.resolve(strict=True)
  if resolved!=p or not resolved.is_relative_to(base) or not resolved.is_file() or resolved.stat().st_size>limit: raise ValueError('Invalid declared display input')
  return resolved.read_bytes()
-def frozen_input(run,settings):
- if not (run/'run-manifest.json').is_file():return None
- from astropy.io import fits
- manifest=json.loads(read_local(run/'run-manifest.json',run,1024*1024))
- if manifest.get('schema_version')!='lens_run_manifest.v1':return None
- lens=Path(manifest['lens_dir']);provenance=json.loads(read_local(lens/'input-provenance.json',root/'output',1024*1024))
- f=Path(provenance['packaged_fits_path'])
- if f.parent!=lens: raise ValueError('Input FITS is not adjacent to its manifest')
- fits_raw=read_local(f,root/'output')
- if hashlib.sha256(fits_raw).hexdigest()!=provenance['packaged_fits_sha256']: raise ValueError('Input display checksum mismatch')
- g=provenance['input_geometry'];pixel=float(g['pixel_scale_arcsec'])
- if not np.isfinite(pixel) or pixel<=0 or manifest['input_geometry']!=g or any(settings.get(k)!=v for k,v in g.items()): raise ValueError('Display geometry disagrees with frozen inputs')
- with fits.open(io.BytesIO(fits_raw),memmap=False) as hdus:
-  image=np.asarray(hdus['VIS_FLUX'].data,dtype=float);header=hdus['VIS_FLUX'].header
-  if image.ndim!=2 or not 1<=min(image.shape)<=max(image.shape)<=512 or not np.isfinite(image).all():raise ValueError('Invalid declared input image')
-  for axis,key in [(1,'input_x_direction'),(2,'input_y_direction')]:
-   if g[key] not in ['increasing','decreasing']:raise ValueError('Invalid input axes')
-   if 'CDELT'+str(axis) in header and (not np.isclose(header['CDELT'+str(axis)],pixel*(1 if g[key]=='increasing' else -1)) or header.get('CUNIT'+str(axis),'arcsec').lower()!='arcsec'):raise ValueError('Input WCS mismatch')
-   if 'CRPIX'+str(axis) in header and not np.isclose(header['CRPIX'+str(axis)],(image.shape[2-axis]+1)/2):raise ValueError('Unsupported input origin')
-   if abs(float(header.get('CRVAL'+str(axis),0)))>1e-10:raise ValueError('Unsupported input origin')
- if g['input_y_direction']=='increasing':image=np.flipud(image)
- if g['input_x_direction']=='decreasing':image=np.fliplr(image)
- return image,g,provenance['packaged_fits_sha256']
-def png_url(array):
- from PIL import Image
- import base64
- b=io.BytesIO();Image.fromarray(array).save(b,format='PNG');return 'data:image/png;base64,'+base64.b64encode(b.getvalue()).decode()
+decision=None
+if path.name=='decision.json':
+ from read_attempt_evidence import decision_evidence,verify_decision_file
+ decision=decision_evidence(raw,request['stage'],request['attempt'])
+ path=path.parent/'stage-result.json'
+ raw=verify_decision_file(decision,path.name,read_local(path,path.parent,1024*1024))
+ out['sha256']=hashlib.sha256(raw).hexdigest()
+if request['kind']=='declared_posterior':
+ summary=json.loads(raw)
+ if summary.get('stage')!=request['stage'] or summary.get('attempt')!=request['attempt'] or summary.get('lens_id')!=path.parents[3].name:
+  raise ValueError('Declared posterior summary identity mismatch')
+ artifact='artifacts/stage_'+request['stage']+'.pkl'
+ if summary.get('artifacts',{}).get('stage_pickle')!=artifact: raise ValueError('The reported summary does not declare its saved posterior')
+ raw=read_local(path.parent/artifact,path.parent,64*1024*1024)
+ if decision is not None: verify_decision_file(decision,'artifact:'+artifact,raw)
+ out['summary_sha256']=out['sha256']
+ out['sha256']=hashlib.sha256(raw).hexdigest()
 if request['kind']=='preflight':
  run=path.parent.parent
  packet_raw=raw if path.name=='inspection.json' else read_local(path.parent/'inspection.json',run,1024*1024)
@@ -94,37 +87,13 @@ elif request['kind']=='summary':
  value=json.loads(raw)
  if value.get('stage')!=request['stage'] or value.get('attempt')!=request['attempt']: raise ValueError('Result identity mismatch')
  if not isinstance(value.get('metrics'),dict) or not isinstance(value.get('lens_id'),str): raise ValueError('Invalid stage result')
+ if decision is not None and value['lens_id']!=path.parents[3].name: raise ValueError('Declared summary belongs to a different lens')
  out['result']=value
  config=path.parent/'effective-config.json'
  if config.is_file():
-  resolved=config.resolve(strict=True)
-  if resolved.parent!=path.parent or resolved.stat().st_size>1024*1024: raise ValueError('Invalid configuration reference')
-  out['config']=json.loads(resolved.read_text())
- run=path.parents[3]
- inputs=frozen_input(run,out.get('config',{}).get('settings',{}))
- if inputs is not None:
-  from matplotlib import colormaps
-  image,g,input_sha=inputs;pixel=float(g['pixel_scale_arcsec']);lo=float(image.min());hi=float(image.max())
-  n=np.full_like(image,.5) if hi==lo else np.arcsinh(25*(image-lo))/np.arcsinh(25*(hi-lo))
-  out['planes']={'observation':{'src':png_url(colormaps['magma'](n,bytes=True)[...,:3]),'shape':list(image.shape),'bounds_arcsec':[-image.shape[1]*pixel/2,image.shape[1]*pixel/2,-image.shape[0]*pixel/2,image.shape[0]*pixel/2],'half_extent_arcsec':image.shape[0]*pixel/2,'vmin':lo,'vmax':hi,'data_min':lo,'data_max':hi,'stretch':'asinh','asinh_a':25,'colormap':'magma','colormap_src':png_url(colormaps['magma'](np.linspace(1,0,256)[:,None],bytes=True)[...,:3]),'input_fits_sha256':input_sha}}
- if inputs is not None and request['stage']=='b' and value.get('artifacts',{}).get('feature_mask_fits'):
-  from astropy.io import fits
-  from PIL import Image
-  from matplotlib import colormaps
-  import base64
-  mask_path=path.parent/value['artifacts']['feature_mask_fits']
-  mask_raw=read_local(mask_path,path.parent)
-  mask=np.asarray(fits.getdata(io.BytesIO(mask_raw)))
-  if mask.ndim!=2 or not 1<=min(mask.shape)<=max(mask.shape)<=512 or not np.isin(mask,[0,1]).all(): raise ValueError('Invalid feature mask')
-  settings=out.get('config',{}).get('settings',{})
-  domain=np.asarray(fits.getdata(io.BytesIO(read_local(run/'preflight'/'modeling_mask.fits',run))))
-  if image.shape!=mask.shape or domain.shape!=mask.shape or not np.isfinite(image).all() or not np.isin(domain,[0,1]).all() or np.any((mask==0)&(domain!=0)): raise ValueError('Mask input alignment mismatch')
-  included=int((mask==0).sum());domain_count=int((domain==0).sum())
-  if included!=value['metrics']['included_arc_pixels'] or mask.size-included!=value['metrics']['masked_pixels']: raise ValueError('Mask counts disagree with stage result')
-  lo=float(image.min());hi=float(image.max());n=np.full_like(image,.5) if hi==lo else (image-lo)/(hi-lo)
-  rgb=colormaps['magma'](n,bytes=True)[...,:3]
-  rgba=np.zeros((*mask.shape,4),dtype=np.uint8);rgba[np.flipud(mask)==0]=[45,187,145,145]
-  out['mask']={'background_src':png_url(rgb),'overlay_src':png_url(rgba),'shape':list(mask.shape),'pixel_scale_arcsec':g['pixel_scale_arcsec'],'included':included,'domain_pixels':domain_count,'modeling_radius_arcsec':settings.get('modeling_radius'),'sha256':hashlib.sha256(mask_raw).hexdigest(),'path':str(mask_path),'input_fits_sha256':input_sha}
+  config_raw=read_local(config,path.parent,1024*1024)
+  if decision is not None: verify_decision_file(decision,config.name,config_raw)
+  out['config']=json.loads(config_raw)
 else:
  class ArraysOnly(pickle.Unpickler):
   def find_class(self,module,name):
@@ -139,14 +108,17 @@ else:
  extra=value.get('extra',{})
  if isinstance(extra.get('mass_medians_fixed'),dict):
   out['fixed_parameters']={k:float(v) for k,v in extra['mass_medians_fixed'].items() if k in ['theta_E','e1_mass','e2_mass','center_x_mass','center_y_mass','gamma1','gamma2'] and isinstance(v,(int,float)) and np.isfinite(v)}
+ if request['stage']=='m3' and isinstance(extra.get('reg_hyperparams_fixed'),dict):
+  fixed=out.setdefault('fixed_parameters',{})
+  fixed.update({k:float(v) for k,v in extra['reg_hyperparams_fixed'].items() if k in ['log_lambda_reg','adaptive_reg_rho'] and isinstance(v,(int,float)) and np.isfinite(v)})
  if request['stage']=='m0':
   if value.get('samples') is not None or value.get('weights') is not None: raise ValueError('Unexpected M0 samples')
   out['kind']='evidence_scan'
   out['scan']={}
   for label in ['coarse','fine']:
    x=np.asarray(extra['lambda_grid_'+label],dtype=float); y=np.asarray(extra['log_ev_'+label],dtype=float)
-   if x.ndim!=1 or x.shape!=y.shape or not 1<=len(x)<=10000 or not np.isfinite(x).all() or not np.isfinite(y).all(): raise ValueError('Invalid evidence scan')
-   out['scan'][label]={'log_lambda':x.tolist(),'log_evidence':y.tolist()}
+   if x.ndim!=1 or x.shape!=y.shape or not 1<=len(x)<=100000 or not np.isfinite(x).all() or not np.isfinite(y).any(): raise ValueError('Invalid evidence scan')
+   out['scan'][label]={'log_lambda':x.tolist(),'log_evidence':[float(v) if np.isfinite(v) else None for v in y]}
   out['scan']['log_lambda_best']=float(extra['log_lambda_best'])
  else:
   samples=np.asarray(value['samples'],dtype=float);w=np.asarray(value['weights'],dtype=float);names=value['param_names']
@@ -180,28 +152,53 @@ else:
   palette=io.BytesIO();Image.fromarray(colormaps['magma'](np.linspace(1,0,256)[:,None],bytes=True)[...,:3]).save(palette,format='PNG')
   out['planes']={'source':{'src':'data:image/png;base64,'+base64.b64encode(png).decode(),'shape':list(a.shape),'bounds_arcsec':[float(x[0]-dx/2),float(x[-1]+dx/2),float(y[0]-dy/2),float(y[-1]+dy/2)],'half_extent_arcsec':a.shape[0]*dy/2,'vmin':lo,'vmax':hi,'data_min':lo,'data_max':hi,'stretch':'linear','asinh_a':1,'colormap':'magma','colormap_src':'data:image/png;base64,'+base64.b64encode(palette.getvalue()).decode(),'sha256':hashlib.sha256(png).hexdigest(),'array_sha256':hashlib.sha256(a.tobytes()).hexdigest()}}
 print(json.dumps(out,allow_nan=False,separators=(',',':')))
-`;
+`);
 
 const shellQuote = value => "'" + value.replaceAll("'", "'\\''") + "'";
 
-const diskIdentity=(state,id,result)=>JSON.stringify([state.threadId,id,result.path,digest(REMOTE_RESULT_READER)]);
+const previousReaderHash='1f32d30f2ea6cf06a6046a06e77f5f63637ec935642406d9b4279c5381fce151';
+const olderReaderHash='405493dc1e98275443748452bc967fce231a22e7c509dd9140d0956baf04931e';
+const directSummaryReaderHash='592065bc9fc85d516cd98ac1e5aaf054484bcd33675bb411adbffdc25f37f8cd';
+const readerHash=digest(REMOTE_RESULT_READER);
+const diskIdentity=(state,id,result,hash=readerHash)=>JSON.stringify([state.threadId,id,result.path,hash,
+  ...(result.kind==='declared_posterior'?['posterior']:[])]);
+function resultForView(state, id, view) {
+  const result = reportedResult(state, id);
+  if (view === undefined) return result;
+ if (view !== 'posterior' || result.kind !== 'summary' || !['a','m0','m1','m2','m3'].includes(result.stage)) throw new Error('A reported modeling summary is required.');
+  return { ...result, kind: 'declared_posterior' };
+}
 function validateStoredResult(value,result){
  if(value?.schema!=='tinylens.readonly-result.v1'||value.path!==result.path||value.stage!==result.stage||value.attempt!==result.attempt||!['summary','weighted_posterior','evidence_scan','preflight'].includes(value.kind)||!/^[a-f0-9]{64}$/.test(value.sha256??''))throw new Error('Result cache identity mismatch.');
+ if(result.kind==='declared_posterior'&&(value.kind!==(result.stage==='m0'?'evidence_scan':'weighted_posterior')||!/^[a-f0-9]{64}$/.test(value.summary_sha256??'')))throw new Error('Result is not bound to the reported summary.');
 }
-export async function storeReportedResult(state,id,value,{cacheDirectory=resultCacheDirectory}={}){
- const result=reportedResult(state,id);validateStoredResult(value,result);const identity=diskIdentity(state,id,result);
+export async function storeReportedResult(state,id,value,{cacheDirectory=resultCacheDirectory,view}={}){
+ const result=resultForView(state,id,view);validateStoredResult(value,result);const identity=diskIdentity(state,id,result);
  await mkdir(cacheDirectory,{recursive:true,mode:0o700});const target=join(cacheDirectory,digest(identity)+'.json'),temporary=target+randomUUID();
  await writeFile(temporary,JSON.stringify({identity,value,sha256:digest(JSON.stringify(value))}),{mode:0o600});await rename(temporary,target);
 }
 
-export async function readReportedResult(state, updateId, { spawnProcess = spawn, timeoutMs = 30000, cacheDirectory=resultCacheDirectory } = {}) {
-  const result = reportedResult(state, updateId);
-  const key = JSON.stringify([state.threadId, updateId, result.path]);
+export async function readCachedReportedResult(state, id, { cacheDirectory = resultCacheDirectory, view } = {}) {
+  const result = resultForView(state, id, view);
+  const hashes = [readerHash, directSummaryReaderHash, previousReaderHash, ...(view === undefined ? [olderReaderHash, '405493dc1e98275443748452bc967fce231a22e7c509dd9140d0956baf04931e'] : [])];
+  for (const hash of hashes) {
+    try {
+      const identity=diskIdentity(state,id,result,hash),record=JSON.parse(await readFile(join(cacheDirectory,digest(identity)+'.json'),'utf8'));
+      if(record.identity!==identity||record.sha256!==digest(JSON.stringify(record.value)))throw new Error('Invalid result cache.');
+      validateStoredResult(record.value,result);
+      return record.value;
+    } catch { /* Try the previous verified reader, where applicable. */ }
+  }
+  throw new Error('No verified result cache for this report.');
+}
+
+export async function readReportedResult(state, updateId, { spawnProcess = spawn, timeoutMs = 30000, cacheDirectory=resultCacheDirectory, view } = {}) {
+  const result = resultForView(state, updateId, view);
+  const key = JSON.stringify([state.threadId, updateId, result.path, result.kind]);
+  const maxResponse = result.stage === 'm0' && result.kind !== 'summary' ? MAX_SCAN_RESPONSE : MAX_RESPONSE;
   if (spawnProcess === spawn && cache.has(key)) return cache.get(key);
   if(spawnProcess===spawn){try{
-   const identity=diskIdentity(state,updateId,result),record=JSON.parse(await readFile(join(cacheDirectory,digest(identity)+'.json'),'utf8'));
-   if(record.identity!==identity||record.sha256!==digest(JSON.stringify(record.value)))throw new Error('Invalid result cache.');
-   validateStoredResult(record.value,result);return record.value;
+   return await readCachedReportedResult(state,updateId,{cacheDirectory,view});
   }catch{/* Only this explicitly reported file may be requested remotely. */}}
   const pending = new Promise((resolve, reject) => {
     const command = `env CUDA_VISIBLE_DEVICES= OPENBLAS_NUM_THREADS=1 ${shellQuote(PYTHON)} -B -c ${shellQuote(REMOTE_RESULT_READER)}`;
@@ -215,14 +212,14 @@ export async function readReportedResult(state, updateId, { spawnProcess = spawn
     proc.stderr.resume();
     proc.stdout.on('data', chunk => {
       length += chunk.length;
-      if (length > MAX_RESPONSE) { proc.kill(); finish(new Error('Result exceeds display limit.')); }
+      if (length > maxResponse) { proc.kill(); finish(new Error('Result exceeds display limit.')); }
       else chunks.push(chunk);
     });
     proc.on('close', code => {
       if (code !== 0) return finish(new Error('The reported result could not be read.'));
       try {
         const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-        if (value.schema !== 'tinylens.readonly-result.v1' || value.stage !== result.stage || value.attempt !== result.attempt || value.path !== result.path) throw new Error('Result identity mismatch.');
+        validateStoredResult(value,result);
         finish(null, value);
       } catch (error) { finish(error); }
     });
@@ -234,15 +231,15 @@ export async function readReportedResult(state, updateId, { spawnProcess = spawn
     pending.catch(() => cache.delete(key));
   }
   const value=await pending;
-  if(spawnProcess===spawn)await storeReportedResult(state,updateId,value,{cacheDirectory}).catch(()=>{});
+  if(spawnProcess===spawn)await storeReportedResult(state,updateId,value,{cacheDirectory,view}).catch(()=>{});
   return value;
 }
 
 export async function serveReportedResult(request, response, state, options = {}) {
   try {
     const query = new URL(request.url, 'http://localhost').searchParams;
-    if ([...query.keys()].some(key => key !== 'updateId') || query.getAll('updateId').length !== 1) throw new Error('A result report identifier is required.');
-    const stored = await readReportedResult(state, query.get('updateId'), options);
+    if ([...query.keys()].some(key => !['updateId','view'].includes(key)) || query.getAll('updateId').length !== 1 || query.getAll('view').length > 1) throw new Error('A result report identifier is required.');
+    const stored = await readReportedResult(state, query.get('updateId'), { ...options, view: query.get('view') ?? undefined });
     const {planes,mask,...payload}=stored;
     response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' });
     response.end(JSON.stringify(payload));

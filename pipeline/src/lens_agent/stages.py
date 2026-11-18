@@ -34,7 +34,7 @@ from .modeling.predicted_image_family import (
     validate_predicted_image_family,
 )
 from .models import STAGE_DEPENDENCY_ORDER, StageName
-from .workbench_display import MODEL_STAGES, capture_model_planes, file_sha256, publish_display
+from .workbench_display import DISPLAY_REFERENCE, MODEL_STAGES, capture_model_planes, file_sha256, publish_display
 
 
 def _load_packaged_pipeline() -> ModuleType:
@@ -285,6 +285,12 @@ def _summarize(
             visual_prior_provenance=visual_prior_provenance,
         )
     )
+    if stage == StageName.M3:
+        fixed = payload.get("extra", {}).get("reg_hyperparams_fixed", {})
+        metrics["reg_hyperparams_fixed"] = {
+            key: float(fixed[key]) for key in ("log_lambda_reg", "adaptive_reg_rho")
+            if key in fixed and np.isfinite(fixed[key])
+        }
     artifacts = {
         "stage_pickle": f"artifacts/stage_{stage.value}.pkl",
         "model_png": f"diagnostics/stage_{stage.value}_model.png",
@@ -799,13 +805,16 @@ def _execute_stage(
                     file=stage_log,
                     flush=True,
                 )
+    export_display = result["status"] == "success" and input_sha256 is not None and stage.value in (*MODEL_STAGES, "b")
+    if export_display:
+        result["display"] = DISPLAY_REFERENCE
     _write_artifact_manifest(attempt_root, result["artifacts"])
     result_temporary = attempt_root / ".stage-result.json.tmp"
     result_temporary.write_text(
         json.dumps(result, indent=2) + "\n", encoding="utf-8"
     )
     os.replace(result_temporary, result_path)
-    if result["status"] == "success" and input_sha256 is not None:
+    if export_display:
         try:
             posterior = None
             if stage.value in MODEL_STAGES:

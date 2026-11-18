@@ -1,3 +1,4 @@
+import { connectionConfig } from './connection-config.mjs';
 import {spawn} from 'node:child_process';
 import {createHash,randomUUID} from 'node:crypto';
 import {mkdir,readFile,writeFile,rename} from 'node:fs/promises';
@@ -6,9 +7,10 @@ import {fileURLToPath} from 'node:url';
 import {readReportedResult,reportedResult} from './agent-results.mjs';
 import {WORKSPACE} from './agent-state.mjs';
 import {numericalPlane} from './numeric-payload.mjs';
-import {connectionConfig} from './connection-config.mjs';
+import {withFrozenInputReader} from './frozen-input-reader.mjs';
+import {withAttemptEvidenceReader} from './attempt-evidence-reader.mjs';
 
-export const MODEL_READER=await readFile(new URL('./reconstruct-models.py',import.meta.url),'utf8');
+export const MODEL_READER=withAttemptEvidenceReader(await withFrozenInputReader(new URL('./reconstruct-models.py',import.meta.url)));
 const EPL_REFERENCE_READER=await readFile(new URL('./epl-reference-rays.py',import.meta.url),'utf8');
 const cacheDirectoryDefault=fileURLToPath(new URL('../.local/model-cache/',import.meta.url));
 const sha=value=>createHash('sha256').update(value).digest('hex');
@@ -17,6 +19,10 @@ const quote=value=>"'"+value.replaceAll("'","'\\''")+"'";
 const dependencies={a:[],m0:['a','b'],m1:['a','b'],m2:['a','b','m0','m1'],m3:['a','b','m0','m1','m2']};
 // The M3 addition preserves the A–M2 reader behavior and its validated offline displays.
 const compatibleReaderSha256='6d8d9341d3a230705510e07d090414678982bbd05d1bba1e460c718b0903d286';
+const previousReaderSha256='5addce22452405ef0e06f37007c475dbb37ac33d0af886387b9f5fdb923cb7f1';
+const acceptedM0ReaderSha256='f5b0b7410b06ceb278108d795c0b73a3a6471c072c4232a70c0c1f65d6e99e01';
+const decisionReaderSha256='39f85d2fbaf7b5a362e1f87d3e99cd5af74d77627ad8b6f7c26a21c6916a73cd';
+const directSummaryReaderSha256='54d1f5584bf7551ca7b97663a50d3feab974907581a67d6a5318e51ef59c213b';
 const sampledMassParameters=['theta_E','e1_mass','e2_mass','gamma1','gamma2'];
 const eplParameters=[...sampledMassParameters,'gamma'];
 const centerParameters=['center_x_mass','center_y_mass'];
@@ -35,7 +41,7 @@ function validateMapping(value,mapping){
 export function reportedModelPlan(state,updateId){
  const target=reportedResult(state,updateId);
  if(target.kind!=='summary'||!Object.hasOwn(dependencies,target.stage))throw Error('A reported modeling-stage summary is required.');
- const run=target.path.replace(/\/attempts\/(a|m0|m1|m2|m3)\/\d+\/stage-result\.json$/,'');
+ const run=dirname(dirname(dirname(dirname(target.path))));
  const position=state.updates.findIndex(u=>u.id===updateId);
  const required=[...dependencies[target.stage],target.stage];
  const files={};
@@ -46,24 +52,36 @@ export function reportedModelPlan(state,updateId){
    for(const update of state.updates.slice(0,position+1)){
     if(update.threadId!==state.threadId)continue;
     let result;try{result=reportedResult(state,update.id)}catch{continue;}
-    if(result.kind==='summary'&&result.stage===stage&&result.path.startsWith(run+'/attempts/'))attempts.set(result.path,update);
+    if(result.kind==='summary'&&result.stage===stage&&result.path.startsWith(run+'/attempts/')){
+     const base=dirname(result.path);
+     if(!attempts.has(base)||result.path.endsWith('/stage-result.json'))attempts.set(base,update);
+    }
    }
    if(attempts.size!==1)throw Error('The saved display has no unambiguous reported upstream attempt.');
    summary=[...attempts.values()][0];
   }
   const identity=reportedResult(state,summary.id),base=dirname(identity.path);
   const posterior=state.updates.filter(u=>u.threadId===state.threadId&&u.kind==='artifact'&&u.path===base+'/artifacts/stage_'+stage+'.pkl').at(-1);
-  if(stage!=='b'&&!posterior)throw Error('The saved model pickle has not been reported.');
+  const decision=identity.path.endsWith('/decision.json')?identity.path:undefined;
+  const fromSummary=!posterior&&(decision!==undefined||stage==='a'&&target.stage==='a');
+  if(stage!=='b'&&!posterior&&!fromSummary)throw Error('The saved model pickle has not been reported.');
   if(posterior)reportedResult(state,posterior.id);
-  files[stage]={summary:identity.path,summaryReportId:summary.id,attempt:identity.attempt,
+  files[stage]={summary:join(base,'stage-result.json'),summaryReportId:summary.id,attempt:identity.attempt,
+   ...(decision?{decision}:{}),
    ...(posterior?{posterior:posterior.path,posteriorReportId:posterior.id}:{})};
+  // A reported summary may explicitly name its own saved payload. The reader
+  // must validate the declaration before it can open the canonical path.
+  if(fromSummary){
+   files[stage].posterior=join(base,'artifacts',`stage_${stage}.pkl`);
+   files[stage].posteriorFromSummary=true;
+  }
  }
  return {root:WORKSPACE,run,stage:target.stage,files};
 }
 
 export function validateModelDisplay(value,plan){
  const target=plan.files[plan.stage],derived=value?.display_derivation,stats=derived?.statistics;
- if(value?.schema!=='tinylens.readonly-result.v1'||value.kind!=='summary'||value.stage!==plan.stage||value.attempt!==target.attempt||value.path!==target.summary||!/^[a-f0-9]{64}$/.test(value.sha256??'')||value.result?.stage!==plan.stage||value.result?.attempt!==target.attempt)throw Error('Derived model identity mismatch.');
+ if(value?.schema!=='tinylens.readonly-result.v1'||value.kind!=='summary'||value.stage!==plan.stage||value.attempt!==target.attempt||value.path!==(target.decision??target.summary)||!/^[a-f0-9]{64}$/.test(value.sha256??'')||value.result?.stage!==plan.stage||value.result?.attempt!==target.attempt)throw Error('Derived model identity mismatch.');
  if(!derived||derived.schema!=='tinylens.model-display-derivation.v1'||derived.chi_square_expression!=='((data - model) / noise_rms)^2'||derived.chi_square_is_reduced!==false||derived.support!=='full_image_grid'||derived.fit_support!=='actual_likelihood_mask'||derived.full_output!=='same_scientific_operator_before_active_pixel_indexing'||!Number.isInteger(stats?.pixel_count)||stats.pixel_count<=0||![stats.rms,stats.chi_square_sum].every(Number.isFinite)||stats.rms<0||stats.chi_square_sum<0||Math.abs(stats.chi_square_sum-stats.rms**2*stats.pixel_count)>1e-8*Math.max(1,stats.chi_square_sum))throw Error('Invalid derived chi-square definition.');
  const estimate=plan.stage==='m0'?'saved_evidence_scan_choice_and_conditional_linear_solution':'saved_posterior_medians_and_conditional_linear_solution';
  const method=plan.stage==='m1'?'saved_source_pixels_full_operator_output':'frozen_parameters_conditional_linear_diagnostic_reconstruction';
@@ -87,7 +105,7 @@ export function validateModelDisplay(value,plan){
  if(value.planes.model.mask_sha256!==value.planes['chi-square'].mask_sha256)throw Error('Model and chi-square masks must agree.');
  for(const name of ['residual','source-lensed'])if(value.planes[name].mask_sha256!==value.planes.model.mask_sha256)throw Error('Display coverage must agree.');
  if(plan.stage!=='m3'||value.display_mapping!==undefined)validateMapping(value,value.display_mapping);
- for(const entry of Object.values(plan.files))for(const key of ['summary','posterior'])if(entry[key]&&!/^[a-f0-9]{64}$/.test(derived.input_files_sha256?.[entry[key]]??''))throw Error('The diagnostic dependency was not verified.');
+ for(const entry of Object.values(plan.files))for(const key of ['summary','posterior','decision'])if(entry[key]&&!/^[a-f0-9]{64}$/.test(derived.input_files_sha256?.[entry[key]]??''))throw Error('The diagnostic dependency was not verified.');
  return value;
 }
 
@@ -119,17 +137,20 @@ function readCpuDiagnostic(reader,request,spawnProcess,timeoutMs){
  });
 }
 
-async function readNumericalModel(state,updateId,plan,{spawnProcess=spawn,cacheDirectory=cacheDirectoryDefault,timeoutMs=180000}){
+async function readNumericalModel(state,updateId,plan,{spawnProcess=spawn,cacheDirectory=cacheDirectoryDefault,timeoutMs=180000,cacheOnly=false}){
  const binding={threadId:state.threadId,updateId,plan};
  const identity=JSON.stringify({...binding,reader:sha(MODEL_READER)});
  const path=join(cacheDirectory,sha(identity)+'.json');
- const cacheIdentities=plan.stage==='m3'?[identity]:[identity,JSON.stringify({...binding,reader:compatibleReaderSha256})];
+ const cacheIdentities=[identity,JSON.stringify({...binding,reader:decisionReaderSha256}),JSON.stringify({...binding,reader:directSummaryReaderSha256}),JSON.stringify({...binding,reader:previousReaderSha256})];
+ if(plan.stage==='m0'&&plan.files.m0.acceptedHead) cacheIdentities.push(JSON.stringify({...binding,reader:acceptedM0ReaderSha256}));
+ if(plan.stage!=='m3')cacheIdentities.push(JSON.stringify({...binding,reader:compatibleReaderSha256}));
  for(const cacheIdentity of cacheIdentities){
   try{
    const cached=await readCache(join(cacheDirectory,sha(cacheIdentity)+'.json'),cacheIdentity);
    return validateModelDisplay(cached,plan);
   }catch{/* Rebuild only these explicitly reported, frozen diagnostics. */}
  }
+ if(cacheOnly)return undefined;
  if(pending.has(path))return pending.get(path);
  const operation=(async()=>{
   const value=validateModelDisplay(await readCpuDiagnostic(MODEL_READER,plan,spawnProcess,timeoutMs),plan);
@@ -137,6 +158,13 @@ async function readNumericalModel(state,updateId,plan,{spawnProcess=spawn,cacheD
   return value;
  })();
  pending.set(path,operation);try{return await operation}finally{pending.delete(path)}
+}
+
+// Read previously exported arrays. M1 can be projected explicitly from the saved source pixels.
+export function readAcceptedModel(state, plan, { projectSavedSource = false, ...options } = {}) {
+ const target = plan.files[plan.stage];
+ return readNumericalModel(state, 'accepted:' + plan.stage + ':' + target.decisionSha256, plan,
+  { ...options, cacheOnly: plan.stage !== 'm1' || !projectSavedSource });
 }
 
 async function readEplMapping(state,plan,value,{spawnProcess=spawn,cacheDirectory=cacheDirectoryDefault,resultCacheDirectory,timeoutMs=60000}){
@@ -165,7 +193,7 @@ async function readEplMapping(state,plan,value,{spawnProcess=spawn,cacheDirector
 export async function readReportedModel(state,updateId,options={}){
  const plan=reportedModelPlan(state,updateId);
  const value=await readNumericalModel(state,updateId,plan,options);
- if(plan.stage!=='m3'||value.display_mapping)return value;
+ if(!value||plan.stage!=='m3'||value.display_mapping)return value;
  // Geometry is optional when the remote reference reader is unavailable. The six verified arrays remain usable.
  try{return {...value,display_mapping:await readEplMapping(state,plan,value,options)};}
  catch(error){options.logger?.warn?.('M3 EPL mapping unavailable:',error.message);return value;}

@@ -5,7 +5,7 @@ import { Crosshair, RotateCcw, ZoomIn } from 'lucide-react';
 import displayManifest from '../data/science-demo.json';
 import mappingData from '../data/lens-mapping-demo.json';
 import { displayImageFamily, isInPlaneView, isInside, planeToScreen, screenToPlane, verifiedDemoMapping, type Point, type PlaneFrame, type PlaneView } from '../lib/lens-mapping';
-import {verifiedLiveMapping} from '../lib/live-mapping';
+import {verifiedResultMapping} from '../lib/live-mapping';
 import {useScaledPlanes} from '../lib/use-scaled-planes';
 import type {ImageScale} from '../lib/image-scale';
 import ImageScaleControls from './ImageScaleControls';
@@ -28,7 +28,7 @@ const coordinateNumber=(value:number)=>value!==0&&Math.abs(value)<.001?value.toE
 export default function ScienceViewer({stageId,toolbarTarget,missingLayers,displayPlanes,modelResult,imageScale='linear',onScaleChange=()=>{}}:{stageId:string;toolbarTarget:HTMLDivElement|null;missingLayers?:string;displayPlanes?:LiveResult['planes'];modelResult?:LiveResult;imageScale?:ImageScale;onScaleChange?:(scale:ImageScale)=>void}){
   const {t}=useDemoI18n();
   const live=missingLayers!==undefined;
-  const activeMapping=useMemo(()=>live?verifiedLiveMapping(modelResult?.display_mapping,{stage:stageId,attempt:modelResult?.attempt??-1,path:modelResult?.path??'',sha256:modelResult?.sha256??'',fitsSha256:displayPlanes?.observation?.input_fits_sha256}):mapping,[live,modelResult,stageId,displayPlanes?.observation?.input_fits_sha256]);
+  const activeMapping=useMemo(()=>live?verifiedResultMapping(modelResult,stageId):mapping,[live,modelResult,stageId]);
   const basePlanes=live?displayPlanes:Object.fromEntries(Object.entries(displayManifest.planes).map(([name,plane])=>[name,{...plane,bounds_arcsec:[-plane.half_extent_arcsec,plane.half_extent_arcsec,-plane.half_extent_arcsec,plane.half_extent_arcsec],colormap_src:''}])) as LiveResult['planes'];
   const scaled=useScaledPlanes(basePlanes,imageScale,live);
   const [zoom,setZoom]=useState(1),[pan,setPan]=useState<Point>({x:0,y:0});
@@ -74,7 +74,7 @@ export default function ScienceViewer({stageId,toolbarTarget,missingLayers,displ
   const toolbar=<div className="science-toolbar" role="toolbar" aria-label={t('图像显示工具')}>
     <button className="plane-link-toggle science-icon-button" type="button" aria-label={t('十字标线')} aria-pressed={showCrosshair} disabled={!hasPlanes} title={t('显示同一平面内联动的十字标线')} onClick={()=>{setShowCrosshair(value=>!value);setCursor(null);}}><Crosshair size={17}/></button>
     <button className="plane-link-toggle science-icon-button" type="button" aria-label={t('平面位置联动')} aria-pressed={showMapping&&!!activeMapping} disabled={!activeMapping} title={activeMapping?t('悬停查看 image/source plane 的对应位置'):t('当前结果缺少匹配的透镜映射')} onClick={()=>{setShowMapping(value=>!value);setHover(null);}}><svg width="19" height="19" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round"><path d="M2 5L9 2V15L2 18ZM15 9L22 6V19L15 22Z"/><path d="M5.5 10L18.5 14" strokeDasharray="2 2"/><circle cx="5.5" cy="10" r="1.2" fill="currentColor"/><circle cx="18.5" cy="14" r="1.2" fill="currentColor"/></svg></button>
-    <button className="plane-link-toggle science-icon-button" type="button" aria-label={t('显示临界曲线与焦散线')} aria-pressed={showCurves&&!!activeMapping} disabled={!activeMapping} title={t('同时显示或隐藏图像平面的临界曲线与源平面的焦散线')} onClick={()=>setShowCurves(value=>!value)}><svg width="18" height="18" viewBox="0 0 15 12" aria-hidden="true"><path d="M1 6Q7.5 6 7.5 1Q7.5 6 14 6Q7.5 6 7.5 11Q7.5 6 1 6Z" fill="none" stroke="currentColor" strokeWidth="1.2"/></svg></button>
+    <button className="plane-link-toggle science-icon-button" type="button" aria-label={t('显示临界曲线与焦散线')} aria-pressed={showCurves&&curves.length>0} disabled={curves.length===0} title={t('同时显示或隐藏图像平面的临界曲线与源平面的焦散线')} onClick={()=>setShowCurves(value=>!value)}><svg width="18" height="18" viewBox="0 0 15 12" aria-hidden="true"><path d="M1 6Q7.5 6 7.5 1Q7.5 6 14 6Q7.5 6 7.5 11Q7.5 6 1 6Z" fill="none" stroke="currentColor" strokeWidth="1.2"/></svg></button>
     <ImageScaleControls value={imageScale} onChange={onScaleChange} disabled={!scaled.available||!hasImagePlanes}/>
     <div className="science-tools"><ZoomIn size={14} aria-hidden="true"/><input type="range" disabled={!hasImagePlanes} aria-label={t('图像缩放')} min="1" max="3" step=".25" value={zoom} onChange={event=>changeZoom(Number(event.target.value))}/><span className="science-zoom-label">{zoom.toFixed(2)}×</span><button type="button" onClick={reset} disabled={!hasPlanes} title={t('重置视图')} aria-label={t('重置视图')}><RotateCcw size={14}/></button></div>
   </div>;
@@ -91,7 +91,7 @@ export default function ScienceViewer({stageId,toolbarTarget,missingLayers,displ
         <div className="science-plane-body">
           <div className={'science-image-area'+(unavailable?' is-unavailable':'')+(view.zoom>1?' is-zoomed':'')} onPointerDown={event=>down(event,space)} onPointerMove={event=>move(event,space,frame)} onPointerUp={stop} onPointerCancel={stop} onLostPointerCapture={stop} onPointerLeave={()=>{setHover(null);setCursor(null);}}>
             {!unavailable&&<img src={plane.src} alt={live?`${plane.title}，来自本次已保存结果`:`${plane.title}, synthetic demonstration image`} draggable={false} style={{transform:`translate(${view.pan.x}%, ${view.pan.y}%) scale(${view.zoom})`}}/>}
-            {!unavailable&&activeMapping&&showCurves&&<svg className={`science-lens-curves ${space==='source'?'caustics':'critical-curves'}`} viewBox="0 0 1000 1000" preserveAspectRatio="none" role="img" aria-label={t(space==='source'?'焦散线':'临界曲线')}>
+            {!unavailable&&activeMapping&&showCurves&&curves.length>0&&<svg className={`science-lens-curves ${space==='source'?'caustics':'critical-curves'}`} viewBox="0 0 1000 1000" preserveAspectRatio="none" role="img" aria-label={t(space==='source'?'焦散线':'临界曲线')}>
               {(space==='source'?causticPaths:criticalPaths).map((path,index)=><g key={index} data-curve={index}><path d={path} className="curve-halo" vectorEffect="non-scaling-stroke"/><path d={path} className="curve-line" vectorEffect="non-scaling-stroke"/></g>)}
             </svg>}
             {unavailable?<div className="science-plane-unavailable">—</div>:<><div className="science-ticks"><span>{coordinate(centerY+plane.half_extent_arcsec*(1+view.pan.y/50)/view.zoom)}</span><span>{coordinate(centerY+plane.half_extent_arcsec*(-1+view.pan.y/50)/view.zoom)}</span></div>

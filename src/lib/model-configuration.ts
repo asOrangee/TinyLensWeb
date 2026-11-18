@@ -60,7 +60,7 @@ export function modelConfigurationCards(stage: StageId, live = false, summary?: 
   } else {
     const grid = object(object(summary?.result?.metrics).source_grid_spec);
     const boundModel = model?.stage === stage && model.path === summary?.path && model.sha256 === summary?.sha256 && model.attempt === summary?.attempt ? model : undefined;
-    const shape = boundModel?.planes?.source?.shape;
+    const shape = summary?.parameter_contract ? summary.linear_parameters?.source_brightness?.shape : boundModel?.planes?.source?.shape;
     const gridShape = shape?.length === 2 ? shape.join(' × ') : grid.schema_version === 'source_grid_spec.v1' && Number.isInteger(grid.nsrc) && Number(grid.nsrc) > 0 ? `${grid.nsrc} × ${grid.nsrc}` : undefined;
     cards[2] = { ...cards[2], model: 'Pixelized source',
       parameters: parameters(['source_brightness', 'log_lambda_reg', ...(['m2', 'm3'].includes(stage) ? ['adaptive_reg_rho'] : []), 'source_grid_shape', 'source_pixel_scale'], key => key === 'source_brightness' ? 'linear' : key.startsWith('source_') || stage === 'm3' ? 'fixed' : stage === 'm0' ? 'scan' : 'sampled'),

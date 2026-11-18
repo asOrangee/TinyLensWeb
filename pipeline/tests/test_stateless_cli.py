@@ -342,7 +342,9 @@ def test_preflight_pins_pipeline_release_without_copying_pipeline(tmp_path: Path
     main(["preflight", "--lens-dir", str(lens_dir), "--output-dir", str(output_dir)])
 
     assert not (output_dir / "pipeline.py").exists()
-    assert json.loads((output_dir / "run-manifest.json").read_text(encoding="utf-8")) == {
+    manifest = json.loads((output_dir / "run-manifest.json").read_text(encoding="utf-8"))
+    assert len(manifest.pop("run_id")) == 32
+    assert manifest == {
         "schema_version": "lens_run_manifest.v1",
         "pipeline_release_id": PIPELINE_RELEASE_ID,
         "lens_dir": str(lens_dir.resolve()),
@@ -1139,6 +1141,7 @@ def test_rerun_prepare_archives_current_lens_run_with_next_monotonic_number(
     batch_dir = tmp_path / "output"
     output_dir = batch_dir / lens_dir.name
     main(["preflight", "--lens-dir", str(lens_dir), "--output-dir", str(output_dir)])
+    run_id = json.loads((output_dir / "run-manifest.json").read_bytes())["run_id"]
     (output_dir / "current-run-marker.txt").write_text("current\n", encoding="utf-8")
     archive_root = batch_dir / "_archive"
     (archive_root / f"{lens_dir.name}_old_0").mkdir(parents=True)
@@ -1156,6 +1159,9 @@ def test_rerun_prepare_archives_current_lens_run_with_next_monotonic_number(
     assert (archive_root / f"{lens_dir.name}_old_0").is_dir()
     assert (archive_root / f"{lens_dir.name}_old_2").is_dir()
     assert (archive_root / "notes.txt").read_text(encoding="utf-8") == "manual note\n"
+    main(["preflight", "--lens-dir", str(lens_dir), "--output-dir", str(output_dir)])
+    assert json.loads((output_dir / "run-manifest.json").read_bytes())["run_id"] != run_id
+    assert json.loads((archive_dir / "run-manifest.json").read_bytes())["run_id"] == run_id
 
 
 def test_rerun_prepare_rejects_a_missing_current_lens_run(tmp_path: Path) -> None:

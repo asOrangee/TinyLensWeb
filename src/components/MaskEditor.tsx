@@ -33,9 +33,10 @@ interface Props {
   disabled?: boolean;
   unavailable?: string;
   statistics?: { included: number; excluded: number };
-  geometry?:{size:number;domain:number[];backgroundSrc:string;halfExtent:number;initialPixels:number[];radius:number|null};
+  geometry?:{width:number;height:number;domain:number[];backgroundSrc:string;pixelScale:number;initialPixels:number[];radius:number|null};
   initialValue?:number[];
   backgroundSrc?:string;
+  backgroundLabel?:string;
   toolbarTarget?:HTMLDivElement|null;
 }
 
@@ -46,10 +47,10 @@ interface Gesture {
   tool: Tool;
 }
 
-export default function MaskEditor({ value, onChange, disabled = false, unavailable, statistics,geometry,initialValue,backgroundSrc,toolbarTarget }: Props) {
+export default function MaskEditor({ value, onChange, disabled = false, unavailable, statistics,geometry,initialValue,backgroundSrc,backgroundLabel,toolbarTarget }: Props) {
   const {t}=useDemoI18n();
-  const N=geometry?.size??MASK_GRID_SIZE,COUNT=N*N;
-  const operations=useMemo(()=>maskGrid(N,geometry?.domain),[N,geometry?.domain]);
+  const width=geometry?.width??MASK_GRID_SIZE,height=geometry?.height??MASK_GRID_SIZE,COUNT=width*height;
+  const operations=useMemo(()=>maskGrid(width,geometry?.domain,height),[width,height,geometry?.domain]);
   const {inDomain,cleanMask,morph}=operations,DOMAIN_PIXELS=operations.domainCount;
   const initial = useMemo(() => cleanMask(value), []);
   const [pixels, setPixels] = useState(initial);
@@ -84,14 +85,14 @@ export default function MaskEditor({ value, onChange, disabled = false, unavaila
   useEffect(() => {
     const ctx = canvas.current?.getContext('2d');
     if (!ctx) return;
-    const image = ctx.createImageData(N, N);
+    const image = ctx.createImageData(width, height);
     if (showOverlay) {
       for (let i = 0; i < COUNT; i++) {
         if (!pixels[i]) continue;
-        const x = i % N;
-        const y = Math.floor(i / N);
-        const edge = x === 0 || y === 0 || x === N - 1 || y === N - 1 ||
-          !pixels[i - 1] || !pixels[i + 1] || !pixels[i - N] || !pixels[i + N];
+        const x = i % width;
+        const y = Math.floor(i / width);
+        const edge = x === 0 || y === 0 || x === width - 1 || y === height - 1 ||
+          !pixels[i - 1] || !pixels[i + 1] || !pixels[i - width] || !pixels[i + width];
         image.data[i * 4] = edge ? 110 : 25;
         image.data[i * 4 + 1] = edge ? 250 : 222;
         image.data[i * 4 + 2] = edge ? 203 : 164;
@@ -99,7 +100,7 @@ export default function MaskEditor({ value, onChange, disabled = false, unavaila
       }
     }
     ctx.putImageData(image, 0, 0);
-    if(geometry){ctx.fillStyle='rgba(186,203,225,.65)';for(let y=0;y<N;y++)for(let x=0;x<N;x++)if(inDomain(x,y)&&(!inDomain(x-1,y)||!inDomain(x+1,y)||!inDomain(x,y-1)||!inDomain(x,y+1))&&(x+y)%3!==0)ctx.fillRect(x,y,1,1);}
+    if(geometry){ctx.fillStyle='rgba(186,203,225,.65)';for(let y=0;y<height;y++)for(let x=0;x<width;x++)if(inDomain(x,y)&&(!inDomain(x-1,y)||!inDomain(x+1,y)||!inDomain(x,y-1)||!inDomain(x,y+1))&&(x+y)%3!==0)ctx.fillRect(x,y,1,1);}
     canvas.current?.dispatchEvent(new Event(imageLabelRasterEvent,{bubbles:true}));
   }, [pixels, showOverlay,geometry]);
 
@@ -139,7 +140,7 @@ export default function MaskEditor({ value, onChange, disabled = false, unavaila
 
   const pointFromEvent = (event: PointerEvent<HTMLCanvasElement>): Point => {
     const rect = event.currentTarget.getBoundingClientRect();
-    return { x: (event.clientX - rect.left) * N / rect.width, y: (event.clientY - rect.top) * N / rect.height };
+    return { x: (event.clientX - rect.left) * width / rect.width, y: (event.clientY - rect.top) * height / rect.height };
   };
 
   const paint = (from: Point, to: Point, erase: boolean) => {
@@ -150,9 +151,9 @@ export default function MaskEditor({ value, onChange, disabled = false, unavaila
     for (let step = 0; step <= steps; step++) {
       const x = from.x + (to.x - from.x) * step / steps;
       const y = from.y + (to.y - from.y) * step / steps;
-      for (let py = Math.max(0, Math.floor(y - radius)); py <= Math.min(N - 1, Math.ceil(y + radius)); py++) {
-        for (let px = Math.max(0, Math.floor(x - radius)); px <= Math.min(N - 1, Math.ceil(x + radius)); px++) {
-          if (inDomain(px, py) && Math.hypot(px + 0.5 - x, py + 0.5 - y) <= radius) next[py * N + px] = erase ? 0 : 1;
+      for (let py = Math.max(0, Math.floor(y - radius)); py <= Math.min(height - 1, Math.ceil(y + radius)); py++) {
+        for (let px = Math.max(0, Math.floor(x - radius)); px <= Math.min(width - 1, Math.ceil(x + radius)); px++) {
+          if (inDomain(px, py) && Math.hypot(px + 0.5 - x, py + 0.5 - y) <= radius) next[py * width + px] = erase ? 0 : 1;
         }
       }
     }
@@ -225,13 +226,13 @@ export default function MaskEditor({ value, onChange, disabled = false, unavaila
     </div>)}
     <div className="mask-workarea">
       <figure className="mask-figure">
-        <div className="mask-image-area" data-render-origin="browser-array">
-          <img className="mask-background" src={geometry?.backgroundSrc||backgroundSrc||undefined} alt={geometry?'本次掩膜对应的观测图像':t("用于交互演示的合成透镜图像")} draggable={false}/>
-          <canvas ref={canvas} width={N} height={N} className={`mask-canvas mask-tool-${tool}`} tabIndex={disabled ? -1 : 0} aria-label={geometry?'编辑透镜弧拟合区域。画笔添加，擦除删除。':t("编辑合成透镜的拟合区域。画笔添加，擦除删除。")} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerEnd} onPointerCancel={event => pointerEnd(event, true)} onLostPointerCapture={event => pointerEnd(event, true)} onPointerLeave={() => { if (!gesture.current) setHover(null); }}/>
+        <div className="mask-image-area" style={{aspectRatio:width/height}} data-render-origin="browser-array">
+          <img className="mask-background" src={geometry?.backgroundSrc||backgroundSrc||undefined} alt={backgroundLabel??(geometry?'本次掩膜对应的观测图像':t("用于交互演示的合成透镜图像"))} draggable={false}/>
+          <canvas ref={canvas} width={width} height={height} className={`mask-canvas mask-tool-${tool}`} tabIndex={disabled ? -1 : 0} aria-label={geometry?'编辑透镜弧拟合区域。画笔添加，擦除删除。':t("编辑合成透镜的拟合区域。画笔添加，擦除删除。")} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerEnd} onPointerCancel={event => pointerEnd(event, true)} onLostPointerCapture={event => pointerEnd(event, true)} onPointerLeave={() => { if (!gesture.current) setHover(null); }}/>
           {!geometry&&<div className="mask-domain-boundary" aria-hidden="true"/>}
-          {hover && !disabled && <div className={`mask-brush-cursor${tool === 'erase' ? ' mask-brush-erase' : ''}`} style={{ left: `${hover.x / N * 100}%`, top: `${hover.y / N * 100}%`, width: `${brushSize / N * 100}%`, height: `${brushSize / N * 100}%` }} aria-hidden="true"/>}
+          {hover && !disabled && <div className={`mask-brush-cursor${tool === 'erase' ? ' mask-brush-erase' : ''}`} style={{ left: `${hover.x / width * 100}%`, top: `${hover.y / height * 100}%`, width: `${brushSize / width * 100}%`, height: `${brushSize / height * 100}%` }} aria-hidden="true"/>}
           {!geometry&&<span className="mask-image-label">{t("合成图像 · 非科学结果")}</span>}
-          <span className="mask-scalebar" style={geometry?{width:`${100/(2*geometry.halfExtent)}%`}:undefined}>1″</span>
+          <span className="mask-scalebar" style={geometry?{width:`${100/(width*geometry.pixelScale)}%`}:undefined}>1″</span>
           <button type="button" className="mask-overlay-button" onClick={() => setShowOverlay(v => !v)} title={showOverlay ? t("隐藏拟合区域") : t("显示拟合区域")} aria-label={showOverlay ? t("隐藏 mask 叠层") : t("显示 mask 叠层")} aria-pressed={showOverlay}>{showOverlay ? <Eye size={15}/> : <EyeOff size={15}/>}</button>
         </div>
       </figure>

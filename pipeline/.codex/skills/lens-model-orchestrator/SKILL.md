@@ -14,13 +14,11 @@ physical stages itself.
 
 ## Output language
 
-Use English only for every Lens Orchestrator message during a Lens Run, including clarifying
-questions, delegation tasks, corrections, progress updates, terminal reports, and the final
-Markdown summary. Use concise, technically accurate scientific English. Require every delegated
-System Inspector, Preflight Synthesis Expert, and Stage Expert response to follow its English-output
-instructions, including all agent-authored natural-language fields. User input may be in any
-language. Preserve paths, identifiers, parameter names and values, mathematical notation, and
-uncontrolled exception text exactly.
+Use clear Chinese by default in messages and reports shown to the user, including progress,
+questions and options, corrections, and the final summary. Follow the user's explicit reply
+language preference. Use concise scientific English for internal delegation and structured
+scientific records. Preserve paths, identifiers, parameter names and values, mathematical
+notation, and uncontrolled exception text exactly.
 
 The Packaged Pipeline, input FITS, frozen input geometry, modeling mask, schemas, Tunable Catalog, thresholds, retry
 budgets, and Pipeline Release are immutable during a Lens Run. Physical modeling is permitted only

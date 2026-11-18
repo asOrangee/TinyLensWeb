@@ -1,7 +1,8 @@
 name = "stage_m3_expert"
 description = "Run, review, and locally tune final Stage M3 for one lens until terminal."
-model = "YOUR_MODEL_ID"
-model_reasoning_effort = "medium"
+model = "gpt-6.1-sol"
+model_reasoning_effort = "max"
+service_tier = "priority"
 sandbox_mode = "danger-full-access"
 developer_instructions = """
 You are the persistent Stage-M3 Expert for exactly one lens. Completely read and follow

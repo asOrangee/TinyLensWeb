@@ -1,0 +1,44 @@
+{
+  "schema": "tinylens.stage-display.v3",
+  "previousNamedSchema": "tinylens.stage-display.v2",
+  "directory": "display",
+  "parameterFile": {
+    "schema": "tinylens.stage-parameters.v1",
+    "suffix": "Parameters.json"
+  },
+  "mappingFile": {
+    "schema": "tinylens.lens-mapping.v2",
+    "suffix": "LensMapping.json"
+  },
+  "stagePrefixes": {
+    "preflight": "DataPreview",
+    "a": "StageA",
+    "b": "StageB",
+    "m0": "StageM0",
+    "m1": "StageM1",
+    "m2": "StageM2",
+    "m3": "StageM3"
+  },
+  "imageNames": {
+    "data": "DataImage",
+    "noise": "NoiseImage",
+    "snr": "SNRImage",
+    "psf": "PSFImage",
+    "observation": "DataImage",
+    "model": "ModelImage",
+    "source-lensed": "LensedSource",
+    "source": "UnlensedSource",
+    "residual": "NormalizedResidual",
+    "chi-square": "ChiSquare",
+    "mask": "ArcMask",
+    "domain": "ValidDomain"
+  },
+  "required": {
+    "preflight": ["data", "noise", "snr", "psf"],
+    "b": ["observation", "mask", "domain"],
+    "model": ["observation", "model", "source-lensed", "source", "residual", "chi-square"]
+  },
+  "optional": {
+    "b": ["source-lensed"]
+  }
+}

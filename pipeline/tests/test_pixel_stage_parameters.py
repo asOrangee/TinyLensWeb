@@ -59,9 +59,81 @@ def test_pixel_overlay_uses_posterior_parameters_and_restores_model(tmp_path, mo
 def test_source_solution_reports_evaluated_rho_after_context_exit(rho_mode):
     p, likelihood, medians, names = _likelihood(rho_mode=rho_mode)
     solved = p._solve_source(likelihood, medians, names)
-    assert solved["adaptive_reg_rho"] == pytest.approx(5.47 if rho_mode == "dynamic" else 2.0)
+    expected_rho = 5.47 if rho_mode == "dynamic" else 2.0
+    assert solved["adaptive_reg_rho"] == pytest.approx(expected_rho)
+    template = np.linspace(0.1, 1.0, 16)
+    brightness = np.clip(template / np.percentile(template, 99.5), 0, 1)
+    np.testing.assert_allclose(solved["reg_scale_image"].ravel(), np.exp(expected_rho * (1 - brightness)), rtol=2e-6)
     rho = likelihood.phys_model.source_light[0].adaptive_reg_rho
     assert float(getattr(rho, "value", rho)) == pytest.approx(2.0)
+
+
+@pytest.mark.parametrize("mass_kind", ["sie-shear", "epl-shear"])
+def test_pixel_workbench_exports_full_cutout_and_keeps_fitted_pixels(mass_kind):
+    pytest.importorskip("TinyLensGpu")
+    from lens_agent.modeling import pipeline_template as p
+    from lens_agent.modeling.workbench_planes import capture_pixelized
+    from lens_agent.workbench_display import capture_model_planes
+
+    mass_params = dict(theta_E=p.ParamU("theta_E", 0.16), e1=0.12, e2=-0.11,
+                       center_x=0.012, center_y=-0.014)
+    mass = p.SIE(**mass_params) if mass_kind == "sie-shear" else p.EPL(gamma=1.95, **mass_params)
+    mass.theta_E.to_dynamic()
+    shear = p.Shear(gamma1=0.01, gamma2=0.02)
+    strength = p.ParamU("log_lambda_reg", 0.0)
+    strength.to_dynamic()
+    source = p.PixelizedSourceModel(n=6, log_lambda_reg=strength, regularization_type=p.REGULARIZATION_TYPE,
+                                    adaptive_reg_rho=2.0)
+    observation = np.full((9, 9), 0.4)
+    lens_light = np.full_like(observation, 0.1)
+    noise = np.full_like(observation, 0.2)
+    psf = np.array([[0.01, 0.04, 0.08], [0.05, 0.40, 0.12], [0.02, 0.10, 0.18]])
+    mask = np.ones_like(observation, dtype=bool)
+    mask[2:7, 2:7] = False
+    bbox = (-0.3, 0.3, -0.3, 0.3)
+    template = np.linspace(-0.1, 1.0, 36)
+    likelihood = p._pixel_likelihood(
+        observation - lens_light, noise, psf, mask, None, (mass, shear), source, None,
+        fixed_source_bbox=bbox, fixed_reg_template=template,
+    )
+    names = [param.name for param in likelihood.get_dynamic_params()]
+    medians = {"theta_E": 0.16, "log_lambda_reg": 0.0}
+    solved = p._solve_source(likelihood, medians, names)
+    with p.ck.ActiveContext(likelihood), capture_model_planes() as capture:
+        likelihood.fill_params(p.jnp.asarray([medians[name] for name in names]))
+        capture_pixelized(likelihood, solved, bbox, observation, lens_light)
+        for pair in capture["mapping"]["curves"]:
+            stride = max(1, len(pair["critical"]) // 6)
+            image_points = pair["critical"][::stride]
+            x, y = (p.jnp.asarray([point[key] for point in image_points]) for key in ("x", "y"))
+            dx, dy = mass.deriv(x, y)
+            gx, gy = shear.deriv(x, y)
+            expected = np.column_stack((x - dx - gx, y - dy - gy))
+            saved_source = [[point["x"], point["y"]] for point in pair["caustic"][::stride]]
+            np.testing.assert_allclose(saved_source, expected, atol=1e-6)
+        different_mass = {**medians, "theta_E": 0.19}
+        likelihood.fill_params(p.jnp.asarray([different_mass[name] for name in names]))
+        np.testing.assert_array_equal(likelihood._get_reg_scale(), solved["reg_scale_image"].ravel())
+
+    planes = capture["planes"]
+    assert set(planes) == {"source", "source-lensed", "model", "residual", "chi-square"}
+    lensed = planes["source-lensed"]
+    assert lensed.shape == observation.shape
+    np.testing.assert_array_equal(lensed[~mask], solved["model_1d"])
+    assert np.any(np.abs(lensed[mask]) > 1e-4)
+    np.testing.assert_array_equal(planes["model"], lens_light + lensed)
+    fitted_noise = np.asarray(likelihood.noise_map, dtype=float)
+    np.testing.assert_array_equal(planes["residual"], (observation - planes["model"]) / fitted_noise)
+    np.testing.assert_array_equal(planes["chi-square"], planes["residual"] ** 2)
+    np.testing.assert_array_equal(planes["source"], solved["source_image"])
+    mapping = capture["mapping"]
+    assert mapping["model"]["kind"] == mass_kind
+    assert mapping["model"]["theta_E"] == pytest.approx(0.16)
+    assert mapping["curves"]
+    for pair in mapping["curves"]:
+        assert len(pair["critical"]) == len(pair["caustic"]) > 1
+        assert all(np.isfinite([point["x"], point["y"]]).all()
+                   for path in (pair["critical"], pair["caustic"]) for point in path)
 
 
 @pytest.mark.parametrize("scale", [0.05, 0.1])

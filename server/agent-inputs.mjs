@@ -17,6 +17,10 @@ const provenanceReport = path => path.endsWith('/input-provenance.json');
 const preflightReport = /\/preflight\/(?:inspection\.json|preflight_[26]panel\.png)$/;
 
 // Keep already verified offline FITS previews readable after updating the reader.
+const previousReaderHashes = [
+  '77aa6fa45c774fae0e02c236c5b162e7a4d5e1028f8112f5c3460ec973f34b7f',
+  'f5b458821393bd314da9ca2b8ec75d5b53a6a3787ff4cc9b950f6816f42537dc',
+];
 const legacyReaderHash = 'ee3c696e2a4700633771afa61c346c98e2bbcb433c264758b1db91021ab1e9d5';
 export const REMOTE_INPUT_READER = await readFile(new URL('./read-preflight-input.py', import.meta.url), 'utf8');
 const readerHash = digest(REMOTE_INPUT_READER);
@@ -24,12 +28,13 @@ const shellQuote = value => "'" + value.replaceAll("'", "'\\''") + "'";
 const unavailable = () => Object.assign(new Error('无法连接 GPU 服务器，恢复连接后可刷新预览。'), { status: 503 });
 
 export function reportedInput(state, updateId) {
-  const update = state.threadId && state.updates.find(item => item.id === updateId && item.threadId === state.threadId && item.kind === 'artifact');
+  const update = state.threadId && state.updates.find(item => item.id === updateId && item.threadId === state.threadId);
   if (!update || update.stage?.trim().toLowerCase() !== 'preflight' || typeof update.path !== 'string' || update.path.includes('\0')) {
     throw new Error('AI has not reported these inputs.');
   }
   const { path } = update;
-  if (!path.startsWith(output) || posix.normalize(path) !== path || !(provenanceReport(path) || preflightReport.test(path))) {
+  const report = update.kind === 'artifact' || (update.kind === 'stage' && path.endsWith('/preflight/inspection.json'));
+  if (!report || !path.startsWith(output) || posix.normalize(path) !== path || !(provenanceReport(path) || preflightReport.test(path))) {
     throw new Error('An explicit preflight input or inspection report is required.');
   }
   return { path, threadId: state.threadId, updateId };
@@ -75,6 +80,9 @@ async function loadReportedInput(state, updateId, { spawnProcess = spawn, cacheD
   }
   if (!refresh) {
     try { return await saved(identity); } catch { /* Fetch only this exact report. */ }
+    for (const hash of previousReaderHashes) {
+      try { return await saved(identityFor(hash)); } catch { /* No verified offline preview for this report. */ }
+    }
     if (provenanceReport(input.path)) {
       try { return await saved(identityFor(legacyReaderHash), true); } catch { /* No usable legacy cache for this report. */ }
     }

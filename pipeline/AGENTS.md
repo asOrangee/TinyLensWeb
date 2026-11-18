@@ -5,14 +5,11 @@ This repository implements a Codex-controlled, stage-gated strong-lens modeling 
 ## Communication with the user
 
 - Assume the user is a scientist, not a professional software engineer.
-- Communicate in clear Chinese unless the user requests another language.
-- During a Lens Run, use English only for all Lens Orchestrator, System Inspector,
-  and Stage Expert user-facing and inter-agent natural-language output, including
-  delegation, progress, correction, and terminal messages and all agent-generated
-  natural-language fields. This Lens Run rule overrides the default language above,
-  but users may still give instructions in any language. Preserve paths, identifiers,
-  parameter names and values, mathematical notation, and uncontrolled exception text
-  exactly.
+- Communicate with the user in clear Chinese unless the user requests another language.
+  This includes progress, questions and options, approval explanations, and final
+  summaries during a Lens Run. Use concise scientific English for internal delegation
+  and structured scientific records. Preserve schema keys and enum values, paths,
+  identifiers, parameters, units, and raw errors exactly.
 - Lead with the practical result: what changed, whether it works, whether scientific results or data are affected, and what the user needs to do next.
 - Avoid unexplained software-engineering jargon, abbreviations, fashionable terminology, and programming metaphors.
 - When a software term is necessary, explain it immediately in plain language. When helpful, relate it to an analogous idea in scientific computing or data analysis.

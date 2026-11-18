@@ -24,3 +24,24 @@ test('foreign, stale, nonfinite and uncalibrated mappings never fall back to dem
  const d=fixtures.m1;
  for(const change of [{synthetic:true},{stage:'m0'},{attempt:2},{fits_sha256:'0'.repeat(64)},{model:{...d.model,kind:'unsupported'}},{frames:{...d.frames,source:undefined}},{references:d.references.map((r,i)=>i===0?{...r,source:{x:NaN,y:0}}:r)},{references:d.references.map((r,i)=>i===0?{...r,source:{x:0,y:0}}:r)}])assert.equal(verifiedLiveMapping({...d,...change} as LiveMapping,binding(d)),null);
 });
+
+test('named mapping returns the stored paths and retains both exact hover directions', () => {
+  const legacy = fixtures.a;
+  const path = '/workspace/output/run/lens/attempts/a/0/display';
+  const curves = [{ critical: [{ x: .12, y: .24 }, { x: .3, y: .4 }],
+    caustic: [{ x: -.15, y: .02 }, { x: .2, y: -.1 }], closed: false }];
+  const saved: LiveMapping = { ...legacy, path, run_id: 'original', schema: 'tinylens.lens-mapping.v2', curves,
+    mapping_source: { path: path + '/StageA_LensMapping.json', sha256: 'a'.repeat(64) } };
+  const sourceBinding = { ...binding(saved), runId: 'original', frames: saved.frames };
+  const mapper = verifiedLiveMapping(saved, sourceBinding);
+  assert.ok(mapper);
+  assert.equal(mapper.criticalCurves(), curves);
+  const image = saved.references[0].image;
+  const source = mapper.sourceFor(image);
+  assert.ok(mapper.imagesFor(source).some(candidate => Math.hypot(candidate.x - image.x, candidate.y - image.y) < 1e-6));
+  assert.deepEqual(verifiedLiveMapping({ ...saved, curves: null }, sourceBinding)?.criticalCurves(), []);
+  assert.deepEqual(verifiedLiveMapping({ ...saved, curves: [] }, sourceBinding)?.criticalCurves(), []);
+  assert.equal(verifiedLiveMapping(saved, { ...sourceBinding, runId: 'rerun' }), null);
+  assert.equal(verifiedLiveMapping(saved, { ...sourceBinding, frames: { ...saved.frames,
+    source: { ...saved.frames.source, shape: [1, 2] } } }), null);
+});

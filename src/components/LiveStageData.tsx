@@ -7,11 +7,12 @@ import StageConfiguration from './StageConfiguration';
 import { liveParameters } from '../lib/live-parameters';
 import { parametersForPosterior } from '../lib/parameter-presentation';
 import { EvidenceChart } from './PosteriorChart';
-import { parseLiveResult, stageDisplayCandidates, type LiveResult } from '../lib/live-results';
+import { legacyAcceptanceReport, parseLiveResult, resultIdentity, stageDisplayCandidates, type LiveResult } from '../lib/live-results';
 import { parseMaskSource } from '../lib/mask-user-input';
 import { fetchPublishedDisplay } from '../lib/published-display';
 import { useAgentTaskId } from '../lib/agent-task-context';
 import { agentTaskUrl } from '../lib/live-tasks';
+import { isNamedDisplayDirectory, isNamedDisplaySchema, namedDisplaySchema } from '../lib/display-report';
 
 const number = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? (value !== 0 && (Math.abs(value) < .001 || Math.abs(value) >= 1e6) ? value.toExponential(4) : Number(value.toPrecision(7)).toString()) : '—';
 const object = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -23,12 +24,15 @@ type StageDisplay = {
   posterior?: LiveResult;
   model?: LiveResult;
   mask?: ReturnType<typeof parseMaskSource>;
+  maskReport?: AgentUpdate;
 };
 
 async function fetchLegacy(taskId: string, report: AgentUpdate | undefined,
-                           endpoint: 'result' | 'model' | 'mask', signal: AbortSignal) {
+                           endpoint: 'result' | 'model' | 'mask', signal: AbortSignal, view?: 'posterior') {
   if (!report?.id) return undefined;
-  const url = agentTaskUrl('/api/agent/' + endpoint + '?updateId=' + encodeURIComponent(report.id), taskId);
+  const params = new URLSearchParams({ updateId: report.id });
+  if (view) params.set('view', view);
+  const url = agentTaskUrl('/api/agent/' + endpoint + '?' + params, taskId);
   const response = await fetch(url, { signal });
   if (!response.ok) throw Error('无法读取本次已报告的数值结果。');
   return response.json();
@@ -38,32 +42,74 @@ async function optional<T>(operation: () => Promise<T>): Promise<T | undefined> 
   try { return await operation(); } catch { return undefined; }
 }
 
+async function loadAccepted(taskId: string, report: AgentUpdate, reports: Selection, stage: string,
+                            attempt: number | null | undefined, signal: AbortSignal): Promise<StageDisplay> {
+  const params = new URLSearchParams({ updateId: report.id!, stage });
+  if (typeof attempt === 'number') params.set('attempt', String(attempt));
+  const response = await fetch(agentTaskUrl('/api/agent/accepted-stage?' + params, taskId), { signal });
+  if (!response.ok) throw Error('无法读取已接受的数值结果。');
+  const data = await response.json();
+  const index = data.summary?.attempt;
+  if (data.stage !== stage || data.report_path !== report.path || !Number.isSafeInteger(index) || index < 0
+      || (typeof attempt === 'number' && index !== attempt)) throw Error('接受记录与所选阶段不匹配。');
+  const run = report.path!.replace(/\/accepted\/[^/]+$/, '');
+  const summaryReport = { ...report, stage, path: `${run}/attempts/${stage}/${index}/stage-result.json` };
+  const summary = parseLiveResult(data.summary, summaryReport);
+  const posterior = await optional(async () => {
+    const parsed = parseLiveResult(data.posterior, summaryReport);
+    return parsed.summary_sha256 === summary.sha256 || parsed.sha256 === summary.parameter_source?.sha256 ? parsed : undefined;
+  });
+  const model = await optional(async () => {
+    const payload = data.model ?? (data.observation ? { ...summary, planes: { observation: data.observation } } : summary);
+    const parsed = parseLiveResult(payload, summaryReport);
+    return parsed.planes && parsed.sha256 === summary.sha256 ? parsed : undefined;
+  });
+  const mask = data.mask === undefined ? undefined : parseMaskSource(data.mask, summaryReport);
+  if (mask && mask.sha256 !== summary.sha256) throw Error('掩膜与已接受的阶段摘要不匹配。');
+  return { reports: { ...reports, identity: resultIdentity(summaryReport) }, summary, posterior, model, mask, maskReport: mask ? summaryReport : undefined };
+}
+
 async function loadAttempt(taskId: string, reports: Selection, stage: string, signal: AbortSignal): Promise<StageDisplay> {
+  const readPublished = async (report: AgentUpdate) => {
+    const bundle = await optional(() => fetchPublishedDisplay(taskId, report, signal));
+    return bundle?.summary ? { reports, summary: bundle.summary, posterior: bundle.posterior,
+      model: bundle.summary.planes ? bundle.summary : undefined, mask: bundle.mask, maskReport: bundle.mask ? report : undefined } : undefined;
+  };
   if (reports.published) {
-    const bundle = await optional(() => fetchPublishedDisplay(taskId, reports.published!, signal));
-    if (bundle?.summary) {
-      return { reports, summary: bundle.summary, posterior: bundle.posterior,
-        model: bundle.summary.planes ? bundle.summary : undefined, mask: bundle.mask };
-    }
+    const published = await readPublished(reports.published);
+    if (published) return published;
+    if (isNamedDisplayDirectory(reports.published.path) || signal.aborted) return { reports };
   }
-  const readResult = (report: AgentUpdate | undefined, endpoint: 'result' | 'model') => optional(async () => {
-    const body = await fetchLegacy(taskId, report, endpoint, signal);
+  const declaration = reports.declaration ?? (stage === 'preflight' ? undefined : reports.summary);
+  if (declaration) {
+    const published = await readPublished(declaration);
+    if (published) return published;
+  }
+  if (!reports.legacyReadable) return { reports };
+  const readResult = (report: AgentUpdate | undefined, endpoint: 'result' | 'model', view?: 'posterior') => optional(async () => {
+    const body = await fetchLegacy(taskId, report, endpoint, signal, view);
     return body && report ? parseLiveResult(body, report) : undefined;
   });
+  const summary = await readResult(reports.summary, 'result');
+  const schema = summary?.result?.display?.schema;
+  if (schema === namedDisplaySchema) return { reports };
+  if (isNamedDisplaySchema(schema)) return { reports, summary };
   const readMask = optional(async () => {
     if (stage !== 'b' || !reports.summary) return undefined;
     const body = await fetchLegacy(taskId, reports.summary, 'mask', signal);
     return body ? parseMaskSource(body, reports.summary) : undefined;
   });
-  const [summary, posterior, model, mask] = await Promise.all([
-    readResult(reports.summary, 'result'), readResult(reports.posterior, 'result'),
+  const declaredPosterior = !reports.posterior && summary?.result?.status === 'success' && !['b', 'preflight'].includes(stage);
+  const [posterior, model, mask] = await Promise.all([
+    declaredPosterior ? readResult(reports.summary, 'result', 'posterior') : readResult(reports.posterior, 'result'),
     stage === 'b' || stage === 'preflight' ? undefined : readResult(reports.summary, 'model'),
     readMask,
   ]);
   return {
-    reports, summary, posterior,
+    reports, summary, posterior: declaredPosterior && posterior?.summary_sha256 !== summary?.sha256 ? undefined : posterior,
     model: model && (!summary || model.sha256 === summary.sha256) ? model : undefined,
     mask: mask && mask.sha256 === summary?.sha256 ? mask : undefined,
+    maskReport: reports.summary,
   };
 }
 
@@ -72,10 +118,11 @@ const hasImage = (value: StageDisplay) => value.mask || value.model?.planes?.mod
 export function useLiveStageData(stage: Stage, updates: AgentUpdate[], historical?: string) {
   const taskId = useAgentTaskId();
   const candidates = stageDisplayCandidates(updates, stage.id, historical);
+  const acceptance = legacyAcceptanceReport(updates, stage.id, historical);
   // Report delivery updates other session fields frequently. Reload only when
   // a scoped report changes, including a newly announced result in the same run.
-  const signature = JSON.stringify(candidates.map(({ identity, published, summary, posterior }) =>
-    [identity?.key, published?.id, summary?.id, posterior?.id]));
+  const signature = JSON.stringify([acceptance?.id, historical, candidates.map(({ identity, published, summary, posterior, declaration, legacyReadable }) =>
+    [identity?.key, published?.id, summary?.id, posterior?.id, declaration?.id, legacyReadable])]);
   const [loaded, setLoaded] = useState<{ taskId: string; stage: string; signature: string; value: StageDisplay }>();
   useEffect(() => {
     const controller = new AbortController();
@@ -84,11 +131,17 @@ export function useLiveStageData(stage: Stage, updates: AgentUpdate[], historica
     };
     async function load() {
       let incomplete: StageDisplay | undefined;
+      if (acceptance && !candidates.some(candidate => candidate.published)) {
+        const context = candidates[0];
+        const accepted = await optional(() => loadAccepted(taskId, acceptance, context, stage.id,
+          historical ? context.identity?.attempt : undefined, controller.signal));
+        if (accepted) { commit(accepted); return; }
+      }
       for (const reports of candidates) {
         if (controller.signal.aborted) return;
         const attempt = await loadAttempt(taskId, reports, stage.id, controller.signal);
         if (controller.signal.aborted) return;
-        if (hasImage(attempt)) { commit(attempt); return; }
+        if (hasImage(attempt) || attempt.summary?.parameter_source) { commit(attempt); return; }
         if (!incomplete && (attempt.summary || attempt.posterior)) incomplete = attempt;
       }
       commit(incomplete ?? { reports: candidates[0] });
@@ -97,14 +150,15 @@ export function useLiveStageData(stage: Stage, updates: AgentUpdate[], historica
     return () => controller.abort();
   }, [taskId, stage.id, signature]);
   const current = loaded?.taskId === taskId && loaded.stage === stage.id
-    && candidates.some(candidate => candidate.identity?.key === loaded.value.reports.identity?.key)
+    && (loaded.signature === signature || candidates.some(candidate => candidate.identity?.key === loaded.value.reports.identity?.key))
     ? loaded : undefined;
   const reports = current?.value.reports ?? candidates[0];
-  const { summary, posterior, model, mask } = current?.value ?? { reports };
+  const { summary, posterior, model, mask, maskReport } = current?.value ?? { reports };
+  const parameterDetails = liveParameters(stage, summary, posterior, model);
   return {
-    reports, summary, posterior, modelResult: model, modelPlanes: model?.planes, mask,
-    loading: current?.signature !== signature && !!(reports.summary || reports.posterior || reports.published),
-    parameters: parametersForPosterior(stage.id, liveParameters(stage, summary, posterior, model)),
+    reports, summary, posterior, modelResult: model, modelPlanes: model?.planes, mask, maskReport,
+    loading: current?.signature !== signature && !!(acceptance || reports.summary || reports.posterior || reports.published),
+    parameterDetails, parameters: parametersForPosterior(stage.id, parameterDetails),
   };
 }
 

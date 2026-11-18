@@ -117,7 +117,9 @@ SSH 非交互命令不一定读取交互 shell 的环境变量。可以使用 [�
 
 不使用 API 密钥时，直接将 `TINYLENS_REMOTE_CODEX` 指向真正的 Codex 程序，包装器并非必需。独立 `CODEX_HOME` 需要完成自己的登录或 provider 配置，不能指向空目录后期望继承其他目录的登录。
 
-还需配置九个科学角色使用的模型。在 GPU 服务器的仓库根目录执行：
+新建和恢复任务默认用中文答复，主控和九个科学角色使用 `gpt-6.1-sol`、`max` 和 Fast（`priority`）。命令和访问请求默认交给 Codex 的「帮我批准」按风险审查。设置随源码分发，部署需要支持这些选项的 Codex 和相应的模型访问权限。
+
+如需为科学角色指定其他模型，可在 GPU 服务器的仓库根目录执行：
 
 ```bash
 python scripts/configure_agents.py --model 'YOUR_ACTUAL_MODEL_ID' --effort medium
@@ -126,7 +128,7 @@ python scripts/configure_agents.py --model 'YOUR_ACTUAL_MODEL_ID' --effort mediu
 #   --review-model 'YOUR_INSPECTOR_MODEL_ID' --effort medium
 ```
 
-脚本仅填写角色文件的模型和 reasoning effort，不改科学提示词、接受门槛或 API 凭据。随仓库提供的 `YOUR_MODEL_ID` 是必须替换的占位符。主编排模型由你自己的 Codex 用户配置选择；角色模型也应是同一 provider 允许的模型。
+脚本填写角色文件的模型和推理强度。角色服务层级由各自的 TOML 文件设置，主控设置可在桥接的 `.env.local` 中覆盖。
 
 ## 5. 连接本机 Web 与 GPU 服务器
 
@@ -157,6 +159,10 @@ cp .env.example .env.local
 | `TINYLENS_REMOTE_PYTHON` | 安装了 TinyLensGpu、lens_agent 和显示依赖的 Python 程序 |
 | `TINYLENS_REMOTE_CODEX` | 服务器 Codex 程序或自己的启动包装器 |
 | `TINYLENS_REMOTE_CODEX_HOME` | 可选的远程 Codex 用户配置目录 |
+| `TINYLENS_AI_MODEL` | 主控模型，默认 `gpt-6.1-sol` |
+| `TINYLENS_AI_REASONING_EFFORT` | 主控推理强度，默认 `max` |
+| `TINYLENS_AI_SERVICE_TIER` | 主控服务层级，默认 `priority`（Fast） |
+| `TINYLENS_APPROVALS_REVIEWER` | 审批方式，默认 `auto_review`（帮我批准）。设为 `user` 可手动审批 |
 | `TINYLENS_DATASET_PATH` | 可选的初始输入目录；新任务也可在对话中指定数据 |
 
 真实结果读取器也使用同一组 SSH/Python 配置。`.env.local` 由 Node 服务读取，不会编译进浏览器；修改后需重启自己的桥接进程。
@@ -211,26 +217,46 @@ Lens Result Directory: /srv/TinyLensWeb/pipeline/output/run-001/lens-001
 Lens Agent Command: /opt/conda/envs/tinylens_gpu/bin/python -m lens_agent.cli
 GPU Stage Command: /srv/TinyLensWeb/pipeline/scripts/run_lens_stage_on_idle_gpu.sh --python /opt/conda/envs/tinylens_gpu/bin/python
 
-请先核验 input-provenance.json、原始图像和输入标定；本例为 0.05 arcsec/pixel，x 随列递增、y 随行递减，请核对后用于预检并冻结。按照现有工作流进行三名 Inspector、综合判断、A、B、M0、M1、M2、M3 及科学审查。不要修改 pipeline 源码、科学门槛或原始输入；保留已有结果，遇到待答问题或命令审批时等待我的真实选择。
+请先核验 input-provenance.json、原始图像和输入标定。本例为 0.05 arcsec/pixel，x 随列递增、y 随行递减，请核对后用于预检并冻结。按照现有工作流进行三名 Inspector、综合判断、A、B、M0、M1、M2、M3 及科学审查。保留 pipeline 源码、科学门槛、原始输入和已有结果。遇到需要用户决策的科学问题时，等待我的答复。
 
-请用 tinylens_ui_report 明确报告阶段状态。每个阶段发布 display-manifest.json 后，以 kind=artifact 和对应的 stage 报告它的绝对路径。旧运行可报告 input-provenance.json、preflight/inspector.json、各阶段 stage-result.json 和 PKL。科学接受由你核验正式接受头后明确报告。
+请用 tinylens_ui_report 明确报告阶段状态。用 tinylens.stage-report.v1 携带原始 run_path、run-manifest.json 中的 run_id、lens_id、stage、attempt（预检填 null）。执行和科学审查分别用 running、awaiting_review、reviewing、accepted 等状态。核验正式接受头后再报告 accepted。展示清单可通过 display_manifest 明确报告。整体重跑归档时，请用该次旧 run_id 和原始 run_path 报告归档后的 run-manifest.json，kind=artifact、stage=preflight、attempt=null。旧运行仍可报告明确的阶段产物及相应状态。
 ```
 
-Stage A 的标准 runner 还需按工作流添加 `--timeout-seconds 1800`；由 AI/阶段专家按现有规则构造实际阶段命令，前端不拼装或调用科学 CLI。原科学角色在运行期间默认使用英文，若希望中文回复，可在普通消息中提出；Web 不覆盖其永久指令。
+Stage A 的标准 runner 还需按工作流添加 `--timeout-seconds 1800`。AI 和阶段专家按现有规则构造阶段命令。面向用户的进度、提问和总结默认使用中文，用户可以在对话中指定其他回复语言。科学文件中的字段、枚举和参数名按各自的格式保存。
 
 阶段计算成功、AI 回合结束、生成诊断图、硬门槛通过和科学接受是不同状态。Web 仅显示 AI 明确报告且通过受限读取器核验的产物。缺少结果显示“—”；B 不显示虚构后验，M0 的证据扫描不作为归一化后验；参数中心值 q50 是带权中位数，不标为最大似然“最优值”。
 
 新建任务后，输入框位于欢迎页中央。发送首条消息后进入 Stage 工作台。任务可从当前浏览器的侧栏移入“已删除任务”，也可从该列表恢复。切换 Stage 时保留可用页签与当前任务的色阶，可选 Linear、Log、Asinh 和 Z。
 
+AI 正在运行时，输入补充内容并点击发送箭头或按 Enter，消息会作为引导交给当前回合。输入框为空时，方块用于停止当前回合。如果发送时回合已结束，输入框会保留草稿。
+
 A、M0、M1、M2 和 M3 可用已报告的数值产物展示六幅诊断图。M3 使用同一 attempt 的 EPL＋外剪切结果提供双向平面联动、临界线和焦散线。参数页保留采样参数与线性求解量的卡片，M0 显示扫描选定值和相对对数证据曲线。
 
 #### 阶段展示文件
 
-同时更新前端工程和 GPU 主机上的 `pipeline/` 源码后，新预检和工作台支持的建模阶段会在本次预检目录或 attempt 目录下生成 `display.fits`，校验后发布 `display-manifest.json`。预检导出 Data、1σ RMS、SNR 和 PSF。Stage B 导出 Data、弧支持掩膜和有效域，展示掩膜的 1 表示纳入。A、M0–M3 导出六图已经得到的数值、独立源平面边界及可用的参考射线。像素化模型用该次求得的源像素做同一算子的全网格投影，并对照原拟合区保存的预测。参数文件记录带权后验或 M0 证据扫描。
+新结果每张图对应一个 `StageName_ImageName.fits`，文件名区分大小写。Pipeline 和 Web 桥接共用 `pipeline/src/lens_agent/display_contract.json`，FITS 主 HDU 存放二维数值并记录像素几何。相对于 `output/<RunID>/<LensID>/` 的目录及文件如下。
 
-清单记录本次 run、Stage、attempt、输入哈希和实际用到的上游 attempt。预检命令会输出清单路径，建模命令的结果包含 `display_manifest`。桥接按 AI 报告读取固定路径、核对依赖和图层，网页从数值绘图。新 attempt 只有诊断文件或校验失败时，同次运行已有的数值结果继续可见。可通过分支历史打开先前 attempt。原始诊断图由后端审查使用，网页图像接口仅提供数值产物。
+| 阶段 | 目录 | FITS 文件名 |
+| --- | --- | --- |
+| Data Preview | `preflight/display/` | `DataPreview_DataImage.fits`、`DataPreview_NoiseImage.fits`、`DataPreview_SNRImage.fits`、`DataPreview_PSFImage.fits` |
+| B | `attempts/b/<Attempt>/display/` | `StageB_DataImage.fits`、`StageB_LensedSource.fits`、`StageB_ArcMask.fits`、`StageB_ValidDomain.fits` |
+| A、M0、M1、M2、M3 | `attempts/<Stage 小写>/<Attempt>/display/` | `<StageName>_DataImage.fits`、`<StageName>_ModelImage.fits`、`<StageName>_LensedSource.fits`、`<StageName>_UnlensedSource.fits`、`<StageName>_NormalizedResidual.fits`、`<StageName>_ChiSquare.fits`。`<StageName>` 为 `StageA` 或 `StageM0` 至 `StageM3`。 |
+
+预检噪声图为 1σ RMS。B 的 `ArcMask` 和 `ValidDomain` 中 1 表示纳入，`LensedSource` 取自该次 B 实际依赖的 A。上游历史 attempt 缺少可核验的源图时，B 仍可展示 mask。A、M0–M3 的源平面保留独立边界。像素化模型用该次求得的源像素做同一算子的全网格投影，并对照原拟合区保存的预测。
+
+每个阶段在同一个 `display/` 中写出 `StageName_Parameters.json`。预检使用 `DataPreview_Parameters.json`，A、B 和 M0–M3 分别使用 `StageA_Parameters.json`、`StageB_Parameters.json` 和 `StageM0_Parameters.json` 至 `StageM3_Parameters.json`。文件由 Pipeline 按 `tinylens.stage-parameters.v1` 写出，记录本次配置、统计量、实际固定值和可用的线性解。采样阶段保存带权边缘后验直方图和 q16、q50、q84。中心值为 q50，下误差为 q50−q16，上误差为 q84−q50。M0 保存粗、细证据扫描及选中的 `log_lambda_reg`。预检和 B 保存实际配置与统计量。
+
+`display-manifest.json` 位于 `display/` 的同级目录，绑定 run、Stage、attempt、上游 attempt 和文件哈希。桥接按 AI 报告核验，并从已核验的固定文件向网页分别提供图像与参数。某类文件缺失时，另一类已核验的内容仍可展示。原始诊断图供后端审查。预检命令输出清单和目录，建模结果包含 `display_manifest` 和 `display_directory`。
+
+A、M0–M3 在 `display/` 发布 `StageName_LensMapping.json`，例如 `StageM3_LensMapping.json`。Pipeline 使用该 attempt 绘图时的质量模型和原始像平面视野，从 TinyLensGpu 计算临界曲线，并逐点映到源平面得到焦散线。文件记录成对的曲线坐标、参考射线、模型参数以及两平面的 FITS 几何。网页绘制保存的曲线，双向鼠标联动使用同一文件中的模型及校验射线。桥接同时核验运行 ID、attempt、输入哈希、两幅 FITS 哈希和映射文件哈希。映射文件缺失或校验失败时，该次图像和参数仍可展示。
 
 已有会话继续支持原来的报告和缓存。旧 attempt 缺少可核验的依赖时，对应图位保留“—”。新清单只在新预检或阶段计算完成后的导出步骤生成。
+
+#### 阶段状态与结果版本
+
+新预检生成的 `run_id` 固定在 `run-manifest.json`，整体重跑生成新 ID。`tinylens.stage-report.v1` 报告将状态绑定到 `run_id`、`run_path`、`lens_id`、`stage` 和 `attempt`。`running` 表示运行中，`executed` 表示执行完成，`awaiting_review` 和 `reviewing` 表示等待或进行科学审查，`accepted` 对应 AI 明确报告且桥接核验到同一 attempt 的正式接受记录。报告可附同一 attempt 的 `display_manifest`。
+
+结果页默认显示最近的可用已接受版本，阶段导航显示当前的运行或审查状态。侧栏「历史记录」可查看旧 attempt。重复使用同一输出路径重跑时，AI 明确报告旧运行归档后的 `run-manifest.json`，桥接据此定位既有展示文件，并核对旧 `run_id`。旧版报告在能核对同一运行与 attempt 时继续参与版本选择。
 
 真实 B mask 编辑只保存本地草稿，并以普通用户输入交给 AI；不直接写回运行中的 FITS。重跑请求同样交给 AI，不能因点击界面或消息送达而视为执行、覆盖或接受完成。位置约束点选也不保证当前 pipeline 已将该约束应用于拟合。
 
@@ -264,7 +290,7 @@ CUDA_VISIBLE_DEVICES= JAX_PLATFORMS=cpu python -m pytest -q
 | `python3`/`codex` 不存在 | 为 `.env.local` 填写服务器上的绝对程序路径；非交互 SSH 不一定加载 Conda/PATH |
 | 没有输入图像 | 核对输入封装及校验值。让 AI 显式报告 `input-provenance.json` 或同次预检记录；工作台从绑定的 FITS 数组绘图 |
 | 某阶段图位为空 | 核对同一会话是否报告了对应的展示清单，以及 FITS、阶段摘要和冻结依赖是否通过校验；旧运行可核对原 summary/PKL 报告 |
-| `YOUR_MODEL_ID` 错误 | 执行 `scripts/configure_agents.py`，同时核对主 Codex 配置及 provider 支持的模型 |
+| 模型或服务层级不可用 | 核对 Codex 登录可用的模型和服务层级，以及桥接和专家的模型设置 |
 | API 在交互 shell 可用，Web 不可用 | 检查 SSH 启动环境、私有 key 文件及包装器；不要把 key 放入 `VITE_*` |
 | `No idle unlocked GPU is available` | runner 正按现有门槛等待；不会自动放宽资源门槛或把查询错误当作空闲 |
 | 重新打开页面后未继续运行 | 恢复连接与恢复科学执行是不同操作；查看已有报告后向 AI 明确提出恢复要求，避免重复运行 |

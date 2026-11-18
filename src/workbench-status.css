@@ -1,6 +1,7 @@
 /* Status colors are independent of the current selection and visual theme. */
 .stage-step[data-stage-status]{--stage-status-bg:#eef0f3;--stage-status-border:#c8ced6;--stage-status-ink:#6d7888}
 .stage-step[data-stage-status="completed"]{--stage-status-bg:#eaf1fc;--stage-status-border:#b4cbed;--stage-status-ink:#356bbd}
+.stage-step[data-stage-status="review"]{--stage-status-bg:#f1ebfa;--stage-status-border:#cbb9e7;--stage-status-ink:#7753a4}
 .stage-step[data-stage-status="blocked"]{--stage-status-bg:#fff3cc;--stage-status-border:#e3c76f;--stage-status-ink:#8d7130}
 .stage-step[data-stage-status="failed"]{--stage-status-bg:#fbe4e3;--stage-status-border:#dfaba8;--stage-status-ink:#a54f4a}
 .app-shell.demo-workspace[data-design] .workbench-heading .stage-nav-item .stage-name-line .stage-step[data-stage-status] .stage-initial{position:relative;isolation:isolate;background:var(--stage-status-bg);border-color:var(--stage-status-border);color:var(--stage-status-ink);border-radius:50%;box-shadow:none}

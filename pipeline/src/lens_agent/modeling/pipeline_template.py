@@ -1285,9 +1285,30 @@ def _free_epl(stage_m1: StagePosterior, stage_a: StagePosterior):
     return mass, shear
 
 
+class _FixedSourceTemplateOperator(PixelizedImageProbModelOperator):
+    """Use the M1 source-plane template with the native-image adaptive operator."""
+
+    def __init__(self, *, image_data, phys_model, fixed_reg_template, **kwargs):
+        from TinyLensGpu.utils.inversion.regularization import _normalize_source_template
+
+        template = jnp.asarray(fixed_reg_template, dtype=jnp.float32)
+        if not np.isfinite(np.asarray(template)).all():
+            raise ValueError("fixed_reg_template values must be finite")
+        normalized = _normalize_source_template(template, int(phys_model.source_light[0].n))
+        object.__setattr__(self, "_fixed_reg_template", normalized)
+        # Enable the upstream adaptive path. _project_reference supplies the
+        # frozen source nodes in place of projecting a native image per proposal.
+        super().__init__(image_data=image_data, phys_model=phys_model,
+                         adapt_image=np.zeros_like(image_data), **kwargs)
+
+    def _project_reference(self, op_data):
+        return self._fixed_reg_template
+
+
 def _pixel_likelihood(
     image, noise, psf, feature_mask, circular_mask, mass_profiles,
-    source: PixelizedSourceModel, position_likelihood, *, fixed_source_bbox, **kwargs,
+    source: PixelizedSourceModel, position_likelihood, *, fixed_source_bbox,
+    fixed_reg_template=None, **kwargs,
 ):
     mask = np.asarray(feature_mask, dtype=bool)
     if circular_mask is not None:
@@ -1295,7 +1316,12 @@ def _pixel_likelihood(
     physical = PhysicalModel(
         lens_mass=list(mass_profiles), source_light=[source], lens_light=[]
     )
-    return PixelizedImageProbModelOperator(
+    operator = PixelizedImageProbModelOperator
+    if fixed_reg_template is not None:
+        if hasattr(operator, "_project_reference"):
+            operator = _FixedSourceTemplateOperator
+        kwargs["fixed_reg_template"] = fixed_reg_template
+    return operator(
         image_data=image, noise_map=noise, psf_kernel=psf, dpix=DPIX,
         nsub=NSUB_PIX, phys_model=physical, mask=mask,
         position_likelihood=position_likelihood, solver_type=SOLVER_TYPE,

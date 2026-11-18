@@ -4,7 +4,8 @@ export type AgentMessage = { id: string; role: 'user' | 'assistant'; text: strin
 export type AgentActivity = { id: string; type: string; title: string; status: string; detail?: string; output?: string };
 export type AgentRequest = { id: string | number; method: string; params: Record<string, unknown>;
   scope?: { rootThreadId: string; rootTurnId: string; threadId: string; turnId: string } };
-export type AgentUpdate = { id?: string; at?: string; turnId?: string; kind: 'stage' | 'artifact' | 'note'; stage?: string; status?: string; title?: string; message?: string; path?: string };
+export type AgentUpdate = { id?: string; at?: string; threadId?: string; turnId?: string; kind: 'stage' | 'artifact' | 'note'; stage?: string; status?: string; title?: string; message?: string; path?: string;
+  schema?: string; run_id?: string; run_path?: string; lens_id?: string; attempt?: number | null; display_manifest?: string; verified_attempt?: number; display_source_report_id?: string };
 export type AgentQuestionAnswer = { optionId?: string; text?: string };
 export type AgentQuestion = {
   id: string;
@@ -73,7 +74,14 @@ export function parseAgentState(value: unknown): AgentState {
     messages: (value.messages as unknown[]).filter(record).filter(item => typeof item.id === 'string' && ['user', 'assistant'].includes(String(item.role)) && typeof item.text === 'string').map(item => ({ id: item.id as string, role: item.role as 'user' | 'assistant', text: item.text as string, phase: optionalText(item.phase), complete: typeof item.complete === 'boolean' ? item.complete : undefined })),
     activities: (value.activities as unknown[]).filter(record).filter(item => ['id', 'type', 'title', 'status'].every(key => typeof item[key] === 'string')).map(item => ({ id: item.id as string, type: item.type as string, title: item.title as string, status: item.status as string, detail: optionalText(item.detail), output: optionalText(item.output) })),
     requests: (value.requests as unknown[]).filter(record).filter(item => (typeof item.id === 'string' || typeof item.id === 'number') && typeof item.method === 'string' && record(item.params)).map(item => ({ id: item.id as string | number, method: item.method as string, params: item.params as Record<string, unknown>, scope: requestScope(item.scope) })),
-    updates: (value.updates as unknown[]).filter(record).filter(item => ['stage', 'artifact', 'note'].includes(String(item.kind))).map(item => ({ id: optionalText(item.id), at: optionalText(item.at), turnId: optionalText(item.turnId), kind: item.kind as AgentUpdate['kind'], stage: optionalText(item.stage), status: optionalText(item.status), title: optionalText(item.title), message: optionalText(item.message), path: optionalText(item.path) })),
+    updates: (value.updates as unknown[]).filter(record).filter(item => ['stage', 'artifact', 'note'].includes(String(item.kind))).map(item => ({
+      id: optionalText(item.id), at: optionalText(item.at), threadId: optionalText(item.threadId), turnId: optionalText(item.turnId), kind: item.kind as AgentUpdate['kind'],
+      stage: optionalText(item.stage), status: optionalText(item.status), title: optionalText(item.title), message: optionalText(item.message), path: optionalText(item.path),
+      schema: optionalText(item.schema), run_id: optionalText(item.run_id), run_path: optionalText(item.run_path), lens_id: optionalText(item.lens_id),
+      attempt: item.attempt === null || typeof item.attempt === 'number' && Number.isSafeInteger(item.attempt) ? item.attempt : undefined,
+      verified_attempt: typeof item.verified_attempt === 'number' && Number.isSafeInteger(item.verified_attempt) ? item.verified_attempt : undefined,
+      display_manifest: optionalText(item.display_manifest), display_source_report_id: optionalText(item.display_source_report_id),
+    })),
     questions: (Array.isArray(value.questions) ? value.questions : []).filter(record).filter(item => ['id', 'threadId', 'turnId', 'sourceCallId', 'title', 'question'].every(key => typeof item[key] === 'string') && ['pending', 'sending', 'answered', 'delivery_unknown', 'superseded'].includes(String(item.status))).map(item => ({
       id: item.id as string, threadId: item.threadId as string, turnId: item.turnId as string, sourceCallId: item.sourceCallId as string,
       title: item.title as string, question: item.question as string, context: optionalText(item.context), stage: optionalText(item.stage),

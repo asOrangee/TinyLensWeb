@@ -7,6 +7,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from .adjudication import adjudicate_attempt
 from .attempts import prepare_attempt, promote_attempt
@@ -79,17 +80,22 @@ def _cmd_preflight(args: argparse.Namespace) -> None:
     if previous is None:
         manifest = {
             "schema_version": "lens_run_manifest.v1",
+            "run_id": uuid4().hex,
             "pipeline_release_id": PIPELINE_RELEASE_ID,
             "lens_dir": str(lens_dir),
             "input_geometry": geometry.model_dump(mode="json"),
             "geometry_evidence": getattr(args, "geometry_evidence", None),
         }
-        run_manifest.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        with run_manifest.open("x", encoding="utf-8") as handle:
+            handle.write(json.dumps(manifest, indent=2) + "\n")
     packet = build_inspection_packet(lens_dir, output_dir / "preflight", geometry=geometry)
     print(packet)
     display = packet.with_name("display-manifest.json")
     if display.is_file():
         print(f"Workbench display manifest: {display.resolve()}", file=sys.stderr)
+        images = display.with_name("display")
+        if images.is_dir():
+            print(f"Workbench FITS directory: {images.resolve()}", file=sys.stderr)
 
 
 def _cmd_mask(args: argparse.Namespace) -> None:
@@ -156,6 +162,9 @@ def _cmd_stage(args: argparse.Namespace) -> None:
     display = args.output_dir.resolve() / "attempts" / args.stage / str(args.attempt) / "display-manifest.json"
     if result.get("status") == "success" and not args.preview_only and display.is_file():
         result = {**result, "display_manifest": str(display)}
+        images = display.with_name("display")
+        if images.is_dir():
+            result["display_directory"] = str(images)
     try:
         print(json.dumps(result, indent=2), flush=True)
     except BrokenPipeError:

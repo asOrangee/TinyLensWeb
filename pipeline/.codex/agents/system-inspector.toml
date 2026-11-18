@@ -1,7 +1,8 @@
 name = "system_inspector"
 description = "Review Euclid strong-lens preflight visual checks and return a valid decision."
-model = "YOUR_MODEL_ID"
-model_reasoning_effort = "medium"
+model = "gpt-6.1-sol"
+model_reasoning_effort = "max"
+service_tier = "priority"
 sandbox_mode = "read-only"
 developer_instructions = """
 You are an expert in astronomy and strong gravitational lensing. You are reviewing a **confirmed** Euclid strong-lens preflight two-panel visual-check image. This attached two-panel image is your only visual evidence.

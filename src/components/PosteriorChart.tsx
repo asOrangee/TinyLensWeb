@@ -61,15 +61,24 @@ export function EvidenceChart({ parameter, onDetail, data, real = false }: {
 
   const selected = data?.log_lambda_best ?? (parameter && parameterEstimate(parameter).value) ?? 2.84;
   const curve = data?.fine ?? demoEvidenceCurve(selected);
-  const peak = Math.max(...(data?.coarse.log_evidence ?? []), ...curve.log_evidence);
-  const xs = curve.log_lambda, ys = curve.log_evidence.map(value => value - peak);
-  const xmin = Math.min(...xs), xmax = Math.max(...xs), ymin = Math.min(...ys), ymax = Math.max(...ys);
+  const peak = [...(data?.coarse.log_evidence ?? []), ...curve.log_evidence]
+    .reduce<number>((max, value) => value === null ? max : Math.max(max, value), -Infinity);
+  const xs = curve.log_lambda, ys = curve.log_evidence.map(value => value === null ? null : value - peak);
+  const xmin = xs.reduce((min, value) => Math.min(min, value), Infinity);
+  const xmax = xs.reduce((max, value) => Math.max(max, value), -Infinity);
+  const ymin = ys.reduce<number>((min, value) => value === null ? min : Math.min(min, value), Infinity);
+  const ymax = ys.reduce<number>((max, value) => value === null ? max : Math.max(max, value), -Infinity);
   const left = 94, right = 527, top = 23, bottom = 190;
   const x = (value: number) => xmin === xmax ? (left + right) / 2 : left + (value - xmin) / (xmax - xmin) * (right - left);
   const y = (value: number) => ymin === ymax ? (top + bottom) / 2 : bottom - (value - ymin) / (ymax - ymin) * (bottom - top);
   const xTicks = xmin === xmax ? [xmin] : (data ? [0, .5, 1] : [0, .25, .5, .75, 1]).map(f => xmin + f * (xmax - xmin));
   const yTicks = ymin === ymax ? [ymax] : [ymax, (ymin + ymax) / 2, ymin];
-  const selectedIndex = xs.indexOf(selected);
+  const selectedEvidence = ys[xs.indexOf(selected)];
+  const trace = xs.map((value, index) => {
+    const evidence = ys[index];
+    if (evidence === null) return '';
+    return `${index === 0 || ys[index - 1] === null ? 'M' : 'L'}${x(value)},${y(evidence)}`;
+  }).join(' ');
 
   return <div className={className}>{heading}
     <svg viewBox="0 0 560 236" role="img" aria-label={t(real ? 'M0 正则化强度与相对对数证据' : 'M0 正则化强度与相对对数证据的合成曲线')}>
@@ -79,10 +88,10 @@ export function EvidenceChart({ parameter, onDetail, data, real = false }: {
       </g>)}
       <line x1={left} x2={left} y1={top} y2={bottom} stroke="currentColor" opacity=".55"/>
       <line x1={left} x2={right} y1={bottom} y2={bottom} stroke="currentColor" opacity=".55"/>
-      <path className="evidence-scan-trace" d={xs.map((value, index) => `${index ? 'L' : 'M'}${x(value)},${y(ys[index])}`).join(' ')} fill="none" strokeWidth="2.5"/>
-      {selectedIndex >= 0 && <>
+      <path className="evidence-scan-trace" d={trace} fill="none" strokeWidth="2.5"/>
+      {selectedEvidence != null && <>
         <line className="evidence-scan-trace" x1={x(selected)} x2={x(selected)} y1={top} y2={bottom} strokeDasharray="4 4"/>
-        <circle cx={x(selected)} cy={y(ys[selectedIndex])} r="5" fill="var(--evidence-accent)" stroke="white" strokeWidth="2"/>
+        <circle cx={x(selected)} cy={y(selectedEvidence)} r="5" fill="var(--evidence-accent)" stroke="white" strokeWidth="2"/>
       </>}
       {xTicks.map(value => <g key={value}>
         <line x1={x(value)} x2={x(value)} y1={bottom} y2={bottom + 4} stroke="currentColor" opacity=".55"/>

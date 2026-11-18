@@ -16,3 +16,13 @@ test('settings reject SSH flags, shell fragments, relative workspaces and invali
   assert.equal(readConnectionConfig({ TINYLENS_REMOTE_PROXY_PORT: '0' }).remoteProxyPort, 0);
   assert.equal(readConnectionConfig({ TINYLENS_REMOTE_PROXY_PORT: '51984' }).remoteProxyPort, 51984);
 });
+
+test('a clean installation uses the shipped task profile', () => {
+  const config = readConnectionConfig({});
+  assert.equal(config.model, 'gpt-6.1-sol');
+  assert.equal(config.reasoningEffort, 'max');
+  assert.equal(config.serviceTier, 'priority');
+  assert.equal(config.approvalsReviewer, 'auto_review');
+  assert.equal(readConnectionConfig({ TINYLENS_APPROVALS_REVIEWER: 'user' }).approvalsReviewer, 'user');
+  assert.throws(() => readConnectionConfig({ TINYLENS_APPROVALS_REVIEWER: 'always-approve' }));
+});

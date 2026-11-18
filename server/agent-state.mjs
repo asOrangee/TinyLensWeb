@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { receiveQuestionReport, restoreQuestions, QUESTION_FORMAT } from './agent-questions.mjs';
 import { connectionConfig } from './connection-config.mjs';
+import { keepStageReport, stageReportFields, validateStageReport } from './stage-reports.mjs';
 export const WORKSPACE = connectionConfig.workspace;
 export const DATASET = connectionConfig.dataset;
 const statuses = ['idle', 'running', 'waiting', 'interrupted', 'completed', 'failed'];
@@ -151,10 +152,10 @@ export function restoreThread(state, thread, turns = thread?.turns || []) {
 }
 export const reportTool = {
   type: 'function', name: 'tinylens_ui_report',
-  description: 'Optionally report verified stage status, an existing artifact path, or a note to the TinyLens interface. When a stage has published display-manifest.json, report its absolute path as an artifact for that stage. This tool only updates the UI. It does not run stages, interpret files, approve results, or change scientific decisions. Never equate command success with scientific acceptance. ' + QUESTION_FORMAT,
+  description: 'Report verified stage status or an existing artifact to the TinyLens interface. Use schema tinylens.stage-report.v1 with the run_id from run-manifest.json, its original absolute run_path, lens_id, stage (preflight, a, b, m0, m1, m2, m3), and attempt (null for preflight). For stage reports use running, executed, awaiting_review, reviewing, accepted, human_review, retry, failed or another declared status. Verify the accepted head before reporting accepted and put its absolute path in path (the canonical inspector.json for preflight). Report a published display-manifest.json as display_manifest or report the existing display directory as an artifact. After a full rerun archives a reported run, report the archived run-manifest.json as a preflight artifact with the archived run’s original run_id and run_path. For runs without run_id, report the explicit attempt file paths. This tool only updates the UI and never constitutes approval or scientific acceptance. ' + QUESTION_FORMAT,
   inputSchema: { type: 'object', properties: {
     kind: { type: 'string', enum: ['stage', 'artifact', 'note'] }, stage: { type: 'string' }, status: { type: 'string' },
-    title: { type: 'string' }, message: { type: 'string' }, path: { type: 'string' }
+    title: { type: 'string' }, message: { type: 'string' }, path: { type: 'string' }, ...stageReportFields,
   }, required: ['kind', 'message'], additionalProperties: false }
 };
 export function validateRequestScope(state, params, verifiedScope) {
@@ -171,11 +172,11 @@ export function validateRequestScope(state, params, verifiedScope) {
     throw new Error('Request is outside the verified active TinyLens session tree');
   }
 }
-export function receiveReport(state, params) {
+export function receiveReport(state, params, verifiedScope) {
   validateRequestScope(state, params);
   if (params.tool !== reportTool.name || (params.namespace !== undefined && params.namespace !== null) || typeof params.callId !== 'string') throw new Error('Unexpected report source');
   const report = params.arguments;
-  const keys = ['kind', 'message', 'stage', 'status', 'title', 'path'];
+  const keys = ['kind', 'message', 'stage', 'status', 'title', 'path', ...Object.keys(stageReportFields)];
   if (!record(report) || Object.keys(report).some(key => !keys.includes(key)) || !['stage', 'artifact', 'note'].includes(report.kind)
     || typeof report.message !== 'string' || !report.message.trim() || report.message.length > 30000) throw new Error('Invalid UI report');
   for (const key of ['stage', 'status', 'title', 'path']) if (report[key] !== undefined && (typeof report[key] !== 'string' || report[key].length > 4000)) throw new Error(`Invalid ${key}`);
@@ -183,14 +184,17 @@ export function receiveReport(state, params) {
   if (questionReport) return questionReport.created;
   if (report.kind === 'stage' && (!report.stage?.trim() || !report.status?.trim())) throw new Error('Stage reports require a stage and status');
   if (report.kind === 'artifact' && (!report.path?.startsWith('/') || report.path.includes('\0'))) throw new Error('Artifact reports require an absolute path');
+  const stageReport = { ...report, ...verifiedScope };
+  validateStageReport(stageReport, WORKSPACE);
   // The report schema permits free-form stage labels (for example "preparation").
   // Preserve the AI's label; the UI's fixed user-feedback selector is a different contract.
-  const stage = report.stage;
   // Repeated transport delivery of one tool call must not duplicate the report.
   if (state.updates.some(update => update.callId === params.callId && update.turnId === params.turnId)) return false;
   state.updates.push({ id: randomUUID(), at: new Date().toISOString(), threadId: params.threadId, turnId: params.turnId, callId: params.callId,
-    ...Object.fromEntries(keys.filter(key => report[key] !== undefined).map(key => [key, report[key]])), ...(stage === undefined ? {} : { stage }) });
-  state.updates = state.updates.slice(-400);
+    ...Object.fromEntries(keys.filter(key => stageReport[key] !== undefined).map(key => [key, stageReport[key]])),
+    ...(Number.isSafeInteger(verifiedScope?.verified_attempt) && { verified_attempt: verifiedScope.verified_attempt }) });
+  const oldReports = state.updates.length - 400;
+  if (oldReports > 0) state.updates = state.updates.filter((update, index) => index >= oldReports || keepStageReport(update, WORKSPACE));
   return true;
 }
 export function receiveRequest(state, message, verifiedScope) {

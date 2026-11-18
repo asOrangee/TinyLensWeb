@@ -12,7 +12,7 @@ type Props = {
   messages: ConversationMessage[]; value: string; onChange: (value: string) => void; onSubmit: () => void;
   disabled?: boolean; busy?: boolean; replyPending?: boolean; error?: string; textareaId: string;
   inputRef?: RefObject<HTMLTextAreaElement | null>; onInterrupt?: () => void | Promise<unknown>; attention?: ReactNode; attentionCount?: number;
-  interruptAvailable?: boolean; newTask?: boolean; inactive?: boolean; composerOnly?: boolean;
+  interruptAvailable?: boolean; steerAvailable?: boolean; newTask?: boolean; inactive?: boolean; composerOnly?: boolean;
   connectionAction?: ReactNode; conversationId?: string; aiName?: string;
 };
 export default function ConversationRail(props: Props) {
@@ -42,7 +42,7 @@ export default function ConversationRail(props: Props) {
   }, [props.composerOnly]);
   const [interrupting, setInterrupting] = useState(false);
   const interruptLock = useRef(false);
-  const canInterrupt = !!props.onInterrupt && !!(props.busy || props.interruptAvailable);
+  const canInterrupt = !!props.onInterrupt && !!props.interruptAvailable;
   async function interrupt() {
     if (interruptLock.current || props.disabled || props.inactive || !canInterrupt) return;
     interruptLock.current = true; setInterrupting(true);
@@ -84,10 +84,13 @@ export default function ConversationRail(props: Props) {
     return () => { observer.disconnect(); theme.disconnect(); window.removeEventListener('resize', resizeInput); };
   }, [resizeInput, props.composerOnly]);
   useEffect(() => { if (pinned.current && log.current) log.current.scrollTop = log.current.scrollHeight; }, [props.messages, props.attentionCount, props.replyPending]);
-  const ready = !!props.value.trim() && !props.disabled && !props.inactive && !props.busy && !canInterrupt;
-  const activeButton = !!props.value.trim() || !!(props.busy || props.interruptAvailable);
+  const hasDraft = !!props.value.trim();
+  const steering = props.busy && props.steerAvailable;
+  const stopButton = canInterrupt && !(steering && hasDraft);
+  const ready = hasDraft && !props.disabled && !props.inactive && !interrupting && !stopButton && (!props.busy || steering);
+  const activeButton = hasDraft || !!(props.busy || props.interruptAvailable);
   const submit = () => { if (ready) { reading.current = false; pinned.current = true; props.onSubmit(); } };
-  const actionLabel = t(canInterrupt ? '中断当前回合' : props.newTask ? '发送任务' : '发送消息');
+  const actionLabel = t(stopButton ? '中断当前回合' : steering ? '发送引导消息' : props.newTask ? '发送任务' : '发送消息');
   const input = <section className="conversation-composer" ref={composer} aria-label={t('消息输入')}>
     <form onSubmit={event => { event.preventDefault(); submit(); }}>
       <div className="conversation-input-shell">
@@ -103,11 +106,11 @@ export default function ConversationRail(props: Props) {
         </div>
         <div className="conversation-input-actions">
           {props.connectionAction}
-          <button className={`conversation-send${canInterrupt ? ' is-stop' : ''}`} type={canInterrupt ? 'button' : 'submit'}
+          <button className={`conversation-send${stopButton ? ' is-stop' : ''}`} type={stopButton ? 'button' : 'submit'}
             data-active={activeButton || undefined} aria-label={actionLabel} title={actionLabel}
-            disabled={canInterrupt ? !!props.disabled || !!props.inactive || interrupting : !ready}
-            onClick={canInterrupt ? () => void interrupt() : undefined}>
-            {canInterrupt ? <Square size={11} fill="currentColor" strokeWidth={0}/> : <ArrowUp size={17}/>}
+            disabled={stopButton ? !!props.disabled || !!props.inactive || interrupting : !ready}
+            onClick={stopButton ? () => void interrupt() : undefined}>
+            {stopButton ? <Square size={11} fill="currentColor" strokeWidth={0}/> : <ArrowUp size={17}/>}
           </button>
         </div>
       </div>

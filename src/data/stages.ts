@@ -23,6 +23,7 @@ export interface Parameter {
   mean?: number;
   sigma?: number;
   numericValue?: number;
+  linearValues?: number[];
   quantiles?: { q16: number; q50: number; q84: number };
 }
 

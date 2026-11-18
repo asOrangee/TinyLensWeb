@@ -16,7 +16,7 @@ export default function ParameterCards({parameters,histograms=[],onDetail,live=f
    return <article className="parameter-card" data-parameter={parameter.key} key={parameter.key} aria-label={parameterNotation(parameter).label}>
     <ParameterCardValue parameter={parameter} onDetail={onDetail} live={live}/>
     <div className={`parameter-card-posterior${available||linear?'':' is-unavailable'}`}>
-      {linear ? <span className="parameter-card-linear-label">{t('线性采样')}</span>
+      {linear ? <span className="parameter-card-linear-label">{t('线性求解')}</span>
         : available ? <PosteriorDistribution parameter={parameter} histogram={histogram} real={live}/>
         : <span className="parameter-card-empty" aria-label={t('暂无采样后验')}>—</span>}
     </div>

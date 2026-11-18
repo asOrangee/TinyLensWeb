@@ -1,6 +1,7 @@
 import type { AgentUpdate } from './agent-types';
 import type {LivePlane} from './live-results';
 import {hasNumericRaster,type ImageScale} from './image-scale.ts';
+import { isPublishedDisplayReport } from './display-report.ts';
 
 type InputVariant = { src: string; vmin: number; vmax: number; sha256?: string; constant_color?: string };
 export type InputPlane = {
@@ -18,14 +19,15 @@ export type InputDisplay = {
   rendered_from?:'numeric-array';
 };
 
-const inputReportPath = /\/(?:input-provenance\.json|preflight\/(?:inspection\.json|preflight_[26]panel\.png|display-manifest\.json))$/;
+const inputReportPath = /\/(?:input-provenance\.json|preflight\/(?:inspection\.json|preflight_[26]panel\.png|display-manifest\.json|display\/?))$/;
 
 export function selectInputReport(updates: AgentUpdate[]) {
-  const reports = updates.filter(update => update.id && update.kind === 'artifact'
+  const reports = updates.filter(update => update.id && (update.kind === 'artifact' || update.kind === 'stage'
+    && update.path?.endsWith('/preflight/inspection.json'))
     && update.stage?.trim().toLowerCase() === 'preflight' && update.path && inputReportPath.test(update.path));
   const latest = reports.at(-1);
   const directory = latest?.path?.match(/^(.*\/preflight)\//)?.[1];
-  return (directory && reports.filter(update => update.path === directory + '/display-manifest.json').at(-1)) || latest;
+  return (directory && reports.filter(update => isPublishedDisplayReport(update) && update.path?.startsWith(directory + '/')).at(-1)) || latest;
 }
 
 export function inputMatchesReport(display: InputDisplay | undefined, report: AgentUpdate | undefined) {

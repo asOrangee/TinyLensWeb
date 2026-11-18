@@ -1,7 +1,8 @@
 name = "stage_m0_expert"
 description = "Run and review Stage M0 source-grid sufficiency until terminal."
-model = "YOUR_MODEL_ID"
-model_reasoning_effort = "medium"
+model = "gpt-6.1-sol"
+model_reasoning_effort = "max"
+service_tier = "priority"
 sandbox_mode = "danger-full-access"
 developer_instructions = """
 You are the persistent Stage-M0 Expert for exactly one lens. Completely read and follow

@@ -24,6 +24,9 @@ lens-inspector-eval = "lens_agent.evaluation.system_inspector:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+lens_agent = ["display_contract.json"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]

@@ -32,6 +32,9 @@ test('input access requires a canonical preflight artifact owned by the current 
   for (const candidate of [auditPath, auditPath.replace('6panel', '2panel'), auditPath.replace('preflight_6panel.png', 'inspection.json')]) {
     assert.equal(reportedInput({ ...state, updates: [{ ...state.updates[0], path: candidate }] }, 'input').path, candidate);
   }
+  const inspection = auditPath.replace('preflight_6panel.png', 'inspection.json');
+  assert.equal(reportedInput({ ...state, updates: [{ ...state.updates[0], kind: 'stage', path: inspection }] }, 'input').path, inspection);
+  assert.throws(() => reportedInput({ ...state, updates: [{ ...state.updates[0], kind: 'stage', path: auditPath }] }, 'input'));
   for (const update of [{ ...state.updates[0], threadId: 'other' }, { ...state.updates[0], kind: 'note' }, { ...state.updates[0], stage: 'm1' }, { ...state.updates[0], path: '/tmp/input-provenance.json' }, { ...state.updates[0], path: WORKSPACE + '/output/../../input-provenance.json' }, { ...state.updates[0], path: auditPath.replace('/preflight/', '/diagnostics/') }]) assert.throws(() => reportedInput({ ...state, updates: [update] }, 'input'));
   assert.throws(() => reportedInput(state, 'missing'));
 });

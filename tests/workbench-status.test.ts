@@ -19,9 +19,10 @@ test('stage completion uses only explicit stage reports; artifacts and ended AI 
   assert.equal(indicators.get('m2')?.state, 'completed');
 });
 
-test('the five indicators distinguish active, blocked, failed and neutral unknown reports', () => {
+test('indicators distinguish execution, review, acceptance, blocked and failed reports', () => {
   for (const status of ['accepted', 'complete', 'completed']) assert.equal(reportedStageIndicator(status), 'completed');
-  for (const status of ['running', 'preparing', 'reviewing', 'retrying']) assert.equal(reportedStageIndicator(status), 'running');
+  for (const status of ['running', 'preparing', 'retrying']) assert.equal(reportedStageIndicator(status), 'running');
+  for (const status of ['awaiting_review', 'reviewing', 'review_pending', 'in_review']) assert.equal(reportedStageIndicator(status), 'review');
   for (const status of ['blocked', 'preparation_blocked', 'awaiting_user', 'human_review', 'awaiting_approval', 'queued', 'paused', 'interrupted']) assert.equal(reportedStageIndicator(status), 'blocked');
   for (const status of ['failed', 'error', 'rejected']) assert.equal(reportedStageIndicator(status), 'failed');
   for (const status of ['not_started', 'pending', 'prepared', 'success', 'retry', 'unexpected']) assert.equal(reportedStageIndicator(status), 'pending');

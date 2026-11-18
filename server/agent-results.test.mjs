@@ -5,6 +5,7 @@ import { mkdtemp, mkdir, writeFile, symlink, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { reportedResult, REMOTE_RESULT_READER, storeReportedResult, readReportedResult } from './agent-results.mjs';
+import { reportedAcceptance } from './agent-accepted-stage.mjs';
 import { WORKSPACE } from './agent-state.mjs';
 
 const report = (path, options = {}) => ({ threadId: 'bound', updates: [{ id: 'id', threadId: 'bound', kind: 'artifact', stage: 'a', path, ...options }] });
@@ -26,6 +27,19 @@ test('numeric reads require an explicit current-thread report with matching stag
   assert.throws(() => reportedResult(report(path, { kind: 'note' }), 'id'));
   assert.throws(() => reportedResult(report(path), 'unreported'));
   assert.equal(reportedResult(report(path.replace('artifacts/stage_a.pkl', 'stage-result.json'), { kind: 'stage' }), 'id').kind, 'summary');
+});
+
+test('an older acceptance report pins its attempt and only exposes its own stage or the saved B prerequisite', () => {
+  const run = WORKSPACE + '/output/run/lens';
+  const state = report(run + '/accepted/m0.json', { kind: 'stage', stage: 'm0', status: 'accepted', turnId: 'accept-turn' });
+  state.updates.unshift({ id: 'diagnostic', threadId: state.threadId, stage: 'm0', kind: 'artifact', turnId: 'accept-turn',
+    path: run + '/attempts/m0/2/diagnostics/grid.png' });
+  assert.equal(reportedAcceptance(state, 'id', 'm0').anchorAttempt, 2);
+  assert.equal(reportedAcceptance(state, 'id', 'b', 1).attempt, 1);
+  assert.throws(() => reportedAcceptance(state, 'id', 'a'));
+  assert.throws(() => reportedAcceptance({ ...state, threadId: 'other' }, 'id', 'b'));
+  const versioned = { ...state, updates: [...state.updates, { threadId: state.threadId, run_path: run, run_id: 'replacement' }] };
+  assert.throws(() => reportedAcceptance(versioned, 'id', 'b'));
 });
 
 const python = process.env.TINYLENS_RESULT_TEST_PYTHON || 'python3';
