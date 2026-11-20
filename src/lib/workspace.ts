@@ -48,20 +48,21 @@ export function lensBranches(runs: Run[], lensId: string) {
 export function initialRun(lensId: string, mask: number[]): Run {
   return {id: `${lensId}-r01`, lensId, from:'preflight', createdAt:'2026-10-26T02:30:00.000Z', comment:'初始合成样例，用于体验界面。未执行科学拟合。',systemComment:'initial',mask,models:{lens:'MGE',source:'MGE'},status:'complete',progress:6};
 }
-export function readRuns(initialMask: number[]): Run[] {
+export function readRuns(initialMask: number[], excludedLenses: string[] = []): Run[] {
+  const lenses = demoLenses.filter(lens => !excludedLenses.includes(lens.id));
   try {
     const stored: unknown = JSON.parse(localStorage.getItem('tinylens-demo-runs-v1') || 'null');
-    if (Array.isArray(stored) && stored.length && stored.every((r:Run)=> typeof r.id==='string' && demoLenses.some(l=>l.id===r.lensId) && stageOrder.includes(r.from) && Array.isArray(r.mask) && r.mask.length===9216 && r.mask.every((v:number)=>v===0||v===1) && r.models && ['MGE','Sérsic'].includes(r.models.lens) && ['MGE','Sérsic'].includes(r.models.source) && ['running','complete','interrupted'].includes(r.status) && Number.isInteger(r.progress))) {
-      const recovered:Run[]=stored.map((r:Run)=>{
+    if (Array.isArray(stored) && stored.every((r:Run)=> r && typeof r.id==='string' && demoLenses.some(l=>l.id===r.lensId) && stageOrder.includes(r.from) && Array.isArray(r.mask) && r.mask.length===9216 && r.mask.every((v:number)=>v===0||v===1) && r.models && ['MGE','Sérsic'].includes(r.models.lens) && ['MGE','Sérsic'].includes(r.models.source) && ['running','complete','interrupted'].includes(r.status) && Number.isInteger(r.progress))) {
+      const recovered:Run[]=stored.filter((r:Run)=>!excludedLenses.includes(r.lensId)).map((r:Run)=>{
         const requestedStages=Array.isArray(r.requestedStages)?stageOrder.filter(id=>r.requestedStages!.includes(id)):undefined;
         const finishedStages=requestedStages&&Array.isArray(r.finishedStages)?requestedStages.filter(id=>r.finishedStages!.includes(id)):undefined;
         return {...r,requestedStages,finishedStages,status:r.status==='running'?'interrupted':r.status};
       });
-      for(const lens of demoLenses) if(!recovered.some(r=>r.lensId===lens.id)) recovered.push(initialRun(lens.id,initialMask.slice()));
+      for(const lens of lenses) if(!recovered.some(r=>r.lensId===lens.id)) recovered.push(initialRun(lens.id,initialMask.slice()));
       return recovered;
     }
   } catch { /* Unavailable or invalid local storage: use a clean demo. */ }
-  return demoLenses.map(l=>initialRun(l.id,initialMask.slice()));
+  return lenses.map(l=>initialRun(l.id,initialMask.slice()));
 }
 export function downloadJSON(data: unknown, filename: string) {
   const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));

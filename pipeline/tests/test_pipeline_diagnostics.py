@@ -101,6 +101,13 @@ def _load_pipeline_template(
         overlay_critical_and_caustics=overlay_critical_and_caustics or (lambda **_: None),
         plot_model_results=lambda *_, **__: None,
     )
+    # The real capture module must never retain this test's fake JAX imports.
+    _install_module(
+        monkeypatch,
+        "lens_agent.modeling.workbench_planes",
+        capture_parametric=lambda *_: None,
+        capture_pixelized=lambda *_: None,
+    )
 
     module_name = "lens_agent.modeling.pipeline_template_for_diagnostics_test"
     spec = importlib.util.spec_from_file_location(module_name, PIPELINE_TEMPLATE)
@@ -328,8 +335,11 @@ def test_stage_b_writes_six_panel_coverage_audit(tmp_path: Path, monkeypatch) ->
 
     image = np.zeros((32, 32), dtype=float)
     image[15:18, 9:12] = 4.0
+    image[15, 9] = 0.0
     image[15:18, 20:23] = 4.0
-    pipeline.run_stage_b(
+    image[15, 20:22] = 0.0
+    image[6:9, 20:23] = 3.0
+    feature_mask = pipeline.run_stage_b(
         image,
         np.ones_like(image),
         np.zeros_like(image),
@@ -337,6 +347,9 @@ def test_stage_b_writes_six_panel_coverage_audit(tmp_path: Path, monkeypatch) ->
         modeling_mask=np.zeros_like(image, dtype=bool),
     )
 
+    assert not feature_mask[16, 10]
+    assert feature_mask[16, 21]
+    assert feature_mask[7, 21]
     assert (tmp_path / "feature_mask.fits").is_file()
     assert (tmp_path / "stage_b_mask.png").is_file()
     assert (tmp_path / "stage_b_component_labels.fits").is_file()
@@ -355,7 +368,7 @@ def test_stage_b_writes_six_panel_coverage_audit(tmp_path: Path, monkeypatch) ->
     assert [axis.get_title() for axis in figure.axes if axis.get_title()] == [
         "residual = image - stage-A lens light",
         "S/N map + arc mask boundary",
-        "S/N > 2.0 pixels",
+        "S/N > 3.0 pixels",
         "arc mask region",
         "coverage diagnostic",
     ]
@@ -401,7 +414,7 @@ def test_stage_b_excludes_preflight_contaminants_before_arc_construction(
     assert "valid modeling domain boundary" in [text.get_text() for text in legend.texts]
     assert not figures[-1].axes[4].texts
     assert len(figures[-1].axes[4].collections) == 2
-    assert "excluded S/N>2.0 pixels: 9" in audit_text
+    assert "excluded S/N>3.0 pixels: 9" in audit_text
 
 
 def test_stage_b_component_records_every_merged_arc_seed(

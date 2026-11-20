@@ -60,8 +60,12 @@ class InspectorDecision(_StrictModel):
         return self
 
 
-def validate_inspector_decision(raw: object, *, expected_lens_id: str) -> dict[str, Any]:
+def validate_inspector_decision(
+    raw: object, *, expected_lens_id: str, fixed_mask: bool = False
+) -> dict[str, Any]:
     decision = InspectorDecision.model_validate(raw, strict=True)
     if decision.lens_id != expected_lens_id:
         raise ValueError("inspector lens_id does not match Lens Result Directory")
+    if fixed_mask and decision.contaminant_ids:
+        raise ValueError("Euclid contamination mode requires empty contaminant_ids")
     return decision.model_dump(mode="json")

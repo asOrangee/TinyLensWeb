@@ -89,7 +89,7 @@ The standalone `attempt prepare` remains available for development and refuses e
 `preflight_6panel.png` for human audit, and `segmentation.fits`. The inspection packet identifies
 the two image roles explicitly; the inspectors never receive the human audit. The two-panel view keeps
 one image pixel beyond the 4″ circle so boundary crossings are visible even along the horizontal or
-vertical axis. The single authoritative segmentation consists of deblended positive VIS detections
+vertical axis. By default, the segmentation consists of deblended positive VIS detections
 with at least five connected pixels at or above 3σ. Both figures draw exactly those 3σ segments.
 The Inspector view uses neutral white contours and yellow IDs with black contrast outlines so
 segmentation colours cannot be mistaken for physical image colours. Once all three strict responses
@@ -98,6 +98,17 @@ text-only synthesis expert reads those reports but no image. Its `disposition` a
 ID must follow a two-of-three majority; a `model` hint must be copied intact from one majority model
 vote, while `human_review` uses a null hint. `inspector synthesis` verifies these rules without
 calculating or rewriting the expert response and registers `preflight/synthesis.json`.
+
+New runs automatically prefer the Euclid DR1 ECLIPSE contamination mask. Preflight checks for a
+`dataset/` subdirectory of `--lens-dir`, `$LENS_AGENT_EUCLID_RELEASE_ROOT/<lens_id>/dataset`, a
+sidecar by the input cutout, or the original cutout directory recorded in `input-provenance.json`.
+`--euclid-dataset-dir` selects an explicitly supplied release directory. The directory contains
+`<lens_id>.fits` with `VIS_BGSUB` and `segmentation/artefact_binary.fits` with `1` for contamination.
+Preflight verifies the released VIS pixels and applies the declared axis reflections to the mask.
+The run manifest records the input and mask checksums. The inspectors review whether the system can
+be modeled and estimate the Einstein radius. The official file supplies all contaminant pixels and
+the inspectors' `contaminant_ids` lists are empty. Without a release mask, the usual segmentation
+and contaminant votes supply these pixels. A different mask source requires a fresh run.
 
 Synthesis-selected contaminants mask exactly their segment pixels, without dilation or recovery of
 lower-significance outskirts. `mask` converts a validated `disposition: model` synthesis into
@@ -111,6 +122,11 @@ later conflicting change cannot masquerade as an idempotent repeat. Promotion va
 `accepted/<stage>.json`. An attempt is sealed against re-execution as soon as its stage command
 writes `stage-execution.json`. `summary` writes one
 CSV row per lens.
+
+The preflight mask excludes contaminants and pixels outside the 4″ aperture. It constrains Stage A
+and the Stage B arc selection. The pixelized stages also restrict the likelihood to the Stage B arc
+mask. Their image-plane diagnostics and Web results use the effective fitted pixels. The Web FITS
+package records this support as `ValidDomain` alongside the image-plane arrays.
 
 During an orchestrated run, every physical stage—including M0—uses
 `scripts/run_lens_stage_on_idle_gpu.sh`. The GPU Stage Runner waits for one idle whole GPU, holds a

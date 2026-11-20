@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {sieMapper,verifiedLiveMapping,type LiveMapping} from '../src/lib/live-mapping.ts';
-import {screenToPlane,planeToScreen,isInside} from '../src/lib/lens-mapping.ts';
+import {sieMapper,verifiedLiveMapping,verifiedResultMapping,type LiveMapping} from '../src/lib/live-mapping.ts';
+import {screenToPlane,planeToScreen,isInside,type PlaneFrame} from '../src/lib/lens-mapping.ts';
+import type { LivePlane, LiveResult } from '../src/lib/live-results.ts';
 const fixtures=JSON.parse(readFileSync(new URL('./fixtures/reported-mapping.json',import.meta.url),'utf8')) as Record<string,LiveMapping>;
 const binding=(d:LiveMapping)=>({stage:d.stage,attempt:d.attempt,path:d.path,sha256:d.summary_sha256,fitsSha256:d.fits_sha256});
 test('each real stage agrees with saved TinyLens SIE plus Shear reference rays',()=>{
@@ -44,4 +45,42 @@ test('named mapping returns the stored paths and retains both exact hover direct
   assert.equal(verifiedLiveMapping(saved, { ...sourceBinding, runId: 'rerun' }), null);
   assert.equal(verifiedLiveMapping(saved, { ...sourceBinding, frames: { ...saved.frames,
     source: { ...saved.frames.source, shape: [1, 2] } } }), null);
+});
+
+test('historical Stage A restores geometry from validated medians and calibrated FITS of the selected attempt', () => {
+  const saved = fixtures.a;
+  const directory = '/workspace/output/run/lens/attempts/a/0/display';
+  const { kind, ...medians } = saved.model;
+  const plane = (frame: PlaneFrame): LivePlane => ({
+    ...frame, bounds_arcsec: frame.bounds_arcsec!, src: '', colormap_src: '', colormap: 'magma',
+    vmin: 0, vmax: 1, data_min: 0, data_max: 1, stretch: 'linear', asinh_a: 1, input_fits_sha256: saved.fits_sha256,
+  });
+  const observation = plane(saved.frames.image);
+  const source = plane(saved.frames.source);
+  const result: LiveResult = {
+    schema: 'tinylens.readonly-result.v1', kind: 'summary', stage: 'a', attempt: 0, path: directory,
+    sha256: saved.summary_sha256, run_id: 'original', planes: { observation, source },
+    result: { lens_id: 'lens', stage: 'a', attempt: 0, status: 'success', metrics: { medians } },
+    parameter_contract: 'tinylens.stage-parameters.v1',
+    parameter_source: { path: directory + '/StageA_Parameters.json', sha256: 'a'.repeat(64) },
+    display_mapping_from_parameters: true,
+  };
+  const replay = verifiedResultMapping(result);
+  assert.ok(replay);
+  assert.ok(replay.criticalCurves().length > 0);
+  assert.deepEqual(replay.frames.source.bounds_arcsec, saved.frames.source.bounds_arcsec);
+  for (const ray of saved.references) {
+    const beta = replay.sourceFor(ray.image);
+    assert.ok(Math.hypot(beta.x - ray.source.x, beta.y - ray.source.y) < 1e-6);
+  }
+  const image = saved.references[0].image;
+  assert.ok(replay.imagesFor(replay.sourceFor(image)).some(p => Math.hypot(p.x - image.x, p.y - image.y) < 1e-6));
+  for (const change of [
+    { display_mapping_from_parameters: undefined },
+    { display_mapping: { ...saved, attempt: 1 } },
+    { path: directory.replace('/a/0/', '/a/1/') },
+    { parameter_source: { ...result.parameter_source!, path: directory.replace('/a/0/', '/a/1/') + '/StageA_Parameters.json' } },
+    { planes: { observation, source: { ...source, input_fits_sha256: 'b'.repeat(64) } } },
+    { result: { ...result.result!, metrics: { medians: { ...medians, gamma1: NaN } } } },
+  ]) assert.equal(verifiedResultMapping({ ...result, ...change }), null);
 });

@@ -39,6 +39,7 @@
     "model": ["observation", "model", "source-lensed", "source", "residual", "chi-square"]
   },
   "optional": {
-    "b": ["source-lensed"]
+    "b": ["source-lensed"],
+    "model": ["domain"]
   }
 }

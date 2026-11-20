@@ -1,4 +1,4 @@
-"""Resolve the run and, for an explicit acceptance report, its verified head."""
+"""Resolve the run and verify a reported scientific decision against its evidence."""
 
 import hashlib
 import json
@@ -23,6 +23,8 @@ def scope(request):
     manifest, run_hash = document(manifest_path, root)
     if manifest.get("schema_version") != "lens_run_manifest.v1" or Path(manifest["lens_dir"]).name != request["lens_id"]:
         raise ValueError("Reported stage has a different input lens")
+    if request.get("input_lens") and manifest["lens_dir"] != request["input_lens"]:
+        raise ValueError("The stage does not use the input directory confirmed for this lens")
     stage, attempt = request["stage"], request["attempt"]
     if request["accepted"]:
         if stage == "preflight":
@@ -48,8 +50,19 @@ def scope(request):
                     or decision.get("evidence_sha256", {}).get("stage-result.json") != digest):
                 raise ValueError("Acceptance evidence disagrees with the saved attempt")
             attempt = index
-        if document(manifest_path, root)[1] != run_hash:
-            raise ValueError("The run changed while verifying acceptance")
+    elif request.get("human_review"):
+        if stage == "preflight":
+            inspector, _ = document(run / "preflight/inspector.json", root)
+            if (inspector.get("lens_id"), inspector.get("disposition")) != (request["lens_id"], "human_review"):
+                raise ValueError("Preflight Human Review record did not match")
+        else:
+            decision, _ = document(run / f"attempts/{stage}/{attempt}/decision.json", root)
+            if (decision.get("schema_version"), decision.get("stage"), decision.get("attempt"), decision.get("decision")) != (
+                "stage_decision.v1", stage, attempt, "human_review"
+            ):
+                raise ValueError("Human Review decision did not match the reported attempt")
+    if (request["accepted"] or request.get("human_review")) and document(manifest_path, root)[1] != run_hash:
+        raise ValueError("The run changed while verifying the scientific decision")
     return {"run_id": manifest.get("run_id"), "attempt": attempt}
 
 

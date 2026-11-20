@@ -61,12 +61,12 @@ Choose the single parameter using this priority within each observed failure typ
 - Missing faint image (`supported_uncovered`): the only permitted parameter repair is lowering
   `arc_snr_threshold`, where residual S/N = (image - Stage-A lens-light model) / noise. This also
   takes priority when above-threshold pixels exist but their island is smaller than
-  the fixed `arc_ignor_size=5`: admitting credible adjacent faint pixels may connect or enlarge
+  the attempt's fixed `arc_ignor_size`: admitting credible adjacent faint pixels may connect or enlarge
   the island enough to survive while preserving the small-noise-island filter.
   Stop lowering the S/N threshold when diagnostics show material contamination or unrelated
   structures merging. If safe threshold lowering cannot recover the image, including at the
-  lower bound, use `coverage_blocked`. `arc_ignor_size` always remains 5, including for compact
-  images. While any image is `supported_uncovered`, this rule takes priority over partial repairs.
+  lower bound, use `coverage_blocked`. Keep `arc_ignor_size` at its value in `effective-config.json`
+  for every retry. While any image is `supported_uncovered`, this rule takes priority over partial repairs.
 - Existing arc region with insufficient outer coverage: first increase `arc_ext_size`; if credible
   faint extensions remain uncovered, next consider lowering `arc_snr_threshold`. The dilation
   setting is the square footprint's side length in pixels, not an expansion radius. Check for

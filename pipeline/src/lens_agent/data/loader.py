@@ -24,6 +24,17 @@ class LensData(BaseModel):
     input_y_direction: str = "increasing"
 
 
+def canonical_input_array(array: np.ndarray | None, geometry: InputGeometry) -> np.ndarray | None:
+    """Reflect a co-registered plane into model coordinates without resampling."""
+    if array is None:
+        return None
+    if geometry.input_y_direction == "decreasing":
+        array = np.flip(array, axis=0)
+    if geometry.input_x_direction == "decreasing":
+        array = np.flip(array, axis=1)
+    return np.ascontiguousarray(array)
+
+
 def load_lens_data(lens_dir: Path, *, geometry: InputGeometry | None = None) -> LensData:
     geometry = InputGeometry.from_settings(geometry) if geometry is not None else InputGeometry()
     lens_dir = lens_dir.resolve()
@@ -53,26 +64,14 @@ def load_lens_data(lens_dir: Path, *, geometry: InputGeometry | None = None) -> 
     for axis, direction in ((0, geometry.input_y_direction), (1, geometry.input_x_direction)):
         if direction == "decreasing" and psf.shape[axis] % 2 == 0:
             raise ValueError("Direction normalization requires an odd-sized PSF on each reflected axis; validate the kernel centre before modeling")
-    # Change only array ordering, never pixel sampling, flux, noise or the input file.
-    # All co-registered planes and the PSF use the same reflection. Model coordinates
-    # remain centred on (nx-1)/2, (ny-1)/2, increasing with column/row respectively.
-    def canonical(array):
-        if array is None:
-            return None
-        if geometry.input_y_direction == "decreasing":
-            array = np.flip(array, axis=0)
-        if geometry.input_x_direction == "decreasing":
-            array = np.flip(array, axis=1)
-        return np.ascontiguousarray(array)
-
     return LensData(
         lens_id=lens_id,
         fits_path=fits_path,
-        image=canonical(image),
-        noise=canonical(noise),
-        psf=canonical(psf),
-        image_y=canonical(image_y),
-        image_j=canonical(image_j),
+        image=canonical_input_array(image, geometry),
+        noise=canonical_input_array(noise, geometry),
+        psf=canonical_input_array(psf, geometry),
+        image_y=canonical_input_array(image_y, geometry),
+        image_j=canonical_input_array(image_j, geometry),
         **geometry.model_dump(),
     )
 

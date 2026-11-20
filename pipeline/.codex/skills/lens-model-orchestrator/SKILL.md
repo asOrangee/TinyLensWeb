@@ -117,6 +117,16 @@ artifact. A requested geometry correction requires a Full Lens Rerun from fresh 
 no reuse of old masks, attempts, reviews, or Accepted Stage Heads. A geometry mismatch is an
 operational prerequisite failure, not a scientific retry or permission to edit configuration files.
 
+On a fresh run, `preflight` uses a matching local Euclid DR1 ECLIPSE `dataset/` when available.
+It checks the prepared input layout, a configured `LENS_AGENT_EUCLID_RELEASE_ROOT`, and the
+source cutout in the input provenance. When the user gives a separate dataset directory, pass
+`--euclid-dataset-dir <dataset>` on the first preflight. The directory contains the matching
+`<lens_id>.fits` and `segmentation/artefact_binary.fits`. Preflight verifies the VIS pixels and
+freezes the mask source. With `Euclid DR1 contamination mask` in the right panel, inspectors
+review modelability and estimate the Einstein radius. Their `contaminant_ids` and the synthesis
+list are empty and `mask` uses the official pixels. With no release mask, use the usual
+contaminant-ID votes. Report invalid release inputs to the user.
+
 1. If canonical `preflight/inspector.json` already exists, do not repeat preflight inspection; read
    it and continue or stop from its disposition. Otherwise run `<Lens Agent Command> preflight --lens-dir
    <input>/<lens_id> --output-dir <lens-result>`. If a prior session left only votes or synthesis,

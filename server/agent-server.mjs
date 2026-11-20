@@ -17,7 +17,8 @@ import { prepareQuestionAnswer } from './agent-questions.mjs';
 import { initialState, receiveNotification, receiveReport, receiveRequest, validateReply, validateRequestScope,
   restoreThread, applyTurn, hasBlockingRequest, normalizeStage, disconnected, reportTool, WORKSPACE } from './agent-state.mjs';
 import { connectionConfig, appServerCommand } from './connection-config.mjs';
-import { readStageScope } from './stage-reports.mjs';
+import { readStageScope, stageReportSchema } from './stage-reports.mjs';
+import { dispatchBatchTool, prepareBatchTool, validBatchId } from './agent-batches.mjs';
 const defaultDirectory = fileURLToPath(new URL('../.local/', import.meta.url));
 function unusedThread(state) {
   return state.status === 'idle' && !state.turnId && !state.lastTurnId && !state.remoteActive && !state.needsReconcile
@@ -42,14 +43,27 @@ async function allocatedProxyPort(stderr, localPort, timeoutMs) {
 // Injection is solely for local protocol tests; the executable entry point uses SSH.
 export async function createAgentServer({ stateDirectory = defaultDirectory, spawnProcess = spawn, rpcTimeoutMs = 60000, logger = console,
   aiNetwork = false, networkProxyFactory = createAiNetworkProxy, remoteProxyPort = connectionConfig.remoteProxyPort, datasetPath,
-  stageScopeLookup = readStageScope, approvalsReviewer = connectionConfig.approvalsReviewer } = {}) {
+  stageScopeLookup = readStageScope, approvalsReviewer = connectionConfig.approvalsReviewer, batchRunPath, batchToolAccess } = {}) {
   if (!Number.isInteger(remoteProxyPort) || (remoteProxyPort !== 0 && remoteProxyPort < 1024) || remoteProxyPort > 65535) throw new Error('Invalid remote proxy port');
   const statePath = `${stateDirectory}/agent-state.json`;
   let saved;
-  try { saved = JSON.parse(await readFile(statePath, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') logger.error('Previous UI state could not be read:', error.message); }
+  try { saved = JSON.parse(await readFile(statePath, 'utf8')); }
+  catch (error) {
+    if (error.code !== 'ENOENT') {
+      if (batchRunPath) throw Error('无法核对批次任务的消息记录。');
+      logger.error('Previous UI state could not be read:', error.message);
+    }
+  }
+  if (batchRunPath && saved !== undefined && !Array.isArray(saved?.messages)) throw Error('批次任务的消息记录无效。');
   const state = initialState(saved), clients = new Set(), pending = new Map();
+  if (batchToolAccess && saved?.batchDraft?.threadId === state.threadId) state.batchDraft = saved.batchDraft;
   const displayPublications = await readDisplayPublications(stateDirectory, logger);
-  const publicState = () => withDisplayPublications(state, displayPublications);
+  function publicState() {
+    const view = withDisplayPublications(state, displayPublications);
+    if (!view.batchDraft) return view;
+    const { batchDraft, ...visible } = view;
+    return { ...visible, batchPlan: batchToolAccess?.view(batchDraft) };
+  }
   if (typeof datasetPath === 'string') state.datasetPath = datasetPath;
   const turnSettings = {
     model: connectionConfig.model,
@@ -60,6 +74,7 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
   let transport, sequence = 0, connecting, changing = false, publishTimer, saveTimer, closed = false;
   let saveChain = Promise.resolve();
   let reportChain = Promise.resolve();
+  let pendingMessageRpc;
   function persist() {
     const snapshot = JSON.stringify(state);
     const operation = saveChain.catch(() => {}).then(async () => {
@@ -190,20 +205,40 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
           // A tool failure is acknowledged as such; it never grants permissions.
           try {
             const recordReport = reportChain.then(async () => {
+              const { tool, namespace, callId, threadId } = message.params ?? {};
+              if (namespace != null || typeof callId !== 'string') throw Error('Unexpected tool call source');
+              if (batchToolAccess && [prepareBatchTool.name, dispatchBatchTool.name].includes(tool)) {
+                if (threadId !== state.threadId) throw Error('The batch tool belongs to the main conversation.');
+                // Wait for the ordinary user's delivery receipt before considering the tool call.
+                await pendingMessageRpc?.catch(() => {});
+                const assertCurrent = () => {
+                  if (closed || transport !== current) throw Error('The batch conversation connection changed.');
+                  validateRequestScope(state, message.params);
+                };
+                assertCurrent();
+                const result = await batchToolAccess.call(message.params, state, assertCurrent);
+                await persist();
+                return JSON.stringify(result);
+              }
               validateRequestScope(state, message.params);
-              if (message.params.tool !== reportTool.name || message.params.namespace != null || typeof message.params.callId !== 'string') throw Error('Unexpected report source');
+              if (tool !== reportTool.name) throw Error('Unexpected report source');
               if (state.updates.some(update => update.callId === message.params.callId && update.turnId === message.params.turnId)) return;
-              const scope = await stageScopeLookup(message.params.arguments, WORKSPACE);
+              const report = message.params.arguments;
+              if (batchRunPath && (report?.schema === stageReportSchema ? report.run_path !== batchRunPath
+                : ['stage', 'artifact'].includes(report?.kind) && typeof report.path === 'string' && !report.path.startsWith(batchRunPath + '/'))) {
+                throw Error('The report belongs to a different batch lens.');
+              }
+              const scope = await stageScopeLookup(report, WORKSPACE, batchRunPath ? { verifyHumanReview: true, expectedLensDirectory: datasetPath } : undefined);
               receiveReport(state, message.params, scope);
               await persist();
             });
             reportChain = recordReport.catch(() => {});
-            await recordReport;
+            const batchResult = await recordReport;
             const isQuestion = message.params.arguments?.kind === 'note' && message.params.arguments?.status === 'awaiting_user';
             const acknowledgement = isQuestion
               ? 'Question displayed and persisted in the TinyLens webpage. This acknowledgement is not a user answer or approval. Stop actions that depend on the answer and wait for the user to respond in this thread through the webpage.'
               : 'Report received by TinyLens UI.';
-            await send({ id: message.id, result: { contentItems: [{ type: 'inputText', text: acknowledgement }], success: true } }, current);
+            await send({ id: message.id, result: { contentItems: [{ type: 'inputText', text: batchResult ?? acknowledgement }], success: true } }, current);
           } catch (error) {
             await send({ id: message.id, result: { contentItems: [{ type: 'inputText', text: error.message }], success: false } }, current);
           }
@@ -227,6 +262,7 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
   }
   async function makeTransport() {
     const networkProxy = aiNetwork ? await networkProxyFactory({ upstreamHost: '127.0.0.1', upstreamPort: connectionConfig.upstreamPort }) : null;
+    if (closed) { await networkProxy?.close(); throw Error('AI bridge is closed'); }
     const args = ['-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=12', '-o', 'ServerAliveInterval=20', '-o', 'ServerAliveCountMax=3'];
     if (networkProxy) args.push('-o', 'ExitOnForwardFailure=yes', '-o', 'LogLevel=INFO', '-R', `127.0.0.1:${remoteProxyPort}:127.0.0.1:${networkProxy.port}`);
     // The one-time proxy credential is delivered on SSH stdin, never in argv or a file.
@@ -293,7 +329,8 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
         const { effort, ...sessionDefaults } = turnSettings;
         const sessionSettings = { ...sessionDefaults, config: { model_reasoning_effort: effort },
           cwd: WORKSPACE, approvalPolicy: 'on-request', sandbox: 'workspace-write' };
-        const startThread = () => rpc('thread/start', { ...sessionSettings, ephemeral: false, dynamicTools: [reportTool] });
+        const dynamicTools = batchToolAccess ? [reportTool, prepareBatchTool, dispatchBatchTool] : [reportTool];
+        const startThread = () => rpc('thread/start', { ...sessionSettings, ephemeral: false, dynamicTools });
         let result;
         let target = state;
         if (previousThreadId) {
@@ -325,12 +362,15 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
     return connecting;
   }
   async function submitMessage(data, { question } = {}) {
+    if (closed) throw new Error('AI bridge is closed');
     if (state.connection !== 'connected' || state.needsReconcile) throw new Error('Connect to the pipeline AI first');
     if (changing) throw new Error('Another message is being submitted');
     if (hasBlockingRequest(state)) throw new Error('Answer the pending AI request first');
     if (state.remoteActive && !state.turnId) throw new Error('The existing AI turn is still active; its turn id has not been recovered');
-    if (!data || typeof data !== 'object' || Array.isArray(data) || Object.keys(data).some(key => !['text', 'stage', 'expectedTurnId'].includes(key))) throw new Error('Messages only accept text, an optional stage, and an optional expected turn ID');
+    const messageFields = ['text', 'stage', 'expectedTurnId', ...(batchToolAccess ? ['seenBatchPlanId'] : [])];
+    if (!data || typeof data !== 'object' || Array.isArray(data) || Object.keys(data).some(key => !messageFields.includes(key))) throw new Error('Messages only accept text and supported scope metadata');
     if (typeof data?.text !== 'string' || !data.text.trim() || data.text.length > 30000) throw new Error('Message must contain 1–30000 characters');
+    if (data.seenBatchPlanId !== undefined && !validBatchId(data.seenBatchPlanId)) throw Error('Invalid visible batch plan');
     // Validate legacy metadata without inserting it into the user's message.
     if (data.stage !== undefined) normalizeStage(data.stage);
     const { expectedTurnId, text } = data;
@@ -347,6 +387,8 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
     changing = true;
     const input = [{ type: 'text', text }];
     const userMessage = { id: randomUUID(), role: 'user', text, delivery: 'pending', at: new Date().toISOString() };
+    // Bind confirmation to the rendered plan without changing the AI's input.
+    if (data.seenBatchPlanId) userMessage.seenBatchPlanId = data.seenBatchPlanId;
     if (question) { userMessage.questionId = question.id; question.answerMessageId = userMessage.id; }
     let sent = false;
     try {
@@ -356,9 +398,10 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
       verifySteeringTurn();
       sent = true;
       const turnId = expectedTurnId ?? state.turnId;
-      const result = turnId
-        ? await rpc('turn/steer', { threadId: state.threadId, expectedTurnId: turnId, input, clientUserMessageId: userMessage.id })
-        : await rpc('turn/start', { threadId: state.threadId, input, clientUserMessageId: userMessage.id, ...turnSettings });
+      pendingMessageRpc = turnId
+        ? rpc('turn/steer', { threadId: state.threadId, expectedTurnId: turnId, input, clientUserMessageId: userMessage.id })
+        : rpc('turn/start', { threadId: state.threadId, input, clientUserMessageId: userMessage.id, ...turnSettings });
+      const result = await pendingMessageRpc;
       userMessage.delivery = 'delivered';
       state.error = null;
       if (result.turn) applyTurn(state, result.turn);
@@ -371,7 +414,7 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
       await persist().catch(persistError => logger.error('Could not persist message delivery:', persistError.message));
       error.messageId = userMessage.id; error.messageDelivery = userMessage.delivery;
       throw error;
-    } finally { changing = false; }
+    } finally { pendingMessageRpc = undefined; changing = false; }
   }
   async function answerQuestion(data) {
     const { question, answer, message } = prepareQuestionAnswer(state, data);
@@ -465,7 +508,22 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
     if (!localRequest(request)) return json(response, 403, { error: 'Only local TinyLens requests are allowed' });
     return routeRequest(request, response);
   });
-  async function close() {
+  async function disconnectCompleted() {
+    if (closed || connecting || changing || state.connection !== 'connected' || state.status !== 'completed'
+        || state.turnId || state.remoteActive || state.needsReconcile || state.requests.length
+        || state.activities.some(activity => activity.status === 'inProgress')
+        || state.questions.some(question => ['pending', 'sending', 'delivery_unknown'].includes(question.status))) return;
+    const current = transport;
+    transport = null;
+    state.connection = 'disconnected'; publish();
+    current?.proc.kill();
+    await current?.networkProxy?.close();
+    await persist();
+  }
+  async function close({ onlyIfIdle = false } = {}) {
+    if (onlyIfIdle && (connecting || changing || state.turnId || state.remoteActive || state.needsReconcile || state.requests.length)) {
+      throw Object.assign(new Error('任务仍在运行或等待确认，请结束当前回合后再彻底删除。'), { statusCode: 409 });
+    }
     closed = true; clearTimeout(publishTimer); clearTimeout(saveTimer);
     const current = transport; transport = null; current?.proc.kill(); await current?.networkProxy?.close(); rejectPending('AI bridge closed');
     if (state.turnId || state.remoteActive) disconnected(state, 'AI bridge closed; reconnect to inspect the persisted conversation');
@@ -474,7 +532,7 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
     await new Promise(resolveClose => server.close(resolveClose));
     await persist();
   }
-  return { server, state, connect, submitMessage, answerQuestion, interrupt, reply, close, persist, routeRequest };
+  return { server, state, connect, submitMessage, answerQuestion, interrupt, reply, close, persist, routeRequest, disconnectCompleted };
 }
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   // Finish evaluating this module before loading the router, which imports the

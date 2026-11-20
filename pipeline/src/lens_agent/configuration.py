@@ -124,6 +124,8 @@ def run_input_geometry(output_dir: Path) -> InputGeometry:
         packet = json.loads(packet_path.read_text(encoding="utf-8"))
         if InputGeometry.model_validate(packet.get("input_geometry", {}), strict=True) != geometry:
             raise ValueError("Preflight input geometry differs from the run manifest; start a new run")
+        if packet.get("euclid_contamination") != manifest.get("euclid_contamination"):
+            raise ValueError("Preflight Euclid contamination source differs from the run manifest")
     return geometry
 
 
@@ -181,8 +183,8 @@ class PipelineConfig(InputGeometry):
     )
     stage_m3_ellipticity_prior_limits: Limits = (-1.0, 1.0)
     stage_m3_shear_prior_limits: Limits = (-0.5, 0.5)
-    arc_snr_threshold: float = 2.0
-    arc_ignor_size: Literal[5] = 5
+    arc_snr_threshold: float = 3.0
+    arc_ignor_size: Literal[5, 8] = 8  # Older runs store 5.
     arc_ext_size: int = 5
     arc_close_size: int = 3
     m0_n_grid: int = 200

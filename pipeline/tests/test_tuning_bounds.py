@@ -41,14 +41,15 @@ def test_n_eff_tunable_maximum_unchanged(parameter: str) -> None:
     assert TUNABLE_CATALOG[parameter].maximum == 100_000
 
 
-# --- arc_ignor_size default ---
+# --- Stage B mask settings ---
 
-def test_arc_ignor_size_default_is_5() -> None:
-    assert EffectiveConfig().settings.arc_ignor_size == 5
+def test_stage_b_mask_defaults() -> None:
+    assert EffectiveConfig().settings.arc_snr_threshold == 3.0
+    assert EffectiveConfig().settings.arc_ignor_size == 8
     assert "arc_ignor_size" not in TUNABLE_CATALOG
 
 
 @pytest.mark.parametrize("value", [1, 4, 6, 10000])
-def test_arc_ignor_size_rejects_nondefault_config(value: int) -> None:
+def test_arc_ignor_size_rejects_unsupported_config(value: int) -> None:
     with pytest.raises(ValidationError, match="arc_ignor_size"):
         EffectiveConfig.model_validate({"settings": {"arc_ignor_size": value}})

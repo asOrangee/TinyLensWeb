@@ -34,8 +34,9 @@ export async function fetchPublishedDisplay(taskId: string, report: AgentUpdate,
   const raw = data.summary as LiveResult;
   const summary = parseLiveResult({ ...raw, display_mapping: undefined }, report);
   const mapping = raw?.display_mapping;
-  if (mapping && verifiedResultMapping({ ...summary, display_mapping: mapping })) {
-    summary.display_mapping = mapping;
+  if (mapping !== undefined) {
+    delete summary.display_mapping_from_parameters;
+    if (verifiedResultMapping({ ...summary, display_mapping: mapping })) summary.display_mapping = mapping;
   }
   if (summary.kind !== 'summary' || summary.attempt !== data.attempt || (report.run_id && summary.run_id !== report.run_id)) throw Error('展示清单的运行或 attempt 不匹配。');
   let posterior: LiveResult | undefined;

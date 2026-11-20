@@ -6,8 +6,9 @@ export type DemoTask = { id:string; name:string; createdAt:string; draft:string;
 export const tasksStorageKey='tinylens-demo-tasks-v1';
 export const activeTaskStorageKey='tinylens-demo-active-task-v1';
 export const deletedLensesStorageKey='tinylens-demo-deleted-lenses-v1';
+export const purgedLensesStorageKey='tinylens-demo-purged-lenses-v1';
 export function parseDeletedLenses(raw:string|null):string[]{return parseDeletedTaskIds(raw,id=>id.startsWith('task-')||/^TL-DEMO-\d+$/.test(id));}
-export function readDeletedLenses():string[]{try{return parseDeletedLenses(localStorage.getItem(deletedLensesStorageKey));}catch{return [];}}
+export function readDeletedLenses(key=deletedLensesStorageKey):string[]{try{return parseDeletedLenses(localStorage.getItem(key));}catch{return [];}}
 const record=(value:unknown):value is Record<string,unknown>=>!!value&&typeof value==='object'&&!Array.isArray(value);
 const date=(value:unknown):value is string=>typeof value==='string'&&Number.isFinite(Date.parse(value));
 export function parseTasks(raw:string|null):DemoTask[]{

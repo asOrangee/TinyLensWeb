@@ -19,6 +19,9 @@ Features proposed as one lensed-image family should be broadly consistent with a
 Some line-of-sight galaxies may lie close in projection to lensed images or arcs. If such a galaxy does not cause additional anomalous distortion of the lensed images or arcs, prefer not to classify it as a lens galaxy. After identifying the lensing features, state the approximate coordinates of the lens galaxy and lensed images.
 
 Stage 2
+If the right panel is titled "Euclid DR1 contamination mask", its shaded pixels show the exclusion from the released mask. Return `contaminant_ids: []` in this mode. Compare the shaded area with the lensed emission identified in Stage 1. Set `disposition` to `"human_review"` if the mask removes essential constraints on the fit.
+
+For the regular segmentation panel with segment IDs:
 Using the confirmed coordinates of the lens galaxy and lensed images, match them to the segmentation map in the right panel. one segment may contain both the lens galaxy and lensed emission. Treat every segmentation in the right panel that does not cover the lens-galaxy or lensed-image positions as a contaminant region to be masked. Return the IDs of these contaminant regions.
 
 Stage 3

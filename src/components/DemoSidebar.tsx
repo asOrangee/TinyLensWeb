@@ -1,13 +1,13 @@
 import { useState } from 'react';
-import { BookOpen, CircleHelp, CirclePlus, GitFork, Languages, MessageSquare, Palette, Trash2 } from 'lucide-react';
+import { BookOpen, CircleHelp, CirclePlus, GitFork, Languages, Layers, MessageSquare, Palette, Trash2 } from 'lucide-react';
 import { useDemoI18n } from '../lib/demo-i18n';
 import SidebarSelect from './SidebarSelect';
 import { designs, type DesignId } from '../lib/designs';
 
 type LensItem = { id: string; name: string; image?: string; kind?: 'task'; lastConversationAt?: string };
-type Props = { lenses: LensItem[]; selected: string; open: boolean; onClose: () => void; onSelect: (id: string) => void; onNewTask: () => void; onDelete:(id:string)=>void; onTrash:()=>void; deletedCount:number; onHistory: () => void; onManual: () => void; onGuide: () => void; design: DesignId; onDesignChange: (design: DesignId) => void; live?: boolean; taskCreationDisabled?: boolean };
+type Props = { lenses: LensItem[]; selected: string; open: boolean; onClose: () => void; onSelect: (id: string) => void; onNewTask: () => void; onDelete:(id:string)=>void; onTrash:()=>void; deletedCount:number; onHistory: () => void; onManual: () => void; onGuide: () => void; onBatches?: () => void; design: DesignId; onDesignChange: (design: DesignId) => void; live?: boolean; taskCreationDisabled?: boolean };
 
-export default function DemoSidebar({ lenses, selected, open, onClose, onSelect, onNewTask, onDelete, onTrash, deletedCount, onHistory, onManual, onGuide, design, onDesignChange, live = false, taskCreationDisabled = live }: Props) {
+export default function DemoSidebar({ lenses, selected, open, onClose, onSelect, onNewTask, onDelete, onTrash, deletedCount, onHistory, onManual, onGuide, onBatches, design, onDesignChange, live = false, taskCreationDisabled = live }: Props) {
   const { t, language, setLanguage } = useDemoI18n();
   const [hovered, setHovered] = useState(false);
   const [keyboardFocus, setKeyboardFocus] = useState(false);
@@ -24,6 +24,7 @@ export default function DemoSidebar({ lenses, selected, open, onClose, onSelect,
     onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) setKeyboardFocus(false); }}
     onKeyDown={event => { if (event.key === 'Tab') setKeyboardFocus(true); if (event.key === 'Escape') { onClose(); setHovered(false); setKeyboardFocus(false); (event.target as HTMLElement).blur(); } }}>
     <nav className="lens-shortcuts" aria-label={t('快捷操作')}>
+      {onBatches && <button type="button" onClick={() => { onBatches(); leave(); }} aria-label={t('批次进度')} title={t('批次进度')}><Layers size={21}/><span className="lens-shortcut-label">{t('批次进度')}</span></button>}
       <button type="button" onClick={onHistory} aria-label={t('当前 lens 的分支历史')} title={t('当前 lens 的分支历史')}><GitFork size={21}/><span className="lens-shortcut-label">{t('历史记录')}</span></button>
       <button type="button" onClick={onManual} aria-label={t('参数手册')} title={t('参数手册')}><BookOpen size={21}/><span className="lens-shortcut-label">{t('参数手册')}</span></button>
       <SidebarSelect label={t('语言')} ariaLabel={t('界面语言')} icon={Languages} value={language} options={[{value:'zh',label:'中文'},{value:'en',label:'English'}]} design={design} open={setting==='language'} onOpenChange={open=>setSetting(open?'language':null)} onChange={value=>setLanguage(value==='en'?'en':'zh')}/>

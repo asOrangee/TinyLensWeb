@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 import { WORKSPACE } from './agent-state.mjs';
 import { connectionConfig, shellQuote } from './connection-config.mjs';
 import { fitsImages, numericalHash, numericalPlane } from './numeric-payload.mjs';
@@ -16,6 +17,7 @@ const namedSchemas = [DISPLAY_SCHEMA, contract.previousNamedSchema];
 export const DISPLAY_READER = 'DISPLAY_CONTRACT_JSON = ' + JSON.stringify(contractJson) + '\n'
   + await readFile(new URL('./read-stage-display.py', import.meta.url), 'utf8');
 const readerHash = numericalHash(DISPLAY_READER);
+const previousDomainReaderHash = 'e2f754c141bc2264965c3802438a5a94c432de3c25b2dcc9eb169de30eb98a4f';
 const stageVersionsReaderHash = 'e37375a2fa4c6a955be191b64a42b8c0d6a955392ef4666f806b98ea6ef6691d';
 const stageParametersReaderHash = 'c1bd8d5229a6835b1e4417f353e2007e1a4ca204935375c97b5046852a503add';
 const previousReaderHash = 'd4c50514b0b45389031765a324ffe251887841b86bbc0fc868858fbac4140491';
@@ -59,20 +61,25 @@ export function reportedDisplay(state, updateId) {
   return { ...request, runId: report.run_id, ...(archiveReport && { storageRun: archiveForReport(archiveReport) }) };
 }
 
-function raster(values, shape, bounds, sha, { decreasing = false, limits, color = 'magma' } = {}) {
+function raster(values, shape, bounds, sha, { decreasing = false, limits, color = 'magma', valid } = {}) {
+  if (valid && (valid.length !== values.length || valid.some(value => value !== 0 && value !== 1))) {
+    throw Error('Invalid display mask.');
+  }
+  const mask = valid ? Buffer.from(valid) : Buffer.alloc(values.length, 1);
   const raw = Buffer.alloc(values.length * 8);
   let lo = Infinity, hi = -Infinity;
   for (let i = 0; i < values.length; i++) {
     const value = values[i];
-    lo = Math.min(lo, value); hi = Math.max(hi, value);
+    if (mask[i]) { lo = Math.min(lo, value); hi = Math.max(hi, value); }
     raw.writeDoubleLE(value, i * 8);
   }
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) throw Error('No visible display pixels.');
   return numericalPlane({
     shape, bounds_arcsec: bounds, half_extent_arcsec: (bounds[3] - bounds[2]) / 2,
     vmin: limits?.[0] ?? lo, vmax: limits?.[1] ?? hi, data_min: lo, data_max: hi,
     stretch: 'linear', asinh_a: 1, colormap: color, input_fits_sha256: sha,
     values_base64: raw.toString('base64'), values_sha256: numericalHash(raw),
-    mask_base64: Buffer.alloc(values.length, 1).toString('base64'),
+    mask_base64: mask.toString('base64'),
     array_y_direction: decreasing ? 'decreasing' : 'increasing',
   });
 }
@@ -176,7 +183,8 @@ function preflightInput(m, arrays, request, envelope) {
 
 function maskPayload(m, arrays, request, summary) {
   const included = flippedRows(arrays.mask.values, arrays.mask.shape);
-  const domain = flippedRows(arrays.domain.values, arrays.domain.shape);
+  const valid = arrays.domain.values;
+  const domain = flippedRows(valid, arrays.domain.shape);
   const count = included.reduce((sum, value) => sum + value, 0);
   const domainCount = domain.reduce((sum, value) => sum + value, 0);
   if (included.some((v, i) => (v !== 0 && v !== 1) || v > domain[i])
@@ -194,8 +202,8 @@ function maskPayload(m, arrays, request, summary) {
     modeling_radius_arcsec: m.modeling_radius_arcsec ?? summary.config?.settings?.modeling_radius ?? null,
     shape, included: count, domain_pixels: domainCount, display_y_direction: 'decreasing',
     included_base64: Buffer.from(included).toString('base64'), domain_base64: Buffer.from(domain).toString('base64'),
-    plane: raster(values, shape, bounds, m.input.sha256),
-    ...(lensed && { lensed_source_plane: raster(lensed.values, lensed.shape, lensed.bounds, m.input.sha256) }),
+    plane: raster(values, shape, bounds, m.input.sha256, { valid }),
+    ...(lensed && { lensed_source_plane: raster(lensed.values, lensed.shape, lensed.bounds, m.input.sha256, { valid }) }),
   };
 }
 
@@ -260,12 +268,23 @@ export function adaptDisplayEnvelope(envelope, request) {
     return { ...payload, summary, mask };
   }
 
-  const range = request.stage === 'a' ? 5 : 3;
-  const planes = arrays && Object.fromEntries(Object.entries(arrays).map(([role, { values, shape, bounds }]) => {
-    const limits = role === 'residual' ? [-range, range] : role === 'chi-square' ? [0, range * range] : undefined;
-    const color = limits ? 'blue-white-red' : role === 'source' && request.stage !== 'm1' ? 'inferno' : 'magma';
-    return [role, raster(values, shape, bounds, m.input.sha256, { limits, color })];
-  }));
+  let planes;
+  if (arrays) {
+    try {
+      const valid = arrays.domain?.values;
+      const fitCount = result.metrics.residual_diagnostics?.pixel_count;
+      if (valid && fitCount !== undefined && valid.reduce((n, pixel) => n + pixel, 0) !== fitCount) {
+        throw Error('Display mask disagrees with the fitted pixel count.');
+      }
+      const range = request.stage === 'a' ? 5 : 3;
+      planes = Object.fromEntries(Object.entries(arrays).filter(([role]) => role !== 'domain')
+        .map(([role, { values, shape, bounds }]) => {
+          const limits = role === 'residual' ? [-range, range] : role === 'chi-square' ? [0, range * range] : undefined;
+          const color = limits ? 'blue-white-red' : role === 'source' && request.stage !== 'm1' ? 'inferno' : 'magma';
+          return [role, raster(values, shape, bounds, m.input.sha256, { limits, color, valid: role === 'source' ? undefined : valid })];
+        }));
+    } catch (error) { if (!current) throw error; }
+  }
   summary.planes = planes;
   if (planes?.observation && planes.source && m.mapping_file?.path && hash(m.mapping_file.sha256)
       && envelope.mapping_packet?.schema === contract.mappingFile.schema) {
@@ -278,6 +297,11 @@ export function adaptDisplayEnvelope(envelope, request) {
       summary_sha256: m.summary.sha256, fits_sha256: m.input.sha256,
       frames: { image: frame(planes.model), source: frame(planes.source) },
     };
+  } else if (current && request.stage === 'a' && planes?.observation && planes.source
+      && !Object.hasOwn(m, 'mapping_file') && !Object.hasOwn(m, 'mapping')
+      && hash(parameterSource?.sha256) && packet?.metrics?.medians
+      && isDeepStrictEqual(packet.metrics.medians, result.metrics.medians)) {
+    summary.display_mapping_from_parameters = true;
   }
   const distribution = current ? packet?.distribution : parameters;
   const posterior = distribution ? { ...distribution, ...identity, sha256: m.parameters.sha256 } : undefined;
@@ -317,7 +341,7 @@ export async function readReportedDisplay(state, updateId, { spawnProcess = spaw
   const { storageRun, ...cacheRequest } = request;
   const identity = JSON.stringify([state.threadId, updateId, cacheRequest, readerHash]);
   const location = join(cacheDirectory, numericalHash(identity) + '.json');
-  const cacheKeys = [identity, ...[stageVersionsReaderHash, stageParametersReaderHash, previousReaderHash]
+  const cacheKeys = [identity, ...[previousDomainReaderHash, stageVersionsReaderHash, stageParametersReaderHash, previousReaderHash]
     .map(hash => JSON.stringify([state.threadId, updateId, cacheRequest, hash]))];
   if (request.path.endsWith('/display-manifest.json')) cacheKeys.push(JSON.stringify([state.threadId, updateId, cacheRequest, legacyReaderHash]));
   for (const key of cacheKeys) {

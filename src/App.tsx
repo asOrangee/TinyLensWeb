@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDownToLine, ArrowRight, BookOpen, ChevronRight, CircleHelp, Cpu, ExternalLink, FlaskConical, GitBranch, Info, Layers3, LayoutDashboard, LoaderCircle, Search, Settings2, SlidersHorizontal, X } from 'lucide-react';
 import { stages as originalStages } from './data/stages';
 import type { StageId, Parameter } from './data/stages';
-import { advanceDemoRun, demoLenses, downloadJSON, lastLensConversationAt, lensBranches, readRuns, stageOrder } from './lib/workspace';
+import { advanceDemoRun, demoLenses, downloadJSON, initialRun, lastLensConversationAt, lensBranches, readRuns, stageOrder } from './lib/workspace';
 import type { LightModels, Run } from './lib/workspace';
 import ScienceViewer from './components/ScienceViewer';
 import StageWorkbench from './components/StageWorkbench';
@@ -18,7 +18,7 @@ import PreflightViewer from './components/PreflightViewer';
 import DemoSidebar from './components/DemoSidebar';
 import DeletedTaskList from './components/DeletedTaskList';
 import BlankTaskWorkspace from './components/BlankTaskWorkspace';
-import { activeTaskStorageKey, createBlankTask, patchTask, readActiveTask, readTasks, submitTaskMessage, tasksStorageKey, deletedLensesStorageKey, hideLens, readDeletedLenses, restoreLens } from './lib/demo-tasks';
+import { activeTaskStorageKey, createBlankTask, patchTask, readActiveTask, readTasks, submitTaskMessage, tasksStorageKey, deletedLensesStorageKey, purgedLensesStorageKey, hideLens, readDeletedLenses, restoreLens } from './lib/demo-tasks';
 import ConversationRail, { type ConversationMessage } from './components/ConversationRail';
 import { readDemoMessages, type DemoMessage } from './lib/demo-conversation';
 import PositionLikelihoodEditor from './components/PositionLikelihoodEditor';
@@ -47,9 +47,10 @@ export default function App() {
   const getStage=(id:StageId)=>stages.find(stage=>stage.id===id)!;
   const [designId,setDesignId]=useState<DesignId>(readDesign);
   const design=designs.find(d=>d.id===designId)!;
-  const [runs,setRuns]=useState<Run[]>(()=>readRuns(createInitialMask()));
+  const [purgedLenses,setPurgedLenses]=useState(()=>readDeletedLenses(purgedLensesStorageKey));
+  const [runs,setRuns]=useState<Run[]>(()=>readRuns(createInitialMask(),purgedLenses));
   const [lensId,setLensId]=useState(demoLenses[0].id);
-  const [runId,setRunId]=useState(()=>runs[0].id);
+  const [runId,setRunId]=useState(()=>runs[0]?.id??'');
   const [stageId,setStageId]=useState<StageId>('m1');
   const [tab,setTab]=useState<StageTab>('results');
   const [viewerToolbarTarget,setViewerToolbarTarget]=useState<HTMLDivElement|null>(null);
@@ -67,14 +68,14 @@ export default function App() {
   const activeTask=tasks.find(task=>task.id===activeTaskId&&!deletedLenses.includes(task.id));
   const taskName=(id:string)=>{const index=tasks.findIndex(task=>task.id===id);return tasks[index]?.name.trim()||t('新任务 {number}',{number:index+1});};
   const sidebarImage=useScaledPlanes(undefined,'asinh',false,['observation']);
-  const allLenses=[...demoLenses.map(l=>({...l,image:sidebarImage.planes?.observation?.src,lastConversationAt:lastLensConversationAt(runs,l.id,messages)})),...tasks.map(task=>({id:task.id,name:taskName(task.id),kind:'task' as const,lastConversationAt:task.messages.at(-1)?.createdAt}))];
+  const allLenses=[...demoLenses.map(l=>({...l,image:sidebarImage.planes?.observation?.src,lastConversationAt:lastLensConversationAt(runs,l.id,messages)})),...tasks.map(task=>({id:task.id,name:taskName(task.id),kind:'task' as const,lastConversationAt:task.messages.at(-1)?.createdAt}))].filter(lens=>!purgedLenses.includes(lens.id));
   const sidebarLenses=allLenses.filter(lens=>!deletedLenses.includes(lens.id));
   const hasSelection=sidebarLenses.some(lens=>lens.id===(activeTaskId??lensId));
   const blankWorkspace=!!activeTask||!hasSelection;
   const showTaskWelcome=!!activeTask&&activeTask.messages.length===0;
   const dialog=useRef<HTMLDialogElement>(null);
   const stageTrack=useRef<HTMLDivElement>(null);
-  const run=runs.find(r=>r.id===runId) ?? runs.find(r=>r.lensId===lensId) ?? runs[0];
+  const run=runs.find(r=>r.id===runId) ?? runs.find(r=>r.lensId===lensId) ?? runs[0] ?? initialRun(lensId,createInitialMask());
   const stage=getStage(stageId);
   const posteriorParameters=parametersForPosterior(stage.id,stage.parameters);
   const branches=lensBranches(runs,lensId);
@@ -106,6 +107,7 @@ export default function App() {
   useEffect(()=>{try{localStorage.setItem('tinylens-demo-runs-v1',JSON.stringify(runs));localStorage.setItem('tinylens-demo-drafts-v1',JSON.stringify(drafts));localStorage.setItem('tinylens-demo-conversations-v1',JSON.stringify(messages));}catch{setStorageError(true);}},[runs,drafts,messages]);
   useEffect(()=>{try{localStorage.setItem(tasksStorageKey,JSON.stringify(tasks));if(activeTaskId)localStorage.setItem(activeTaskStorageKey,activeTaskId);else localStorage.removeItem(activeTaskStorageKey);}catch{setStorageError(true);}},[tasks,activeTaskId]);
   useEffect(()=>{try{localStorage.setItem(deletedLensesStorageKey,JSON.stringify(deletedLenses));}catch{setStorageError(true);}},[deletedLenses]);
+  useEffect(()=>{try{localStorage.setItem(purgedLensesStorageKey,JSON.stringify(purgedLenses));}catch{setStorageError(true);}},[purgedLenses]);
   useEffect(()=>{if(!hasSelection&&sidebarLenses.length)selectLens(sidebarLenses[0].id);},[hasSelection,sidebarLenses.map(lens=>lens.id).join(',')]);
   useEffect(()=>{if(!runningId)return;const timer=window.setInterval(()=>setRuns(prev=>prev.map(r=>r.id===runningId&&r.status==='running'?advanceDemoRun(r):r)),1100);return()=>clearInterval(timer);},[runningId]);
   useEffect(()=>{if(!toast)return;const t=setTimeout(()=>setToast(''),5000);return()=>clearTimeout(t);},[toast]);
@@ -126,6 +128,16 @@ export default function App() {
     setActiveTaskId(null);if(id!==lensId){setLensId(id);setRunId(latest.id);}setMenuOpen(false);
   }
   function newTask(){const task=createBlankTask();setTasks(previous=>[...previous,task]);setActiveTaskId(task.id);setModal(null);setMenuOpen(false);setToast('');}
+  function permanentlyDeleteLens(id:string){
+    const runIds=runs.filter(run=>run.lensId===id).map(run=>run.id);
+    setPurgedLenses(previous=>hideLens(previous,id));
+    setDeletedLenses(previous=>restoreLens(previous,id));
+    setTasks(previous=>previous.filter(task=>task.id!==id));
+    setRuns(previous=>previous.filter(run=>run.lensId!==id));
+    setMessages(previous=>previous.filter(message=>message.lensId!==id));
+    setDrafts(previous=>Object.fromEntries(Object.entries(previous).filter(([key])=>!runIds.some(runId=>key.startsWith(runId+':')))));
+    if(activeTaskId===id)setActiveTaskId(null);
+  }
   function chooseStage(id: StageId) {
     setStageId(id);
     setTab(current => supportsStageTab(id, current) ? current : 'results');
@@ -209,7 +221,7 @@ export default function App() {
     <ConnectionStatusBar connected={serverConnected}/>
 
     <dialog ref={dialog} className={`modal modal-${modal}`} onCancel={()=>setModal(null)} onClick={e=>{if(e.target===dialog.current)setModal(null);}} aria-labelledby="modal-title"><div className="modal-header"><div>{modal!=='parameter'&&<span className="eyebrow">TINYLENS WORKSPACE</span>}<h2 id="modal-title">{modal==='trash'?t('已删除任务'):modal==='design'?t("外观与构图方案"):modal==='history'?t('{lens} 的分支历史',{lens:activeTask?taskName(activeTask.id):lensId}):modal==='manual'?t("参数手册"):modal==='settings'?t("连接与设置"):modal==='parameter'?t(parameter?.name??''):t("欢迎来到 TinyLens")}</h2></div><button className="icon-button" aria-label={t("关闭窗口")} onClick={()=>setModal(null)}><X size={20}/></button></div><div className="modal-body">
-      {modal==='trash'&&<DeletedTaskList tasks={allLenses.filter(lens=>deletedLenses.includes(lens.id)).map(lens=>({id:lens.id,name:'kind' in lens?lens.name:t(lens.name)}))} onRestore={id=>setDeletedLenses(previous=>restoreLens(previous,id))}/>}
+      {modal==='trash'&&<DeletedTaskList tasks={allLenses.filter(lens=>deletedLenses.includes(lens.id)).map(lens=>({id:lens.id,name:'kind' in lens?lens.name:t(lens.name)}))} onRestore={id=>setDeletedLenses(previous=>restoreLens(previous,id))} onDelete={permanentlyDeleteLens}/>}
       {modal==='design'&&<DesignGallery value={designId} onChange={id=>{chooseDesign(id);setModal(null);}}/>}
       {modal==='history'&&!activeTask&&<button className="button secondary branch-export" onClick={exportRun}><ArrowDownToLine size={15}/>{t("导出当前演示记录")}</button>}
       {modal==='history'&&activeTask&&<p className="section-caption">{t('此任务尚无运行版本。')}</p>}

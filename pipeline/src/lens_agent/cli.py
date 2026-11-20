@@ -11,8 +11,16 @@ from uuid import uuid4
 
 from .adjudication import adjudicate_attempt
 from .attempts import prepare_attempt, promote_attempt
-from .configuration import InputGeometry, PIPELINE_RELEASE_ID, validate_run_manifest, validated_run_root, run_input_geometry
+from .configuration import (
+    InputGeometry,
+    PIPELINE_RELEASE_ID,
+    PipelineConfig,
+    run_input_geometry,
+    validate_run_manifest,
+    validated_run_root,
+)
 from .inspection import build_inspection_packet, materialize_modeling_mask
+from .inspection.euclid import find_euclid_dataset, load_euclid_contamination
 from .inspector_decision import validate_inspector_decision
 from .inspector_synthesis import record_inspector_votes, record_preflight_synthesis
 from .models import StageName
@@ -76,6 +84,19 @@ def _cmd_preflight(args: argparse.Namespace) -> None:
     lens_dir = args.lens_dir.resolve()
     if previous is not None and previous.get("lens_dir", str(lens_dir)) != str(lens_dir):
         raise ValueError("Input directory is frozen for this run; use a new output or Full Lens Rerun")
+    dataset = args.euclid_dataset_dir
+    frozen_mask = previous.get("euclid_contamination") if previous is not None else None
+    if previous is not None:
+        frozen_dataset = Path(frozen_mask["dataset_dir"]) if frozen_mask is not None else None
+        if dataset is not None and dataset.resolve() != frozen_dataset:
+            raise ValueError("Contamination mask source is frozen for this run; use a new output or Full Lens Rerun")
+        dataset = frozen_dataset
+    elif dataset is None:
+        release_root = os.environ.get("LENS_AGENT_EUCLID_RELEASE_ROOT")
+        dataset = find_euclid_dataset(lens_dir, release_root=Path(release_root) if release_root else None)
+    euclid = load_euclid_contamination(lens_dir, dataset, geometry) if dataset is not None else None
+    if euclid is not None and previous is not None and euclid.provenance != frozen_mask:
+        raise ValueError("The Euclid cutout, input or mask has changed since preflight; use a new output or Full Lens Rerun")
     output_dir.mkdir(parents=True, exist_ok=True)
     if previous is None:
         manifest = {
@@ -85,10 +106,15 @@ def _cmd_preflight(args: argparse.Namespace) -> None:
             "lens_dir": str(lens_dir),
             "input_geometry": geometry.model_dump(mode="json"),
             "geometry_evidence": getattr(args, "geometry_evidence", None),
+            "stage_b_defaults": PipelineConfig().model_dump(
+                include={"arc_snr_threshold", "arc_ignor_size"}
+            ),
         }
+        if euclid is not None:
+            manifest["euclid_contamination"] = euclid.provenance
         with run_manifest.open("x", encoding="utf-8") as handle:
             handle.write(json.dumps(manifest, indent=2) + "\n")
-    packet = build_inspection_packet(lens_dir, output_dir / "preflight", geometry=geometry)
+    packet = build_inspection_packet(lens_dir, output_dir / "preflight", geometry=geometry, euclid=euclid)
     print(packet)
     display = packet.with_name("display-manifest.json")
     if display.is_file():
@@ -102,30 +128,30 @@ def _cmd_mask(args: argparse.Namespace) -> None:
     output_dir = validated_run_root(args.output_dir)
     preflight_dir = output_dir / "preflight"
     geometry = run_input_geometry(output_dir)
+    fixed_mask = validate_run_manifest(output_dir).get("euclid_contamination") is not None
     decision_path = args.inspection.resolve()
     saved_decision = preflight_dir / "inspector.json"
     try:
         decision = validate_inspector_decision(
             json.loads(decision_path.read_text(encoding="utf-8")),
             expected_lens_id=output_dir.name,
+            fixed_mask=fixed_mask,
         )
     except (ValueError, json.JSONDecodeError):
         if decision_path == saved_decision.resolve():
             saved_decision.unlink(missing_ok=True)
         raise
+    if decision["disposition"] == "human_review":
+        (preflight_dir / "modeling_mask.fits").unlink(missing_ok=True)
+        result = "human_review"
+    else:
+        result = materialize_modeling_mask(
+            preflight_dir, decision["contaminant_ids"], pixel_scale_arcsec=geometry.pixel_scale_arcsec
+        )
     saved_decision.write_text(
         json.dumps(decision, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
-    disposition = decision.get("disposition")
-    if disposition == "human_review":
-        (preflight_dir / "modeling_mask.fits").unlink(missing_ok=True)
-        print("human_review")
-        return
-    if disposition != "model":
-        raise ValueError("inspector disposition must be 'model' or 'human_review'")
-    contaminants = [int(value) for value in decision.get("contaminant_ids", [])]
-    mask = materialize_modeling_mask(preflight_dir, contaminants, pixel_scale_arcsec=geometry.pixel_scale_arcsec)
-    print(mask)
+    print(result)
 
 
 def _cmd_inspector_votes(args: argparse.Namespace) -> None:
@@ -351,6 +377,8 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Physical y direction as input row index increases")
     preflight.add_argument("--geometry-evidence", default=None,
                            help="Header, simulation metadata or calibration supporting the input geometry")
+    preflight.add_argument("--euclid-dataset-dir", type=Path,
+                           help="Extracted Euclid DR1 dataset/ with the matching VIS cutout and segmentation/artefact_binary.fits")
     preflight.set_defaults(func=_cmd_preflight)
 
     mask = commands.add_parser("mask")

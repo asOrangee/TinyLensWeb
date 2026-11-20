@@ -45,7 +45,7 @@ def image_bounds(shape, pixel):
     return [-nx * pixel / 2, nx * pixel / 2, -ny * pixel / 2, ny * pixel / 2]
 
 
-def record_prediction(capture, image, rms, lens_light, lensed_source):
+def record_prediction(capture, image, rms, lens_light, lensed_source, *, valid=None):
     source = np.asarray(lensed_source, dtype=float)
     total = np.asarray(lens_light, dtype=float) + source
     residual = (np.asarray(image, dtype=float) - total) / np.asarray(rms, dtype=float)
@@ -53,6 +53,8 @@ def record_prediction(capture, image, rms, lens_light, lensed_source):
         "model": total, "source-lensed": source,
         "residual": residual, "chi-square": np.square(residual),
     })
+    if valid is not None:
+        capture["valid_domain"] = np.asarray(valid, dtype=bool).copy()
 
 
 def file_sha256(path):
@@ -392,6 +394,20 @@ def publish_display(run, directory, stage, attempt, data, *, upstream=None, capt
                     logging.getLogger(__name__).warning("Stage B Lensed source unavailable: %s", error)
         elif stage in MODEL_STAGES:
             arrays = {"observation": data.image, **capture.get("planes", {})}
+            if domain_mask is not None:
+                valid = np.asarray(capture.get("valid_domain"))
+                exclusion = np.asarray(domain_mask, dtype=bool)
+                fitted_count = result["metrics"].get("residual_diagnostics", {}).get("pixel_count")
+                if (valid.shape != data.image.shape or exclusion.shape != valid.shape
+                        or valid.dtype != np.bool_ or not valid.any() or np.any(valid & exclusion)
+                        or (stage == "a" and not np.array_equal(valid, ~exclusion))
+                        or (fitted_count is not None and int(valid.sum()) != fitted_count)):
+                    logging.getLogger(__name__).warning("Workbench fit mask disagrees with %s", stage)
+                    arrays = {}
+                else:
+                    domain_path = run / "preflight" / "modeling_mask.fits"
+                    manifest["modeling_mask"] = _reference(domain_path, run)
+                    arrays["domain"] = valid
         else:
             raise ValueError("Stage has no workbench display")
 

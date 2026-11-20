@@ -26,6 +26,7 @@ export type LiveResult = {
   parameter_contract?: 'tinylens.stage-parameters.v1';
   parameter_source?: { path: string; sha256: string };
   display_mapping?:LiveMapping;
+  display_mapping_from_parameters?: true;
   scan?: { coarse: EvidenceCurve; fine: EvidenceCurve; log_lambda_best: number };
 };
 

@@ -354,6 +354,7 @@ def test_preflight_pins_pipeline_release_without_copying_pipeline(tmp_path: Path
             "input_y_direction": "increasing",
         },
         "geometry_evidence": None,
+        "stage_b_defaults": {"arc_snr_threshold": 3.0, "arc_ignor_size": 8},
     }
     assert (output_dir / "preflight" / "inspection.json").is_file()
     assert (output_dir / "preflight" / "preflight_2panel.png").is_file()
@@ -534,10 +535,18 @@ def test_mask_rejects_a_preflight_symlink_into_an_archive(tmp_path: Path) -> Non
     assert not (archive_preflight / "inspector.json").exists()
 
 
-def test_attempt_prepare_materializes_complete_initial_configuration(tmp_path: Path) -> None:
+@pytest.mark.parametrize("legacy_run", [False, True])
+def test_attempt_prepare_materializes_complete_initial_configuration(
+    tmp_path: Path, legacy_run: bool
+) -> None:
     lens_dir = make_lens_dir(tmp_path)
     output_dir = tmp_path / "output" / lens_dir.name
     main(["preflight", "--lens-dir", str(lens_dir), "--output-dir", str(output_dir)])
+    if legacy_run:
+        manifest_path = output_dir / "run-manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        del manifest["stage_b_defaults"]
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     decision = tmp_path / "inspector.json"
     decision.write_text(
         json.dumps(model_inspector_decision(lens_dir.name)), encoding="utf-8"
@@ -567,6 +576,8 @@ def test_attempt_prepare_materializes_complete_initial_configuration(tmp_path: P
     assert config["parent_config"] is None
     assert config["settings"]["stage_a_n_live"] == 200
     assert config["settings"]["stage_m3_n_eff"] == 600
+    assert config["settings"]["arc_snr_threshold"] == (2.0 if legacy_run else 3.0)
+    assert config["settings"]["arc_ignor_size"] == (5 if legacy_run else 8)
     assert "arc_drop_component_ids" not in config["settings"]
 
 

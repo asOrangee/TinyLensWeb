@@ -19,6 +19,7 @@ from .configuration import (
     PIPELINE_RELEASE_ID,
     PipelineConfig,
     TUNABLE_CATALOG,
+    validate_run_manifest,
     validated_run_root,
 )
 from .contracts import validate_reviewer_response
@@ -155,7 +156,16 @@ def _resolve_within(base: Path, reference: str, boundary: Path) -> Path:
 def _accepted_config(output_dir: Path, stage: StageName) -> tuple[EffectiveConfig, str | None]:
     stage_index = STAGE_DEPENDENCY_ORDER.index(stage)
     if stage_index == 0:
-        return EffectiveConfig(settings=PipelineConfig(**run_input_geometry(output_dir).model_dump())), None
+        stage_b_defaults = validate_run_manifest(output_dir).get(
+            "stage_b_defaults", {"arc_snr_threshold": 2.0, "arc_ignor_size": 5}
+        )
+        expected_keys = {"arc_snr_threshold", "arc_ignor_size"}
+        if not isinstance(stage_b_defaults, dict) or stage_b_defaults.keys() != expected_keys:
+            raise ValueError("Invalid Stage B defaults in Lens Run Manifest")
+        settings = PipelineConfig(
+            **run_input_geometry(output_dir).model_dump(), **stage_b_defaults
+        )
+        return EffectiveConfig(settings=settings), None
     upstream = STAGE_DEPENDENCY_ORDER[stage_index - 1]
     head_path = output_dir / "accepted" / f"{upstream.value}.json"
     head = json.loads(head_path.read_text(encoding="utf-8"))

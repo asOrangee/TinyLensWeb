@@ -257,11 +257,12 @@ def read_display(request):
         ) or (not current and any(result["configuration"]["settings"].get(key) != value
                                   for key, value in frozen["input_geometry"].items())):
             raise ValueError("Published stage summary or geometry mismatch")
-        if stage == "b":
-            if summary["artifacts"].get("feature_mask_fits") != "artifacts/feature_mask.fits":
+        if stage == "b" or "domain" in manifest["planes"]:
+            if stage == "b" and summary["artifacts"].get("feature_mask_fits") != "artifacts/feature_mask.fits":
                 raise ValueError("Unknown feature mask file")
             try:
-                verified_file(manifest["feature_mask"], run, f"attempts/b/{attempt}/artifacts/feature_mask.fits", FITS)
+                if stage == "b":
+                    verified_file(manifest["feature_mask"], run, f"attempts/b/{attempt}/artifacts/feature_mask.fits", FITS)
                 verified_file(manifest["modeling_mask"], run, "preflight/modeling_mask.fits", FITS)
             except (OSError, KeyError, TypeError, ValueError):
                 if not current:

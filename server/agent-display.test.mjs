@@ -54,7 +54,7 @@ const fixture = [
   'from lens_agent.workbench_display import DISPLAY_REFERENCE,image_bounds,publish_display,record_prediction',
   'root=Path(sys.argv[1]); run=root/"output"/"test-run"/"lens"; lens=root/"input"/"lens"',
   'lens.mkdir(parents=True); preflight=run/"preflight"; preflight.mkdir(parents=True)',
-  'raw=np.arange(1.,21.).reshape(4,5); rms=raw/2; psf=np.full((3,3),1/9)',
+  'raw=np.arange(1.,21.).reshape(4,5); raw[-1,0]=1000; rms=raw/2; psf=np.full((3,3),1/9)',
   'native=lens/"lens.fits"; fits.HDUList([fits.PrimaryHDU(),fits.ImageHDU(raw,name="VIS_FLUX"),fits.ImageHDU(rms,name="VIS_RMS"),fits.ImageHDU(psf,name="VIS_PSF")]).writeto(native)',
   'data=SimpleNamespace(lens_id="lens",fits_path=native,pixel_scale_arcsec=.1,image=raw[:,::-1],noise=rms[:,::-1],psf=psf[:,::-1])',
   'geometry=dict(pixel_scale_arcsec=.1,input_x_direction="decreasing",input_y_direction="increasing")',
@@ -64,7 +64,7 @@ const fixture = [
   'publish_display(run,preflight,"preflight",None,data)',
   'domain=np.zeros((4,5),dtype=np.uint8); domain[-1,-1]=1',
   'fits.writeto(preflight/"modeling_mask.fits",domain)',
-  'stages=[("a",0),("b",0),("m0",0),("m1",0),("m2",0),("m2",1),("m3",0)]; upstream={}',
+  'stages=[("a",2),("a",0),("b",0),("m0",0),("m1",0),("m2",0),("m2",1),("m3",0)]; upstream={}',
   'for stage, attempt in stages:',
   ' folder=run/"attempts"/stage/str(attempt); artifacts=folder/"artifacts"; artifacts.mkdir(parents=True)',
   ' parents={name:path for name,path in upstream.items() if name!=stage}',
@@ -81,9 +81,16 @@ const fixture = [
   ' if stage=="a": capture["linear_parameters"]={"source_mge_amplitudes":{"values":[1.25,.75]}}',
   ' if stage in ("m0","m2"): capture["mass_parameters"]={"theta_E":1.6}',
   ' summary=dict(lens_id="lens",stage=stage,attempt=attempt,status="success",metrics={},artifacts={},display=DISPLAY_REFERENCE)',
+  ' if stage=="a":',
+  '  summary["metrics"]["medians"]={key:value for key,value in model.items() if key!="kind"}',
+  '  if attempt==2: capture.pop("mapping")',
   ' if stage=="b":',
   '  mask=np.ones((4,5),dtype=np.uint8); mask[-1,0]=0; fits.writeto(artifacts/"feature_mask.fits",mask)',
   '  summary.update(metrics=dict(included_arc_pixels=1,masked_pixels=19),artifacts=dict(feature_mask_fits="artifacts/feature_mask.fits"))',
+  ' else:',
+  '  valid=domain==0 if stage=="a" else (mask==0)&(domain==0)',
+  '  capture["valid_domain"]=valid',
+  '  summary["metrics"]["residual_diagnostics"]={"pixel_count":int(valid.sum())}',
   ' write(folder/"stage-result.json",summary); write(folder/"effective-config.json",dict(settings={**geometry,"arc_snr_threshold":3.5}))',
   ' if stage=="m0": posterior=dict(extra=dict(lambda_grid_coarse=[0,1],log_ev_coarse=[-2,-1],lambda_grid_fine=[.5,.6,.75,.9,1],log_ev_fine=[-1.5,-1.4,-np.inf,-1.1,-1],log_lambda_best=1))',
   ' else: posterior=dict(extra={},samples=[[0],[10],[20]],weights=[.05,.9,.05],param_names=["theta_E"])',
@@ -156,11 +163,17 @@ test('named FITS and parameters round-trip every stage and bind M3 to the exact 
   assert.equal(Buffer.from(b.mask.included_base64, 'base64')[0], 1);
   assert.equal(Buffer.from(b.mask.domain_base64, 'base64')[4], 0);
   assert.equal(Buffer.from(b.mask.lensed_source_plane.values_base64, 'base64').readDoubleLE(), 1);
+  for (const plane of [b.mask.plane, b.mask.lensed_source_plane]) {
+    const pixels = Buffer.from(plane.mask_base64, 'base64');
+    assert.equal(pixels[19], 0);
+    assert.equal(pixels[15], 1);
+    assert.equal(plane.array_y_direction, 'increasing');
+  }
 
   for (const stage of ['a', 'm0', 'm1', 'm2', 'm3']) {
     const spec = request(stage, 0);
     const { envelope, payload } = pack(spec);
-    const suffixes = ['ChiSquare.fits','DataImage.fits','LensMapping.json','LensedSource.fits','ModelImage.fits','NormalizedResidual.fits','Parameters.json','UnlensedSource.fits'];
+    const suffixes = ['ChiSquare.fits','DataImage.fits','LensMapping.json','LensedSource.fits','ModelImage.fits','NormalizedResidual.fits','Parameters.json','UnlensedSource.fits','ValidDomain.fits'];
     assert.deepEqual((await readdir(spec.path)).sort(), suffixes.map(name=>'Stage'+stage.toUpperCase()+'_'+name));
     const mapping = payload.summary.display_mapping;
     assert.equal(mapping.schema, 'tinylens.lens-mapping.v2');
@@ -171,6 +184,12 @@ test('named FITS and parameters round-trip every stage and bind M3 to the exact 
     assert.equal(payload.summary.parameter_source.sha256, payload.posterior.sha256);
     assert.equal(Object.values(payload.summary.planes).length, 6);
     assert.ok(Object.values(payload.summary.planes).every(p => p.src === '' && p.colormap_src === ''));
+    const fitPixels = Buffer.from(Array.from({ length: 20 }, (_, i) => Number(stage === 'a' ? i !== 19 : i === 15)));
+    for (const [name, plane] of Object.entries(payload.summary.planes)) {
+      assert.deepEqual(Buffer.from(plane.mask_base64, 'base64'), name === 'source' ? Buffer.alloc(4, 1) : fitPixels);
+    }
+    assert.equal(payload.summary.planes.observation.data_max, 20);
+    assert.equal(payload.summary.planes.observation.data_min, stage === 'a' ? 1 : 20);
     assert.deepEqual(payload.summary.planes.source.bounds_arcsec, [-.3, .1, -.2, .2]);
     assert.equal(Buffer.from(payload.summary.planes.model.values_base64, 'base64').readDoubleLE(), 3);
     assert.equal(payload.posterior.kind, stage === 'm0' ? 'evidence_scan' : 'weighted_posterior');
@@ -192,6 +211,22 @@ test('named FITS and parameters round-trip every stage and bind M3 to the exact 
   const withoutImages = pack(request('a', 1)).payload;
   assert.equal(withoutImages.summary.planes, undefined);
   assert.equal(withoutImages.summary.result.metrics.medians.theta_E, 1.5);
+  assert.equal(withoutImages.summary.display_mapping_from_parameters, undefined);
+
+  const historicalA = request('a', 2);
+  const { envelope: historical, payload: replayed } = pack(historicalA);
+  assert.equal(replayed.summary.display_mapping, undefined);
+  assert.equal(replayed.summary.display_mapping_from_parameters, true);
+  const packet = historical.parameter_packet;
+  const inconsistent = { ...packet, metrics: { medians: { ...packet.metrics.medians, gamma1: .2 } } };
+  for (const parameter_packet of [undefined, inconsistent]) {
+    const payload = adaptDisplayEnvelope({ ...historical, parameter_packet }, historicalA);
+    assert.equal(payload.summary.display_mapping_from_parameters, undefined);
+    assert.equal(Object.keys(payload.summary.planes).length, 6);
+  }
+  const namedA = request('a', 0);
+  const withoutMappingPacket = { ...pack(namedA).envelope, mapping_packet: undefined };
+  assert.equal(adaptDisplayEnvelope(withoutMappingPacket, namedA).summary.display_mapping_from_parameters, undefined);
 
   const m3 = request('m3', 0);
   const readScope = attempt => spawnSync(python, ['-B', '-c', STAGE_SCOPE_READER, JSON.stringify({
@@ -207,6 +242,13 @@ test('named FITS and parameters round-trip every stage and bind M3 to the exact 
   assert.match(changed.stderr, /checksum mismatch/);
   await writeFile(m2, original);
   const { envelope } = pack(m3);
+  assert.equal(adaptDisplayEnvelope({ ...envelope, summary: { ...envelope.summary,
+    metrics: { residual_diagnostics: { pixel_count: 20 } } } }, m3).summary.planes, undefined);
+  const frozenMask = join(run, 'preflight/modeling_mask.fits');
+  const frozenMaskBytes = await readFile(frozenMask);
+  await writeFile(frozenMask, Buffer.concat([frozenMaskBytes, Buffer.from('\n')]));
+  assert.equal(pack(m3).payload.summary.planes, undefined);
+  await writeFile(frozenMask, frozenMaskBytes);
   const mappingPath = join(m3.path, 'StageM3_LensMapping.json');
   const manifestPath = join(m3.path, '..', 'display-manifest.json');
   const mappingBytes = await readFile(mappingPath);
@@ -214,6 +256,7 @@ test('named FITS and parameters round-trip every stage and bind M3 to the exact 
   await writeFile(mappingPath, Buffer.concat([mappingBytes, Buffer.from('\n')]));
   const badMapping = pack(m3).payload;
   assert.equal(badMapping.summary.display_mapping, undefined);
+  assert.equal(badMapping.summary.display_mapping_from_parameters, undefined);
   assert.equal(Object.keys(badMapping.summary.planes).length, 6);
   assert.equal(badMapping.posterior.kind, 'weighted_posterior');
   const otherAttempt = JSON.stringify({ ...JSON.parse(mappingBytes), attempt: 1 });

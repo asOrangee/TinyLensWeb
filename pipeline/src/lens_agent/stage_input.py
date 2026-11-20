@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from .configuration import run_input_geometry
+from .workbench_display import file_sha256
 
 
 class StageInputError(ValueError):
@@ -46,3 +47,12 @@ def check_stage_input(lens_dir: Path, output_dir: Path) -> None:
         run_input_geometry(output_dir)
     except (OSError, ValueError, TypeError, AttributeError) as error:
         raise StageInputError(f"Input geometry is inconsistent: {error}") from error
+
+    euclid = packet.get("euclid_contamination")
+    if euclid is not None:
+        try:
+            checksum = file_sha256(actual_path / f"{actual_path.name}.fits")
+        except OSError as error:
+            raise StageInputError(f"Cannot read the FITS bound to the Euclid contamination mask: {error}") from error
+        if checksum != euclid["input_fits_sha256"]:
+            raise StageInputError("Stage input FITS has changed since verification against the Euclid contamination mask")

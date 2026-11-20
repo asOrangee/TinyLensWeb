@@ -1,3 +1,5 @@
+import { parseBatchPlan, type BatchPlan } from './live-batches.ts';
+
 export type AgentConnection = 'disconnected' | 'connecting' | 'connected' | 'error';
 export type AgentTurnStatus = 'idle' | 'running' | 'waiting' | 'completed' | 'failed' | 'interrupted';
 export type AgentMessage = { id: string; role: 'user' | 'assistant'; text: string; phase?: string; complete?: boolean };
@@ -34,6 +36,7 @@ export type AgentState = {
   requests: AgentRequest[];
   updates: AgentUpdate[];
   questions: AgentQuestion[];
+  batchPlan?: BatchPlan;
   error: string | null;
   datasetPath: string;
   workspace: string;
@@ -71,6 +74,7 @@ export function parseAgentState(value: unknown): AgentState {
     error: optionalText(value.error) ?? null,
     datasetPath: optionalText(value.datasetPath) ?? '',
     workspace: optionalText(value.workspace) ?? '',
+    batchPlan: parseBatchPlan(value.batchPlan),
     messages: (value.messages as unknown[]).filter(record).filter(item => typeof item.id === 'string' && ['user', 'assistant'].includes(String(item.role)) && typeof item.text === 'string').map(item => ({ id: item.id as string, role: item.role as 'user' | 'assistant', text: item.text as string, phase: optionalText(item.phase), complete: typeof item.complete === 'boolean' ? item.complete : undefined })),
     activities: (value.activities as unknown[]).filter(record).filter(item => ['id', 'type', 'title', 'status'].every(key => typeof item[key] === 'string')).map(item => ({ id: item.id as string, type: item.type as string, title: item.title as string, status: item.status as string, detail: optionalText(item.detail), output: optionalText(item.output) })),
     requests: (value.requests as unknown[]).filter(record).filter(item => (typeof item.id === 'string' || typeof item.id === 'number') && typeof item.method === 'string' && record(item.params)).map(item => ({ id: item.id as string | number, method: item.method as string, params: item.params as Record<string, unknown>, scope: requestScope(item.scope) })),

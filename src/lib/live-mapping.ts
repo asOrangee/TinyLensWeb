@@ -9,6 +9,17 @@ export type LiveMapping = MappingIdentity & ({ schema: 'tinylens.lens-mapping.v1
   schema: 'tinylens.lens-mapping.v2'; curves: LensCurvePair[] | null; mapping_source: { path: string; sha256: string };
 });
 type MappingBinding = { stage: string; attempt: number; path: string; sha256: string; fitsSha256?: string; runId?: string; frames?: Frames };
+const displayDirectory = (path: string) => path.replace(/\/(?:display\/?|display-manifest\.json|stage-result\.json)$/, '') + '/display/';
+const isHash = (value: unknown) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+
+function isCalibratedFrame(frame?: PlaneFrame): frame is PlaneFrame {
+  const bounds = frame?.bounds_arcsec;
+  return !!frame && Array.isArray(frame.shape) && frame.shape.length === 2
+    && frame.shape.every(n => Number.isInteger(n) && n > 0 && n <= 512)
+    && Array.isArray(bounds) && bounds.length === 4 && [...bounds, frame.half_extent_arcsec].every(Number.isFinite)
+    && bounds[1] > bounds[0] && bounds[3] > bounds[2] && frame.half_extent_arcsec > 0
+    && Math.abs(bounds[3] - bounds[2] - frame.half_extent_arcsec * 2) <= 1e-10;
+}
 
 /** Exact TinyLens SIE convention, checked against per-attempt library rays. */
 export function sieMapper(model:SieShearModel,frame:PlaneFrame){
@@ -27,7 +38,7 @@ export function sieMapper(model:SieShearModel,frame:PlaneFrame){
 export function verifiedLiveMapping(value: LiveMapping | undefined, binding: MappingBinding) {
  try{
   if(!value||!['tinylens.lens-mapping.v1','tinylens.lens-mapping.v2'].includes(value.schema)||value.synthetic!==false||value.stage!==binding.stage||value.attempt!==binding.attempt||value.path!==binding.path||value.summary_sha256!==binding.sha256||value.fits_sha256!==binding.fitsSha256)return null;
-  for(const name of ['image','source'] as const){const frame=value.frames[name];if(!Array.isArray(frame?.shape)||frame.shape.length!==2||!frame.shape.every(n=>Number.isInteger(n)&&n>0&&n<=512)||!Array.isArray(frame.bounds_arcsec)||frame.bounds_arcsec.length!==4||![...frame.bounds_arcsec,frame.half_extent_arcsec].every(Number.isFinite)||frame.bounds_arcsec[1]<=frame.bounds_arcsec[0]||frame.bounds_arcsec[3]<=frame.bounds_arcsec[2]||frame.half_extent_arcsec<=0||Math.abs(frame.bounds_arcsec[3]-frame.bounds_arcsec[2]-frame.half_extent_arcsec*2)>1e-10)throw Error('Uncalibrated lens frame');}
+  if (!isCalibratedFrame(value.frames.image) || !isCalibratedFrame(value.frames.source)) return null;
   const isEpl=value.model.kind==='epl-shear';
   if((binding.stage==='m3')!==isEpl)return null;
   const mapper=value.model.kind==='epl-shear'?eplMapper(value.model,value.frames.image):sieMapper(value.model,value.frames.image);
@@ -44,10 +55,10 @@ export function verifiedLiveMapping(value: LiveMapping | undefined, binding: Map
   if (value.schema === 'tinylens.lens-mapping.v2') {
     const sameFrame = (a: PlaneFrame, b: PlaneFrame) => JSON.stringify(a.shape) === JSON.stringify(b.shape)
       && JSON.stringify(a.bounds_arcsec) === JSON.stringify(b.bounds_arcsec);
-    const displayDirectory = binding.path.replace(/\/(?:display\/?|display-manifest\.json|stage-result\.json)$/, '') + '/display/';
-    if (value.run_id !== binding.runId || !value.mapping_source?.path?.startsWith(displayDirectory)
-        || !/^[^/]+\.json$/.test(value.mapping_source.path.slice(displayDirectory.length))
-        || !/^[a-f0-9]{64}$/.test(value.mapping_source.sha256)
+    const directory = displayDirectory(binding.path);
+    if (value.run_id !== binding.runId || !value.mapping_source?.path?.startsWith(directory)
+        || !/^[^/]+\.json$/.test(value.mapping_source.path.slice(directory.length))
+        || !isHash(value.mapping_source.sha256)
         || (binding.frames && (!sameFrame(value.frames.image, binding.frames.image) || !sameFrame(value.frames.source, binding.frames.source)))) return null;
     const curves = value.curves;
     if (curves !== null && (!Array.isArray(curves) || curves.some(pair => !Array.isArray(pair?.critical) || !Array.isArray(pair.caustic)
@@ -62,7 +73,25 @@ export function verifiedLiveMapping(value: LiveMapping | undefined, binding: Map
 export function verifiedResultMapping(result?: LiveResult, stage = result?.stage) {
   if (!result || stage !== result.stage || result.attempt === null) return null;
   const { observation, source } = result.planes ?? {};
-  if (result.display_mapping?.schema === 'tinylens.lens-mapping.v2' && (!observation || !source)) return null;
-  return verifiedLiveMapping(result.display_mapping, { stage, attempt: result.attempt, path: result.path, sha256: result.sha256,
-    runId: result.run_id, fitsSha256: observation?.input_fits_sha256, frames: observation && source ? { image: observation, source } : undefined });
+  if (result.display_mapping !== undefined) {
+    if (result.display_mapping?.schema === 'tinylens.lens-mapping.v2' && (!observation || !source)) return null;
+    return verifiedLiveMapping(result.display_mapping, { stage, attempt: result.attempt, path: result.path, sha256: result.sha256,
+      runId: result.run_id, fitsSha256: observation?.input_fits_sha256, frames: observation && source ? { image: observation, source } : undefined });
+  }
+  if (stage !== 'a' || result.display_mapping_from_parameters !== true || result.kind !== 'summary'
+      || result.result?.status !== 'success' || result.result.stage !== 'a' || result.result.attempt !== result.attempt
+      || result.parameter_contract !== 'tinylens.stage-parameters.v1'
+      || !isCalibratedFrame(observation) || !isCalibratedFrame(source)
+      || !isHash(result.sha256) || !isHash(observation.input_fits_sha256)
+      || source.input_fits_sha256 !== observation.input_fits_sha256) return null;
+  const directory = displayDirectory(result.path);
+  if (!directory.endsWith(`/attempts/a/${result.attempt}/display/`)
+      || result.parameter_source?.path !== directory + 'StageA_Parameters.json'
+      || !isHash(result.parameter_source.sha256)) return null;
+  const { theta_E, e1_mass, e2_mass, center_x_mass, center_y_mass, gamma1, gamma2 } =
+    (result.result.metrics.medians ?? {}) as Omit<SieShearModel, 'kind'>;
+  try {
+    const mapper = sieMapper({ kind: 'sie-shear', theta_E, e1_mass, e2_mass, center_x_mass, center_y_mass, gamma1, gamma2 }, observation);
+    return { ...mapper, frames: { image: observation, source } };
+  } catch { return null; }
 }

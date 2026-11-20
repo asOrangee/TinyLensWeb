@@ -18,10 +18,13 @@ from matplotlib import colormaps
 from matplotlib.colors import BoundaryNorm, ListedColormap
 from photutils.segmentation import SegmentationImage, deblend_sources, detect_sources
 from photutils.utils.exceptions import NoDetectionsWarning
+from scipy.ndimage import label as label_components
 
 from ..configuration import InputGeometry
 from ..data import load_lens_data
 from ..visualization.stci_core import make_color_array, make_mono_array
+from ..workbench_display import file_sha256
+from .euclid import EUCLID_MASK_TITLE, EuclidContamination, binary_mask_sha256
 
 
 PREFLIGHT_DETECTION_SIGMA = 3.0
@@ -244,6 +247,7 @@ def _render_preflight_visual_prompt(
     *,
     pixel_scale_arcsec: float | None = None,
     modeling_radius_arcsec: float = 4.0,
+    euclid_mask: bool = False,
 ) -> Path:
     """Render a high-information, display-only prompt for the preflight reviewer."""
     pixel_scale_arcsec = _data_pixel_scale(data, pixel_scale_arcsec)
@@ -278,7 +282,8 @@ def _render_preflight_visual_prompt(
     _add_modeling_radius_marker(
         axis, modeling_radius_arcsec=modeling_radius_arcsec, colour="black"
     )
-    axis.set_title("Background-subtracted VIS\n(cyan = 3σ segmentation)")
+    contour_name = EUCLID_MASK_TITLE if euclid_mask else "3σ segmentation"
+    axis.set_title(f"Background-subtracted VIS\n(cyan = {contour_name})")
 
     axis = axes[0, 2]
     label_count = int(labels.max())
@@ -335,6 +340,7 @@ def _render_preflight_inspector_prompt(
     *,
     pixel_scale_arcsec: float | None = None,
     modeling_radius_arcsec: float = 4.0,
+    euclid_mask: bool = False,
 ) -> Path:
     """Render the central two-panel prompt consumed by the System Inspector.
 
@@ -362,7 +368,7 @@ def _render_preflight_inspector_prompt(
             f"{colour_title}\n(central {2 * field_radius_arcsec:.1f}\" field; "
             f"{modeling_radius_arcsec:.0f}\" aperture)"
         ),
-        "Colour composite with contours and segment IDs",
+        EUCLID_MASK_TITLE if euclid_mask else "Colour composite with contours and segment IDs",
     )
     for axis, title in zip(axes, titles):
         axis.imshow(rgb, origin="lower", extent=zoom_extent)
@@ -373,6 +379,11 @@ def _render_preflight_inspector_prompt(
             axis, modeling_radius_arcsec=modeling_radius_arcsec, colour="lime"
         )
 
+    if euclid_mask:
+        axes[1].imshow(
+            np.ma.masked_equal(zoom_labels > 0, False), origin="lower", extent=zoom_extent,
+            cmap=ListedColormap(["#ffc66d"]), alpha=0.35, interpolation="nearest",
+        )
     for label in sorted(int(value) for value in np.unique(zoom_labels) if value):
         region = zoom_labels == label
         contour = axes[1].contour(
@@ -388,6 +399,8 @@ def _render_preflight_inspector_prompt(
         contour.set_path_effects(
             [path_effects.withStroke(linewidth=2.5, foreground="black")]
         )
+        if euclid_mask:
+            continue
         label_x, label_y, horizontal_alignment, vertical_alignment = (
             _segment_label_anchor(
                 region,
@@ -446,12 +459,13 @@ def _three_sigma_segmentation(data_bkgsub: np.ndarray, std: float) -> np.ndarray
 
 
 def build_inspection_packet(
-    lens_dir: Path, output_dir: Path, *, geometry: InputGeometry | None = None
+    lens_dir: Path, output_dir: Path, *, geometry: InputGeometry | None = None,
+    euclid: EuclidContamination | None = None,
 ) -> Path:
     directory = output_dir.resolve()
     input_sha256 = None
     if directory.name == "preflight" and (directory.parent / "run-manifest.json").is_file():
-        from ..workbench_display import DISPLAY_REFERENCE, file_sha256, publish_display
+        from ..workbench_display import DISPLAY_REFERENCE, publish_display
 
         try:
             frozen_input = lens_dir.resolve() / f"{lens_dir.resolve().name}.fits"
@@ -459,20 +473,34 @@ def build_inspection_packet(
         except OSError as error:
             logging.getLogger(__name__).warning(f"Workbench input checksum unavailable: {error}")
     data = load_lens_data(lens_dir, geometry=geometry)
+    if euclid is not None and file_sha256(data.fits_path) != euclid.provenance["input_fits_sha256"]:
+        raise ValueError("The prepared VIS FITS differs from the input verified against the Euclid mask")
     input_geometry = InputGeometry(
         pixel_scale_arcsec=data.pixel_scale_arcsec,
         input_x_direction=data.input_x_direction,
         input_y_direction=data.input_y_direction,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
-    _, median, std = sigma_clipped_stats(data.image, sigma=3.0)
-    data_bkgsub = data.image - median
-    labels = _three_sigma_segmentation(data_bkgsub, float(std))
+    if euclid is not None:
+        labels, _ = label_components(euclid.pixels, structure=np.ones((3, 3)))
+        detection = {"method": "euclid_dr1_artefact_binary"}
+    else:
+        _, median, std = sigma_clipped_stats(data.image, sigma=3.0)
+        labels = _three_sigma_segmentation(data.image - median, float(std))
+        detection = {
+            "method": "single_threshold",
+            "threshold_sigma": PREFLIGHT_DETECTION_SIGMA,
+            "polarity": "positive",
+            "min_connected_pixels": PREFLIGHT_MIN_CONNECTED_PIXELS,
+            "deblend_enabled": True,
+            "deblend_n_levels": PREFLIGHT_DEBLEND_N_LEVELS,
+            "deblend_contrast": PREFLIGHT_DEBLEND_CONTRAST,
+        }
     seg_path = output_dir / "segmentation.fits"
     fits.writeto(seg_path, labels, header=_canonical_geometry_header(labels.shape, input_geometry), overwrite=True)
 
-    human_audit_path = _render_preflight_visual_prompt(output_dir, data, labels)
-    inspector_prompt_path = _render_preflight_inspector_prompt(output_dir, data, labels)
+    human_audit_path = _render_preflight_visual_prompt(output_dir, data, labels, euclid_mask=euclid is not None)
+    inspector_prompt_path = _render_preflight_inspector_prompt(output_dir, data, labels, euclid_mask=euclid is not None)
 
     packet = {
         "schema_version": "inspection_packet.v5",
@@ -488,21 +516,15 @@ def build_inspection_packet(
             "units": "arcsec",
         },
         "segment_count": int(labels.max()),
-        "segmentation_detection": {
-            "method": "single_threshold",
-            "threshold_sigma": PREFLIGHT_DETECTION_SIGMA,
-            "polarity": "positive",
-            "min_connected_pixels": PREFLIGHT_MIN_CONNECTED_PIXELS,
-            "deblend_enabled": True,
-            "deblend_n_levels": PREFLIGHT_DEBLEND_N_LEVELS,
-            "deblend_contrast": PREFLIGHT_DEBLEND_CONTRAST,
-        },
+        "segmentation_detection": detection,
         "artifacts": {
             "segmentation_fits": str(seg_path.resolve()),
             "inspector_prompt_png": str(inspector_prompt_path.resolve()),
             "human_audit_png": str(human_audit_path.resolve()),
         },
     }
+    if euclid is not None:
+        packet["euclid_contamination"] = euclid.provenance
     target = output_dir / "inspection.json"
     published_packet = None
     if input_sha256 is not None:
@@ -531,12 +553,9 @@ def materialize_modeling_mask(
     modeling_radius_arcsec: float = 4.0,
 ) -> Path:
     packet_path = output_dir / "inspection.json"
-    saved_geometry = None
-    if packet_path.is_file():
-        packet = json.loads(packet_path.read_text(encoding="utf-8"))
-        if "input_geometry" in packet:
-            saved_geometry = InputGeometry.model_validate(packet["input_geometry"])
-    if saved_geometry is not None:
+    packet = json.loads(packet_path.read_text(encoding="utf-8")) if packet_path.is_file() else {}
+    if "input_geometry" in packet:
+        saved_geometry = InputGeometry.model_validate(packet["input_geometry"])
         if pixel_scale_arcsec is not None and not np.isclose(
             pixel_scale_arcsec, saved_geometry.pixel_scale_arcsec, rtol=1e-12, atol=0.0
         ):
@@ -547,18 +566,32 @@ def materialize_modeling_mask(
         geometry = InputGeometry(pixel_scale_arcsec=0.1 if pixel_scale_arcsec is None else pixel_scale_arcsec)
     pixel_scale_arcsec = geometry.pixel_scale_arcsec
     labels = np.asarray(fits.getdata(output_dir / "segmentation.fits"), dtype=np.int32)
-    known = set(int(value) for value in np.unique(labels))
-    unknown = sorted(set(contaminant_ids) - known)
-    if unknown:
-        raise ValueError(f"unknown segmentation IDs: {unknown}")
+    euclid = packet.get("euclid_contamination")
+    if euclid is not None:
+        if contaminant_ids:
+            raise ValueError("Euclid contamination mode requires empty contaminant_ids")
+        contaminants = labels > 0
+        if (list(labels.shape) != euclid["image_shape"]
+                or binary_mask_sha256(contaminants) != euclid["canonical_mask_sha256"]):
+            raise ValueError("Preflight segmentation differs from the verified Euclid contamination mask")
+    else:
+        known = set(int(value) for value in np.unique(labels))
+        unknown = sorted(set(contaminant_ids) - known)
+        if unknown:
+            raise ValueError(f"unknown segmentation IDs: {unknown}")
+        contaminants = np.isin(labels, contaminant_ids)
     yy, xx = np.indices(labels.shape)
     center_y = (labels.shape[0] - 1) / 2.0
     center_x = (labels.shape[1] - 1) / 2.0
     radius_pixels = modeling_radius_arcsec / pixel_scale_arcsec
     outside_modeling_region = np.hypot(xx - center_x, yy - center_y) > radius_pixels
-    mask = outside_modeling_region | np.isin(labels, contaminant_ids)
+    mask = outside_modeling_region | contaminants
     target = output_dir / "modeling_mask.fits"
     header = _canonical_geometry_header(mask.shape, geometry)
     header["MODELRAD"] = (float(modeling_radius_arcsec), "Modeling radius in arcsec")
+    if euclid is not None:
+        if mask.all():
+            raise ValueError("Euclid contamination mask leaves no pixels in the modeling aperture")
+        header["MASKSRC"] = ("EUCLID_DR1", "Contamination source: artefact_binary.fits")
     fits.writeto(target, mask.astype(np.uint8), header=header, overwrite=True)
     return target

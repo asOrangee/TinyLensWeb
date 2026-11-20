@@ -68,6 +68,36 @@ def test_source_solution_reports_evaluated_rho_after_context_exit(rho_mode):
     assert float(getattr(rho, "value", rho)) == pytest.approx(2.0)
 
 
+def test_stage_a_workbench_exports_mapping_at_posterior_medians():
+    pytest.importorskip("TinyLensGpu")
+    from lens_agent.modeling import pipeline_template as p
+    from lens_agent.workbench_display import capture_model_planes
+
+    image = np.linspace(0.1, 1.0, 16 * 16).reshape(16, 16)
+    exclusion = np.zeros_like(image, dtype=bool)
+    exclusion[5:7, 9] = True
+    likelihood = p.build_stage_a_likelihood(image, np.full_like(image, 0.05), np.ones((1, 1)), exclusion)
+    names = [param.name for param in likelihood.get_dynamic_params()]
+    mass_parameters = {
+        "theta_E": 0.55, "e1_mass": 0.07, "e2_mass": -0.11,
+        "center_x_mass": 0.05, "center_y_mass": -0.02, "gamma1": 0.03, "gamma2": 0.04,
+    }
+    medians = dict.fromkeys(names, 0.0) | mass_parameters
+    with capture_model_planes() as capture:
+        p._parametric_planes(likelihood, medians, names)
+
+    np.testing.assert_array_equal(capture["valid_domain"], ~exclusion)
+    mapping = capture["mapping"]
+    assert mapping["model"]["kind"] == "sie-shear"
+    assert capture["mass_parameters"] == pytest.approx(mass_parameters)
+    assert mapping["curves"]
+    rays = mapping["references"]
+    x, y = (p.jnp.asarray([ray["image"][key] for ray in rays]) for key in ("x", "y"))
+    source = [[ray["source"]["x"], ray["source"]["y"]] for ray in rays]
+    expected = likelihood.phys_model.deflection(x=x, y=y)
+    np.testing.assert_allclose(source, np.column_stack(expected), atol=1e-6)
+
+
 @pytest.mark.parametrize("mass_kind", ["sie-shear", "epl-shear"])
 def test_pixel_workbench_exports_full_cutout_and_keeps_fitted_pixels(mass_kind):
     pytest.importorskip("TinyLensGpu")
@@ -88,12 +118,15 @@ def test_pixel_workbench_exports_full_cutout_and_keeps_fitted_pixels(mass_kind):
     lens_light = np.full_like(observation, 0.1)
     noise = np.full_like(observation, 0.2)
     psf = np.array([[0.01, 0.04, 0.08], [0.05, 0.40, 0.12], [0.02, 0.10, 0.18]])
-    mask = np.ones_like(observation, dtype=bool)
-    mask[2:7, 2:7] = False
+    feature_mask = np.ones_like(observation, dtype=bool)
+    feature_mask[2:7, 2:7] = False
+    contamination_mask = np.zeros_like(feature_mask)
+    contamination_mask[4, 5] = True
+    mask = feature_mask | contamination_mask
     bbox = (-0.3, 0.3, -0.3, 0.3)
     template = np.linspace(-0.1, 1.0, 36)
     likelihood = p._pixel_likelihood(
-        observation - lens_light, noise, psf, mask, None, (mass, shear), source, None,
+        observation - lens_light, noise, psf, feature_mask, contamination_mask, (mass, shear), source, None,
         fixed_source_bbox=bbox, fixed_reg_template=template,
     )
     names = [param.name for param in likelihood.get_dynamic_params()]
@@ -116,6 +149,7 @@ def test_pixel_workbench_exports_full_cutout_and_keeps_fitted_pixels(mass_kind):
         np.testing.assert_array_equal(likelihood._get_reg_scale(), solved["reg_scale_image"].ravel())
 
     planes = capture["planes"]
+    np.testing.assert_array_equal(capture["valid_domain"], ~mask)
     assert set(planes) == {"source", "source-lensed", "model", "residual", "chi-square"}
     lensed = planes["source-lensed"]
     assert lensed.shape == observation.shape

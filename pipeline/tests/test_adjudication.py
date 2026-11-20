@@ -8,7 +8,7 @@ import pytest
 from astropy.io import fits
 
 from lens_agent.cli import main
-from lens_agent.configuration import EffectiveConfig, PIPELINE_RELEASE_ID
+from lens_agent.configuration import EffectiveConfig, PIPELINE_RELEASE_ID, PipelineConfig
 from lens_agent.contracts import validate_reviewer_response
 from lens_agent.modeling.source_grid import source_grid_spec
 from lens_agent.modeling.predicted_image_family import build_predicted_image_family
@@ -82,8 +82,9 @@ def _eligible_attempt(
     artifact = root / "artifacts" / f"stage_{stage}.pkl"
     artifact.parent.mkdir(parents=True)
     artifact.write_bytes(b"test artifact")
+    config = EffectiveConfig(settings=PipelineConfig(arc_snr_threshold=2.0, arc_ignor_size=5))
     (root / "effective-config.json").write_text(
-        json.dumps(EffectiveConfig().model_dump(mode="json")) + "\n",
+        json.dumps(config.model_dump(mode="json")) + "\n",
         encoding="utf-8",
     )
     _write_execution_marker(root, stage, attempt)

@@ -22,6 +22,7 @@ import {mergeMaskPrompt} from '../lib/mask-user-input';
 import ParameterManual from './ParameterManual';
 import BlankTaskWorkspace from './BlankTaskWorkspace';
 import { agentTaskUrl, defaultLiveTaskId, liveTaskPreferenceKey, type LiveTask } from '../lib/live-tasks';
+import { BatchPlanCard } from './BatchWorkspace';
 import { catalogParameters } from '../lib/parameter-catalog';
 import { ParameterDetail } from './ParameterTable';
 import { attemptStatus, stageAttempts, type StageAttempt } from '../lib/stage-attempts';
@@ -69,10 +70,12 @@ function initialDesign(): DesignId {
   return 'studio';
 }
 
-export default function AgentWorkspace({ task, tasks, deletedTasks, taskError, taskCreationDisabled, onNewTask, onSelectTask, onDeleteTask, onRestoreTask, onTaskActivity }: {
+export default function AgentWorkspace({ task, tasks, deletedTasks, taskError, taskCreationDisabled, onNewTask, onSelectTask, onDeleteTask, onRestoreTask, onPermanentlyDeleteTask, onTaskActivity, onBatches, batchPanel }: {
   task?: LiveTask; tasks: (LiveTask & { image?: string })[]; deletedTasks: LiveTask[]; taskError: string; taskCreationDisabled: boolean;
   onNewTask: () => void; onSelectTask: (id: string) => void; onDeleteTask: (id: string) => void; onRestoreTask: (id: string) => void;
+  onPermanentlyDeleteTask: (id: string) => Promise<void>;
   onTaskActivity: () => void;
+  onBatches: (id?: string) => void; batchPanel?: ReactNode;
 }) {
   const { t, language } = useDemoI18n();
   const taskId = task?.id;
@@ -244,10 +247,10 @@ export default function AgentWorkspace({ task, tasks, deletedTasks, taskError, t
     messageSending.current = true;
     try {
       if (state.connection !== 'connected' && !await perform('connect')) return;
-      const sent = await perform('message', steerTurnId ? { text, expectedTurnId: steerTurnId } : { text });
+      const sent = await perform('message', { text, ...(steerTurnId && { expectedTurnId: steerTurnId }),
+        ...(state.batchPlan?.status === 'preview' && { seenBatchPlanId: state.batchPlan.id }) });
       if (sent) {
-        // A user can navigate away while delivery is in flight. Clear only the
-        // confirmed message's matching saved draft, even if this view unmounted.
+        // Delivery can finish after navigating away, so clear only the matching saved draft.
         try {
           const saved = JSON.parse(localStorage.getItem(preferenceKey) ?? 'null');
           if (saved?.draft === text) localStorage.setItem(preferenceKey, JSON.stringify({ ...saved, draft: '', positionPrompt: '' }));
@@ -317,6 +320,7 @@ export default function AgentWorkspace({ task, tasks, deletedTasks, taskError, t
   const displayTitle = (id: StageId) => t(workbenchStageCopy[id]?.title ?? stages.find(stage => stage.id === id)!.title);
   const indicators = stageIndicators(state);
   const closePanel = () => { setShowDesigns(false); setWorkspacePanel(null); };
+  const batchPlan = state.batchPlan;
   const conversation = <ConversationRail aiName="Codex" conversationId={taskId} composerOnly={showTaskWelcome}
     newTask={blankWorkspace} inactive={!taskId} replyPending={replyPending(state, streamStatus, messages)}
     connectionAction={taskId && state.connection !== 'connected' && <button type="button" className="conversation-connect"
@@ -327,13 +331,16 @@ export default function AgentWorkspace({ task, tasks, deletedTasks, taskError, t
     onSubmit={() => void sendMessage()} textareaId="pipeline-message" inputRef={composer}
     disabled={!stateReady || state.connection !== 'connected' && !canInitialize || action !== null} busy={isBusy} steerAvailable={!!steerTurnId}
     error={localError ?? state.error ?? (taskError || null) ?? (storageUnavailable ? '草稿暂存在页面内' : '')}
-    interruptAvailable={!!state.turnId} onInterrupt={() => perform('interrupt')} attentionCount={openQuestions.length + state.requests.length}
-    attention={(openQuestions.length > 0 || state.requests.length > 0) && <section id="agent-pending-questions" className="agent-question-deck live-attention-deck" aria-label="等待你的决定">
+    interruptAvailable={!!state.turnId} onInterrupt={() => perform('interrupt')} attentionCount={openQuestions.length + state.requests.length + (batchPlan ? 1 : 0)}
+    attention={(batchPlan || openQuestions.length > 0 || state.requests.length > 0) && <>
+      {batchPlan && <BatchPlanCard plan={batchPlan} onProgress={() => onBatches(batchPlan.id)}/>}
+      {(openQuestions.length > 0 || state.requests.length > 0) && <section id="agent-pending-questions" className="agent-question-deck live-attention-deck" aria-label="等待你的决定">
       {openQuestions.map(question => <QuestionCard key={`${question.threadId}:${question.id}`} question={question} connected={state.connection === 'connected'} busy={action !== null || answerLocks.current.has(questionKey(question.id))} onAnswer={answer => answerQuestion(question.id, answer)}/>)}
       {state.requests.map(request => <RequestCard key={`${state.threadId}:${typeof request.id}:${request.id}`} request={request} busy={action !== null || state.connection !== 'connected'} reply={result => perform('reply', { requestId: request.id, result })}/>)}
-    </section>}/>;
+      </section>}
+    </>}/>;
   return <div className="app-shell demo-workspace live-workbench live-prototype-workbench" data-design={designId} data-demo-language={language} data-task-welcome={showTaskWelcome || undefined}>
-    <DemoSidebar live lenses={tasks.map(item=>({...item,...(item.id===defaultLiveTaskId?{}:{kind:'task' as const})}))} selected={taskId ?? ''} open={menuOpen} onClose={() => setMenuOpen(false)} onSelect={onSelectTask} onNewTask={onNewTask} taskCreationDisabled={taskCreationDisabled} onDelete={onDeleteTask} onTrash={() => setWorkspacePanel('trash')} deletedCount={deletedTasks.length} onHistory={() => setWorkspacePanel(taskId ? 'history' : 'trash')} onManual={() => setWorkspacePanel('manual')} onGuide={() => setWorkspacePanel('guide')} design={designId} onDesignChange={chooseDesign}/>
+    <DemoSidebar live lenses={tasks.map(item=>({...item,...(item.id===defaultLiveTaskId?{}:{kind:'task' as const})}))} selected={taskId ?? ''} open={menuOpen} onClose={() => setMenuOpen(false)} onSelect={onSelectTask} onNewTask={onNewTask} taskCreationDisabled={taskCreationDisabled} onDelete={onDeleteTask} onTrash={() => setWorkspacePanel('trash')} deletedCount={deletedTasks.length} onHistory={() => setWorkspacePanel(taskId ? 'history' : 'trash')} onManual={() => setWorkspacePanel('manual')} onGuide={() => setWorkspacePanel('guide')} onBatches={onBatches} design={designId} onDesignChange={chooseDesign}/>
     <div className="workspace"><main className="main-content">
       {!blankWorkspace&&<div className="workbench-heading"><div className="lens-identity"><h1>{task?.name}</h1></div>
         <div ref={stageTrack} className="stage-track" aria-label={t('建模阶段')}>{stages.map(stage => {
@@ -357,8 +364,9 @@ export default function AgentWorkspace({ task, tasks, deletedTasks, taskError, t
       </div>
     </main></div>
     <ConnectionStatusBar connected={serverLinkConnected(state.connection, streamStatus)}/>
+    {batchPanel}
     <dialog ref={dialog} className={`modal modal-${workspacePanel ?? 'design'}`} onCancel={closePanel} onClick={event => { if (event.target === dialog.current) closePanel(); }} aria-labelledby="agent-panel-title"><div className="modal-header"><div>{workspacePanel !== 'parameter' && <span className="eyebrow">TINYLENS WORKSPACE</span>}<h2 id="agent-panel-title">{workspacePanel === 'trash' ? t('已删除任务') : workspacePanel === 'history' ? `${task?.name ?? ''} 的运行历史` : workspacePanel === 'manual' ? '参数手册' : workspacePanel === 'parameter' ? t(parameter?.name??'') : workspacePanel === 'guide' ? '欢迎来到 TinyLens' : '工作台外观'}</h2></div><button aria-label={t('关闭窗口')} onClick={closePanel}><X size={19}/></button></div><div className="modal-body">
-      {workspacePanel === 'trash' && <DeletedTaskList tasks={deletedTasks} onRestore={onRestoreTask}/>}
+      {workspacePanel === 'trash' && <DeletedTaskList tasks={deletedTasks} onRestore={onRestoreTask} onDelete={onPermanentlyDeleteTask}/>}
       {workspacePanel === 'manual' && <ParameterManual stages={stages} onSelect={(next, item) => { chooseStage(next.id); setParameterKey(item.key); setWorkspacePanel('parameter'); }}/> }
       {workspacePanel === 'parameter' && parameter && <ParameterDetail parameter={parameter} live/>}
       {workspacePanel === 'history' && <div className="run-history branch-history">{historyAttempts.map(item => <div className="branch-entry" key={item.identity.key}><button aria-current={viewed?.identity.key === item.identity.key ? 'true' : undefined} onClick={() => { chooseStage(item.identity.stage, item.identity.key); closePanel(); }}><span className="run-icon"><Layers3 size={19}/></span><div><strong>{stageNavigationTitle(stages.find(stage => stage.id === item.identity.stage)!)} · {versionLabel(item)}</strong><small className="branch-origin">{item.identity.runPath.split('/').slice(-2).join('/')}</small></div><ChevronRight size={16}/></button></div>)}</div>}

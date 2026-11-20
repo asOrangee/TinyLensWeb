@@ -6,20 +6,20 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Sequence
 
-from .configuration import validated_run_root
+from .configuration import validate_run_manifest, validated_run_root
 from .inspector_decision import validate_inspector_decision
 
 
 VOTE_COUNT = 3
 
 
-def _read_decision(path: Path, *, expected_lens_id: str) -> dict[str, Any]:
+def _read_decision(path: Path, *, expected_lens_id: str, fixed_mask: bool) -> dict[str, Any]:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"invalid inspector response {path}: {exc}") from exc
     try:
-        return validate_inspector_decision(raw, expected_lens_id=expected_lens_id)
+        return validate_inspector_decision(raw, expected_lens_id=expected_lens_id, fixed_mask=fixed_mask)
     except ValueError as exc:
         raise ValueError(f"invalid inspector response {path}: {exc}") from exc
 
@@ -39,8 +39,9 @@ def record_inspector_votes(output_dir: Path, responses: Sequence[Path]) -> tuple
     output_dir = validated_run_root(output_dir)
     if len(responses) != VOTE_COUNT:
         raise ValueError(f"preflight requires exactly {VOTE_COUNT} System Inspector votes")
+    fixed_mask = validate_run_manifest(output_dir).get("euclid_contamination") is not None
     votes = [
-        _read_decision(response.resolve(), expected_lens_id=output_dir.name)
+        _read_decision(response.resolve(), expected_lens_id=output_dir.name, fixed_mask=fixed_mask)
         for response in responses
     ]
     vote_dir = output_dir / "preflight" / "inspector-votes"
@@ -51,10 +52,10 @@ def record_inspector_votes(output_dir: Path, responses: Sequence[Path]) -> tuple
     return targets
 
 
-def _load_recorded_votes(output_dir: Path) -> list[dict[str, Any]]:
+def _load_recorded_votes(output_dir: Path, *, fixed_mask: bool) -> list[dict[str, Any]]:
     vote_dir = output_dir / "preflight" / "inspector-votes"
     return [
-        _read_decision(vote_dir / f"{index}.json", expected_lens_id=output_dir.name)
+        _read_decision(vote_dir / f"{index}.json", expected_lens_id=output_dir.name, fixed_mask=fixed_mask)
         for index in range(VOTE_COUNT)
     ]
 
@@ -63,8 +64,9 @@ def record_preflight_synthesis(output_dir: Path, response: Path) -> Path:
     """Validate an expert-authored synthesis without calculating or repairing it."""
 
     output_dir = validated_run_root(output_dir)
-    votes = _load_recorded_votes(output_dir)
-    synthesis = _read_decision(response.resolve(), expected_lens_id=output_dir.name)
+    fixed_mask = validate_run_manifest(output_dir).get("euclid_contamination") is not None
+    votes = _load_recorded_votes(output_dir, fixed_mask=fixed_mask)
+    synthesis = _read_decision(response.resolve(), expected_lens_id=output_dir.name, fixed_mask=fixed_mask)
 
     disposition_counts = Counter(vote["disposition"] for vote in votes)
     expected_disposition = disposition_counts.most_common(1)[0][0]

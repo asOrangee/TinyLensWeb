@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import AgentWorkspace from './AgentWorkspace';
+import BatchWorkspace from './BatchWorkspace';
 import { AgentTaskContext } from '../lib/agent-task-context';
 import { hideTask, parseDeletedTaskIds, restoreTask } from '../lib/deleted-tasks';
-import { defaultLiveTaskId, liveTaskSelectionKey, parseLiveTasks, validLiveTaskId, type LiveTask } from '../lib/live-tasks';
+import { clearLiveTaskStorage, defaultLiveTaskId, liveTaskSelectionKey, parseLiveTasks, validLiveTaskId, type LiveTask } from '../lib/live-tasks';
 import { useLiveTaskThumbnails } from '../lib/use-live-task-thumbnails';
 
 const deletedTaskStorageKey = 'tinylens-live-deleted-tasks-v1';
@@ -25,18 +26,20 @@ export default function LiveTaskWorkspace() {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState('');
   const [creating, setCreating] = useState(false);
+  const [batchWindow, setBatchWindow] = useState<{ id?: string }>();
   const creationLock = useRef(false);
   const catalogSequence = useRef(0);
   const visibleTasks = useMemo(() => tasks.filter(task => !deletedIds.includes(task.id)), [tasks, deletedIds]);
-  const thumbnails = useLiveTaskThumbnails(visibleTasks, ready);
-  const task = visibleTasks.find(item => item.id === selected) ?? (ready ? visibleTasks[0] : undefined);
+  const task = visibleTasks.find(item => item.id === selected) ?? (ready ? visibleTasks.find(item => !item.batchId) : undefined);
+  const sidebarTasks = useMemo(() => visibleTasks.filter(item => !item.batchId || item.id === task?.id), [visibleTasks, task?.id]);
+  const thumbnails = useLiveTaskThumbnails(sidebarTasks, ready);
   const refresh = useCallback(async (signal?: AbortSignal) => {
     const sequence = ++catalogSequence.current;
     const response = await fetch('/api/agent/tasks', { signal, cache: 'no-store' });
     if (!response.ok) throw new Error(`任务服务暂不可用（${response.status}）。`);
     const next = parseLiveTasks(await response.json());
-    if (signal?.aborted || sequence !== catalogSequence.current) return;
-    setTasks(next); setReady(true); setError('');
+    if (!signal?.aborted && sequence === catalogSequence.current) { setTasks(next); setReady(true); setError(''); }
+    return next;
   }, []);
   useEffect(() => {
     const abort = new AbortController();
@@ -71,6 +74,14 @@ export default function LiveTaskWorkspace() {
   function select(id: string) {
     if (visibleTasks.some(task => task.id === id)) activate(id);
   }
+  async function openBatchTask(id: string) {
+    if (deletedIds.includes(id) || readDeletedTasks().includes(id)) throw Error('该任务已移入「已删除任务」，请先恢复。');
+    const item = tasks.find(task => task.id === id) ?? (await refresh()).find(task => task.id === id);
+    if (!item?.batchId) throw Error('无法打开该批次任务。');
+    setTasks(previous => previous.some(task => task.id === id) ? previous : [...previous, item]);
+    setBatchWindow(undefined);
+    activate(id);
+  }
   function setTaskDeleted(id: string, deleted: boolean) {
     if (!tasks.some(task => task.id === id)) return;
     const update = deleted ? hideTask : restoreTask;
@@ -96,14 +107,31 @@ export default function LiveTaskWorkspace() {
     } catch (reason) { setError(reason instanceof Error ? reason.message : '无法新建任务。'); }
     finally { creationLock.current = false; setCreating(false); }
   }
+  async function permanentlyDeleteTask(id: string) {
+    const response = await fetch('/api/agent/tasks/' + encodeURIComponent(id), { method: 'DELETE' });
+    const result = await response.json();
+    if (!response.ok && response.status !== 404) throw Error(result.error || '暂时无法彻底删除任务。');
+    ++catalogSequence.current;
+    setTasks(previous => previous.filter(item => item.id !== id));
+    setDeletedIds(previous => restoreTask(previous, id));
+    try {
+      const deleted = restoreTask(readDeletedTasks(), id);
+      localStorage.setItem(deletedTaskStorageKey, JSON.stringify(deleted));
+      clearLiveTaskStorage(localStorage, id, result.threadId);
+      clearLiveTaskStorage(sessionStorage, id, result.threadId);
+    } catch { /* The server task is already deleted. */ }
+  }
   if (!ready && !task) return null;
   return <AgentTaskContext.Provider value={task?.id ?? defaultLiveTaskId}>
     <AgentWorkspace key={task?.id ?? 'empty'} task={task}
-      tasks={visibleTasks.map(item => ({ ...item, image: thumbnails[item.id]?.src }))}
+      tasks={sidebarTasks.map(item => ({ ...item, image: thumbnails[item.id]?.src }))}
       deletedTasks={tasks.filter(item => deletedIds.includes(item.id))}
       taskError={error} taskCreationDisabled={!ready || creating}
       onNewTask={() => void createTask()} onSelectTask={select}
       onDeleteTask={id => setTaskDeleted(id, true)} onRestoreTask={id => setTaskDeleted(id, false)}
+      onPermanentlyDeleteTask={permanentlyDeleteTask}
+      onBatches={id => setBatchWindow({ id: id ?? task?.batchId })}
+      batchPanel={batchWindow && <BatchWorkspace initialId={batchWindow.id} onClose={() => setBatchWindow(undefined)} onOpenTask={openBatchTask}/>}
       onTaskActivity={() => void refresh().catch(() => {})}/>
   </AgentTaskContext.Provider>;
 }

@@ -99,5 +99,11 @@
 .lens-sidebar[data-expanded="true"] .lens-delete-button{display:flex}
 .lens-delete-button:hover{background:color-mix(in srgb,#b23e42 12%,transparent);color:#b23e42}
 .deleted-lens-list{display:flex;flex-direction:column;gap:8px}
-.deleted-lens-list>div{display:flex;align-items:center;justify-content:space-between;gap:15px;padding:10px 12px;border:1px solid var(--line);border-radius:7px}
+.deleted-lens-list>div{display:flex;flex-direction:column;gap:12px;padding:10px 12px;border:1px solid var(--line);border-radius:7px}
 .deleted-lens-list strong{font-size:12px;overflow-wrap:anywhere}
+.deleted-task-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.deleted-task-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-shrink:0}
+.app-shell[data-design] .deleted-lens-list .button.deleted-task-danger{color:#ad363e;border-color:color-mix(in srgb,#ad363e 35%,var(--line))}
+.deleted-task-confirmation{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--line);padding-top:10px}
+.deleted-task-confirmation p,.deleted-task-error{margin:0;font-size:12px;line-height:1.6}
+.deleted-task-error{color:#ad363e}

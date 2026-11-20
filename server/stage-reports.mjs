@@ -80,7 +80,7 @@ function legacyScope(report, workspace, stage) {
 }
 
 /** Existing Codex threads can still report canonical paths with their original tool schema. */
-export async function readStageScope(report, workspace) {
+export async function readStageScope(report, workspace, { verifyHumanReview = false, expectedLensDirectory } = {}) {
   if (!['stage', 'artifact'].includes(report?.kind)) return undefined;
   if (typeof report.stage !== 'string') return undefined;
   validateStageReport(report, workspace);
@@ -88,18 +88,23 @@ export async function readStageScope(report, workspace) {
   if (!stages.has(stage)) return undefined;
   const accepted = report.kind === 'stage' && report.status === 'accepted';
   const versioned = report.schema === stageReportSchema;
-  const info = versioned ? accepted && { run_path: report.run_path, storage: report.run_path, attempt: report.attempt }
+  const humanReview = verifyHumanReview && versioned && report.kind === 'stage' && report.status === 'human_review';
+  if (humanReview && report.path !== `${stageDirectory(report)}/${stage === 'preflight' ? 'inspector.json' : 'decision.json'}`) {
+    throw Error('Report the canonical Human Review record for this stage.');
+  }
+  const info = versioned ? (accepted || humanReview) && { run_path: report.run_path, storage: report.run_path, attempt: report.attempt }
     : legacyScope(report, workspace, stage);
   if (!info) return undefined;
   const lens_id = posix.basename(info.run_path);
-  const request = { root: workspace, storage: info.storage, lens_id, stage, attempt: info.attempt, accepted };
+  const request = { root: workspace, storage: info.storage, lens_id, stage, attempt: info.attempt, accepted,
+    human_review: humanReview, input_lens: expectedLensDirectory };
   try {
     const command = [shellQuote(connectionConfig.python), '-B', '-c', shellQuote(STAGE_SCOPE_READER), shellQuote(JSON.stringify(request))].join(' ');
     const { stdout } = await execute('ssh', ['-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=3', connectionConfig.sshHost, command],
       { timeout: 5000, maxBuffer: 32 * 1024 });
     const scope = JSON.parse(stdout);
     if (versioned) {
-      if (scope.run_id !== report.run_id || scope.attempt !== report.attempt) throw Error('Run version disagrees with the acceptance record.');
+      if (scope.run_id !== report.run_id || scope.attempt !== report.attempt) throw Error('Run version disagrees with the scientific record.');
       return undefined;
     }
     if (!scope.run_id) return accepted && stage !== 'preflight' ? { verified_attempt: scope.attempt } : undefined;
@@ -111,7 +116,8 @@ export async function readStageScope(report, workspace) {
     catch { return undefined; } // Older status vocabulary remains displayable as-is.
     return normalized;
   } catch {
-    if (versioned) throw Error('Could not verify the reported acceptance against the run and attempt.');
+    if (versioned) throw Error(humanReview ? 'Could not verify the reported Human Review against the run and attempt.'
+      : 'Could not verify the reported acceptance against the run and attempt.');
     return undefined;
   }
 }

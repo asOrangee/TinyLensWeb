@@ -51,8 +51,11 @@ def _mapping(capture, likelihood, shape):
     capture["mass_parameters"] = {key: value for key, value in model.items() if key != "kind"}
 
     def ray(point):
-        mx, my = mass.deriv(point[0], point[1])
-        gx, gy = shear.deriv(point[0], point[1])
+        # Outside an active context, caskade can treat the last positional
+        # argument of a dynamic profile as its parameter vector.
+        x, y = point
+        mx, my = mass.deriv(x=x, y=y)
+        gx, gy = shear.deriv(x=x, y=y)
         return point - jnp.stack((mx + gx, my + gy))
 
     points = jnp.asarray([[-2., -1.5], [-1.2, .8], [0.15, .2], [.4, -.6], [1.5, .1], [1.9, -1.2], [.3, 2.]])
@@ -101,7 +104,8 @@ def capture_parametric(likelihood, result):
                 "source_mge_amplitudes": {"values": values[:source_count].tolist()},
                 "lens_mge_amplitudes": {"values": values[source_count:].tolist()},
             }
-        record_prediction(capture, likelihood.image_data, likelihood.noise_map, result[1], result[0])
+        record_prediction(capture, likelihood.image_data, likelihood.noise_map, result[1], result[0],
+                          valid=likelihood.unmask)
         from TinyLensGpu.ForwardSimulation.LensImage.config import make_grid_2d
 
         x, y = map(jnp.asarray, make_grid_2d(200, .01, 1))
@@ -147,7 +151,8 @@ def capture_pixelized(likelihood, solved, source_bounds, observation, lens_light
                 or not np.allclose(fitted, saved, rtol=2e-5, atol=1e-6)):
             raise ValueError("Full-grid prediction disagrees with the saved active pixels")
         full[active] = saved
-        record_prediction(capture, observation, likelihood.noise_map, lens_light, full.reshape(height, width))
+        record_prediction(capture, observation, likelihood.noise_map, lens_light, full.reshape(height, width),
+                          valid=likelihood.unmask)
     except Exception as error:
         logging.getLogger(__name__).warning(f"Workbench full-grid projection unavailable: {error}")
     _record_mapping(capture, likelihood, observation.shape)
