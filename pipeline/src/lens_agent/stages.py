@@ -19,13 +19,18 @@ from astropy.io import fits
 
 from .attempts import (
     attempt_dir, validate_decision_review_evidence, _prepare_attempt, configuration_bundle,
+    load_accepted_stage_config,
 )
 from .operations import (
     attempt_lock, PreparationBlocked, record_preparation_error,
 )
-from .configuration import EffectiveConfig, PipelineConfig, PIPELINE_RELEASE_ID, validated_run_root, validate_config_geometry
+from .configuration import (
+    EffectiveConfig, PipelineConfig, PIPELINE_RELEASE_ID, run_position_threshold_arcsec,
+    validated_run_root, validate_config_geometry,
+)
 from .data import load_lens_data
 from .stage_input import check_stage_input
+from .stage_b_selection import SELECTION_FILE, attach_stage_b_prescan, is_superseded_stage_b_review
 from .modeling.summaries import stage_summary
 from .modeling.morphology_audit import validate_stage_b_morphology_audit
 from .modeling.source_grid import validate_source_grid_spec
@@ -398,8 +403,8 @@ def _accepted_upstream_dirs(
             upstream_attempt.relative_to(output_dir)
         except ValueError as error:
             raise ValueError("Accepted Stage Head escapes the Lens Result Directory") from error
-        validate_config_geometry(EffectiveConfig.model_validate_json(
-            (upstream_attempt / "effective-config.json").read_text(encoding="utf-8")), output_dir)
+        config = load_accepted_stage_config(output_dir, upstream, upstream_attempt / "effective-config.json")
+        validate_config_geometry(config, output_dir)
         artifact_dir = (upstream_attempt / "artifacts").resolve()
         try:
             artifact_dir.relative_to(upstream_attempt)
@@ -618,7 +623,8 @@ def _prepare_stage(
     if (output_dir / "accepted" / f"{stage.value}.json").exists():
         raise ValueError("Stage is already accepted; preserve its accepted attempt")
     for decision_path in (output_dir / "attempts").glob("*/*/decision.json"):
-        if json.loads(decision_path.read_text()).get("decision") == "human_review":
+        if (json.loads(decision_path.read_text()).get("decision") == "human_review"
+                and not is_superseded_stage_b_review(output_dir, decision_path)):
             raise ValueError("Lens has a terminal human_review decision")
     bundle = configuration_bundle(output_dir, stage, attempt)
     expected = EffectiveConfig.model_validate_json(
@@ -634,6 +640,9 @@ def _prepare_stage(
         selection_path.exists() or selection_path.is_symlink()
     ):
         raise ValueError(f"Arc Component Selection is not authorized for this attempt: {selection_path}")
+    prescan_path = root / SELECTION_FILE
+    if SELECTION_FILE not in bundle and (prescan_path.exists() or prescan_path.is_symlink()):
+        raise ValueError("Stage B prescan selection is not authorized for this attempt")
     for name, payload in bundle.items():
         path = root / name
         if path.is_symlink():
@@ -750,6 +759,8 @@ def _execute_stage(
                     "upstream_dirs": upstream_dirs,
                     "stage_attempt_reference": f"attempts/{stage.value}/{attempt}",
                 }
+                if stage == StageName.A:
+                    runtime["position_threshold_arcsec"] = run_position_threshold_arcsec(output_dir)
                 if stage == StageName.B:
                     drop_ids = _arc_component_selection(output_dir, attempt_root, attempt)
                     if drop_ids:
@@ -780,6 +791,8 @@ def _execute_stage(
                     metrics.update(
                         _stage_b_coverage_metrics(pipeline, data.image, data.noise, mask)
                     )
+                    if (attempt_root / SELECTION_FILE).is_file():
+                        artifacts.update(attach_stage_b_prescan(output_dir, attempt, attempt_root))
                 result["status"] = "success"
                 result["artifacts"] = artifacts
                 result["metrics"] = _safe_json(metrics)

@@ -3,12 +3,20 @@ import assert from 'node:assert/strict';
 import { modelConfigurationCards } from '../src/lib/model-configuration.ts';
 import type { LiveResult } from '../src/lib/live-results.ts';
 
-const summary = (stage: string, settings: Record<string, unknown> = {}): LiveResult => ({
+const summary = (stage: string, settings: Record<string, unknown> = {}, release = 'input-geometry.v1'): LiveResult => ({
   schema: 'tinylens.readonly-result.v1', kind: 'summary', stage, attempt: 0,
   path: `/run/attempts/${stage}/0/stage-result.json`, sha256: 'same-result',
-  config: { schema_version: 'lens_pipeline_config.v5', pipeline_release_id: 'input-geometry.v1', settings },
+  config: { schema_version: 'lens_pipeline_config.v5', pipeline_release_id: release, settings },
   result: { lens_id: 'fixture', stage, attempt: 0, status: 'completed', metrics: {} },
 });
+
+const modelStages = ['a', 'm0', 'm1', 'm2', 'm3'] as const;
+const sourceGridLabel = (stage: typeof modelStages[number], result: LiveResult, model?: LiveResult) => {
+  const detail = modelConfigurationCards(stage, true, result, model)[2].details
+    .find(item => typeof item !== 'string' && item.template === '源网格：{shape}');
+  return typeof detail === 'object' ? detail.values.shape : undefined;
+};
+
 test('real cards require a matching, supported reported configuration', () => {
   const a = summary('a');
   for (const result of [undefined, summary('m1'), { ...a, config: { ...a.config, pipeline_release_id: 'unverified-release' } }]) {
@@ -17,6 +25,55 @@ test('real cards require a matching, supported reported configuration', () => {
     assert.ok(cards.every(card => card.parameters.length === 0 && card.references.length === 0));
   }
   assert.ok(modelConfigurationCards('m3', true).every(card => card.model === '—'));
+});
+test('both verified releases describe every supported stage and reject another stage or schema', () => {
+  for (const release of ['input-geometry.v1', 'source-reconstruction.v1']) for (const stage of modelStages) {
+    const result = summary(stage, {}, release);
+    assert.deepEqual(modelConfigurationCards(stage, true, result).map(card => card.model), [
+      stage === 'm3' ? 'EPL + Shear' : 'SIE + Shear', 'MGE', stage === 'a' ? 'MGE' : 'Pixelized source',
+    ]);
+    const wrongSchema = { ...result, config: { ...result.config, schema_version: 'lens_pipeline_config.v6' } };
+    assert.ok(modelConfigurationCards(stage, true, wrongSchema).every(card => card.model === '—'));
+    const otherStage = stage === 'a' ? 'm0' : 'a';
+    assert.ok(modelConfigurationCards(otherStage, true, result).every(card => card.model === '—'));
+  }
+});
+
+test('M0 shows the recorded grid size and scale for the selected release', () => {
+  for (const [release, nsrc, pixel] of [
+    ['input-geometry.v1', 80, 0.02],
+    ['source-reconstruction.v1', 120, 0.01],
+  ] as const) {
+    const result = summary('m0', {}, release);
+    result.result!.metrics.source_grid_spec = {
+      schema_version: 'source_grid_spec.v1', nsrc, pixel_scale_arcsec: pixel,
+    };
+    assert.equal(sourceGridLabel('m0', result), `${nsrc} × ${nsrc} · ${pixel} arcsec / pixel`);
+  }
+});
+
+test('later stages derive the angular scale only from their own matching square-pixel source image', () => {
+  for (const stage of ['m1', 'm2', 'm3'] as const) {
+    const result: LiveResult = {
+      ...summary(stage, {}, 'source-reconstruction.v1'), run_id: 'new-run',
+      parameter_contract: 'tinylens.stage-parameters.v1',
+      linear_parameters: { source_brightness: { shape: [100, 100] } },
+    };
+    const model = { ...result, planes: { source: {
+      shape: [100, 100], bounds_arcsec: [-0.62, 0.38, -0.42, 0.58],
+    } } } as LiveResult;
+    assert.equal(sourceGridLabel(stage, result, model), '100 × 100 · 0.01 arcsec / pixel');
+    for (const unrelated of [
+      { ...model, run_id: 'old-run' }, { ...model, attempt: 1 },
+      { ...model, path: '/other/stage-result.json' }, { ...model, sha256: 'other-result' },
+    ]) {
+      assert.equal(sourceGridLabel(stage, result, unrelated), '100 × 100');
+    }
+    const anisotropic = { ...model, planes: { source: {
+      ...model.planes!.source!, bounds_arcsec: [-1, 1, -0.42, 0.58],
+    } } };
+    assert.equal(sourceGridLabel(stage, result, anisotropic), '100 × 100');
+  }
 });
 test('A describes both MGE groups and reads counts without substituting defaults', () => {
   const cards = modelConfigurationCards('a', true, summary('a', { n_gaussians_lens: 12, n_gaussians_src: 8 }));

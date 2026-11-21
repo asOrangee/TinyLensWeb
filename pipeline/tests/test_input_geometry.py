@@ -227,11 +227,11 @@ def test_previous_release_is_not_silently_resumed_or_rewritten(tmp_path):
     path = output / "run-manifest.json"
     path.write_text(json.dumps({
         "schema_version": "lens_run_manifest.v1",
-        "pipeline_release_id": "stage-a-1800s-timeout.v1",
+        "pipeline_release_id": "input-geometry.v1",
     }), encoding="utf-8")
     before = _snapshot(output)
     with pytest.raises(ValueError, match="different Pipeline Release"):
         cli.main(_preflight_args(lens, output))
     assert _snapshot(output) == before
     assert CONFIG_SCHEMA_VERSION == "lens_pipeline_config.v5"
-    assert PIPELINE_RELEASE_ID == "input-geometry.v1"
+    assert PIPELINE_RELEASE_ID == "source-reconstruction.v1"

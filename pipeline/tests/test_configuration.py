@@ -8,7 +8,11 @@ from lens_agent.configuration import (
     PipelineConfig,
     PriorConfig,
 )
-from lens_agent.modeling.source_grid import source_grid_spec, validate_source_grid_spec
+from lens_agent.modeling.source_grid import (
+    next_source_grid_level,
+    source_grid_spec,
+    validate_source_grid_spec,
+)
 
 
 def test_pipeline_priors_use_named_settings_and_limits() -> None:
@@ -54,7 +58,7 @@ def test_prior_configuration_sequences_are_immutable() -> None:
 
 def test_fixed_source_grid_release_rejects_removed_stage_local_settings() -> None:
     assert CONFIG_SCHEMA_VERSION == "lens_pipeline_config.v5"
-    assert PIPELINE_RELEASE_ID == "input-geometry.v1"
+    assert PIPELINE_RELEASE_ID == "source-reconstruction.v1"
     assert "stage_m1_gamma_prior" not in EffectiveConfig().settings.model_dump()
 
     with pytest.raises(ValidationError, match="source_bbox_padding"):
@@ -67,19 +71,23 @@ def test_source_grid_policy_maps_level_to_exact_pixel_footprint() -> None:
         "schema_version": "source_grid_spec.v1",
         "anchor_center": {"x": 0.1, "y": -0.2},
         "grid_level": 0,
-        "half_width_arcsec": 0.8,
-        "pixel_scale_arcsec": 0.02,
-        "nsrc": 80,
+        "half_width_arcsec": 0.5,
+        "pixel_scale_arcsec": 0.010,
+        "nsrc": 100,
     }
-    assert initial["footprint_bbox"] == pytest.approx([-0.7, 0.9, -1.0, 0.6])
-    assert initial["pixel_center_bbox"] == pytest.approx([-0.69, 0.89, -0.99, 0.59])
+    assert initial["footprint_bbox"] == pytest.approx([-0.4, 0.6, -0.7, 0.3])
+    assert initial["pixel_center_bbox"] == pytest.approx([-0.395, 0.595, -0.695, 0.295])
 
-    enlarged = source_grid_spec(center_x=0.1, center_y=-0.2, level=2)
-    assert enlarged["half_width_arcsec"] == 1.2
-    assert enlarged["nsrc"] == 120
-    assert enlarged["pixel_center_bbox"] == pytest.approx(
-        [-1.09, 1.29, -1.39, 0.99]
-    )
+    for level, size in enumerate((100, 120, 140, 160, 180, 200)):
+        enlarged = source_grid_spec(center_x=0.1, center_y=-0.2, level=level)
+        assert enlarged["anchor_center"] == initial["anchor_center"]
+        assert enlarged["pixel_scale_arcsec"] == 0.010
+        assert enlarged["half_width_arcsec"] == pytest.approx(size * 0.005)
+        assert enlarged["nsrc"] == size
+        assert next_source_grid_level(level) == (level + 1 if level < 5 else None)
+        assert PipelineConfig(source_grid_level=level).source_grid_level == level
+    with pytest.raises(ValidationError, match="fixed grid policy"):
+        PipelineConfig(source_grid_level=6)
 
 
 def test_source_grid_spec_rejects_inconsistent_array_shape() -> None:
@@ -88,7 +96,7 @@ def test_source_grid_spec_rejects_inconsistent_array_shape() -> None:
     with pytest.raises(ValueError, match="array shape"):
         validate_source_grid_spec(spec, source_shape=(80, 80))
 
-    assert validate_source_grid_spec(spec, source_shape=(100, 100)) == spec
+    assert validate_source_grid_spec(spec, source_shape=(120, 120)) == spec
 
 
 def test_source_grid_spec_rejects_configuration_level_mismatch() -> None:
@@ -96,3 +104,19 @@ def test_source_grid_spec_rejects_configuration_level_mismatch() -> None:
 
     with pytest.raises(ValueError, match="does not match its configuration"):
         validate_source_grid_spec(spec, expected_level=0)
+
+
+def test_previous_source_grid_can_only_be_read_by_an_explicit_legacy_reader() -> None:
+    recorded = {
+        "schema_version": "source_grid_spec.v1",
+        "anchor_center": {"x": 0.0, "y": 0.0},
+        "grid_level": 0,
+        "half_width_arcsec": 0.8,
+        "pixel_scale_arcsec": 0.02,
+        "nsrc": 80,
+        "footprint_bbox": [-0.8, 0.8, -0.8, 0.8],
+        "pixel_center_bbox": [-0.79, 0.79, -0.79, 0.79],
+    }
+    assert validate_source_grid_spec(recorded, allow_legacy=True) == recorded
+    with pytest.raises(ValueError, match="inconsistent nsrc"):
+        validate_source_grid_spec(recorded)

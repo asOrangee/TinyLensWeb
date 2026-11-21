@@ -6,6 +6,7 @@ unchanged scientific operator and verification statistics, never as display alph
 """
 import base64
 import hashlib
+import inspect
 import io
 import json
 import os
@@ -302,6 +303,14 @@ def reconstruct(request):
             setattr(p, name, forbidden)
     p._CONFIG = PipelineConfig.model_validate_json(json.dumps(settings))
     p.DPIX = float(settings["pixel_scale_arcsec"])
+    # This reader accepts only pre-FISTA releases. It may run against either
+    # their original pipeline package or the current production package.
+    solver_options = {"solver_type": "pcg"} if p.SOLVER_TYPE != "pcg" else {}
+    grid_options = (
+        {"allow_legacy": True}
+        if "allow_legacy" in inspect.signature(p._pixel_center_bbox).parameters
+        else {}
+    )
     implementation = {"path": p.__file__, "sha256": hashlib.sha256(Path(p.__file__).read_bytes()).hexdigest(), "jax": jax.__version__, "backend": "cpu"}
     projection_difference = 0.
     method = "saved_source_pixels_full_operator_output"
@@ -324,7 +333,8 @@ def reconstruct(request):
         log_lambda.to_dynamic()
         src = PixelizedSourceModel(n=source_image.shape[0], log_lambda_reg=log_lambda, regularization_type=p.REGULARIZATION_TYPE)
         likelihood = p._pixel_likelihood(image-lens_light, noise, psf, feature, domain,
-                                       (mass, shear), src, None, fixed_source_bbox=tuple(package["source_bbox"]))
+                                       (mass, shear), src, None,
+                                       fixed_source_bbox=tuple(package["source_bbox"]), **solver_options)
         if not np.array_equal(valid, np.asarray(likelihood.unmask, dtype=bool)):
             raise ValueError("Saved source operator mask mismatch")
         with p.ck.ActiveContext(likelihood):
@@ -374,12 +384,13 @@ def reconstruct(request):
                     ll, rho = (float(fixed[key]) for key in keys)
                     if not np.isfinite((ll, rho)).all() or (ll, rho) != tuple(float(m2_medians[key]) for key in keys):
                         raise ValueError("Frozen M3 regularization disagrees with the reported M2 result")
-                    grid = p._validate_runtime_source_grid(grid)
+                    grid = p._validate_runtime_source_grid(grid, **grid_options)
                     mass, shear = p._free_epl(p._stage_from_payload(m1), p._stage_from_payload(a))
                 else:
                     mass, shear = p._fixed_sie_from_medians(own["extra"]["mass_medians_fixed"])
                     ll, rho = float(medians["log_lambda_reg"]), float(medians["adaptive_reg_rho"])
-                kwargs, names = p._fixed_source_template_kwargs(m1["extra"]["s1"], grid), own["param_names"]
+                kwargs = p._fixed_source_template_kwargs(m1["extra"]["s1"], grid, **grid_options)
+                names = own["param_names"]
             log_lambda, reg_rho = ParamU("log_lambda_reg", ll), ParamU("adaptive_reg_rho", rho)
             if stage == "m3":
                 log_lambda.to_static()
@@ -389,8 +400,9 @@ def reconstruct(request):
                 if stage == "m2":
                     reg_rho.to_dynamic()
             src = PixelizedSourceModel(n=grid["nsrc"], log_lambda_reg=log_lambda, regularization_type=p.REGULARIZATION_TYPE, adaptive_reg_rho=reg_rho)
-            kwargs.setdefault("fixed_source_bbox", p._pixel_center_bbox(grid))
-            likelihood = p._pixel_likelihood(image-lens_light, noise, psf, feature, domain, (mass, shear), src, None, **kwargs)
+            kwargs.setdefault("fixed_source_bbox", p._pixel_center_bbox(grid, **grid_options))
+            likelihood = p._pixel_likelihood(image-lens_light, noise, psf, feature, domain,
+                                           (mass, shear), src, None, **solver_options, **kwargs)
             if not np.array_equal(valid, np.asarray(likelihood.unmask, dtype=bool)):
                 raise ValueError("Likelihood indexing differs from saved mask")
             solved = p._solve_source(likelihood, medians, names)

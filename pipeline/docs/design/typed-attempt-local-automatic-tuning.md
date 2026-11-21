@@ -237,7 +237,7 @@ interruption, resume repeats the direct checks and completes promotion without r
 
 ## Stage B specialization
 
-Stage B retains its Persistent Arc Mask Expert, independent ten-retry budget, response correction
+Stage B retains its Persistent Arc Mask Expert, independent twenty-retry budget, response correction
 contract, and final scientific authority after the Hard Gate. It adopts the same attempt-local
 configuration, candidate-chain, artifact, and promotion infrastructure.
 
@@ -248,7 +248,10 @@ reference to the component catalog that defines those IDs. A mask-parameter refi
 the component catalog and invalidates the previous selection; a selection-only refinement keeps
 the configuration unchanged. Parameter refinement and component selection remain mutually
 exclusive within one retry. Downstream stages consume the accepted `feature_mask.fits`, not the
-component IDs.
+component IDs. With sufficient arc coverage, the expert may apply a complete whole-component
+selection using the current catalog. If that approach cannot safely resolve contamination, the
+expert may propose a one-unit increase in the S/N threshold supported by diagnostics. Every retry
+requires a fresh review of the resulting mask.
 
 ## Result layout and retention
 

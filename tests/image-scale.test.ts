@@ -12,8 +12,8 @@ test('frontend ZScale agrees with actual Astropy defaults including outlier reje
  const cases={ramp:Array.from({length:2000},(_,i)=>Math.sin(i*.15)+i/170),outliers:Array.from({length:2400},(_,i)=>i%47===0?10000+i:Math.cos(i*.2)*.3+i/1900),constant:Array(40).fill(.23),small:[-1,3,10]};
  for(const [key,values] of Object.entries(cases)){const limits=zscaleLimits(values);for(let i=0;i<2;i++)assert.ok(Math.abs(limits[i]-reference.limits[key][i])<1e-10,`${key} ${limits} != ${reference.limits[key]}`);}
 });
-test('only three image-plane intensity layers are scalable and all scales retain exactly five two-decimal ticks',()=>{
- assert.deepEqual([...scalablePlanes],['observation','model','source-lensed']);
+test('linked image-plane intensity layers include lens light and all scales retain five two-decimal ticks',()=>{
+ assert.deepEqual([...scalablePlanes],['observation','model','lens-light','source-lensed']);
  for(const scale of ['linear','log','asinh','zscale'] as const){const values=[-.0173,.01,.3,1.2,5.91],copy=[...values],limits=imageScaleValues(values,scale);assert.deepEqual(values,copy);const ticks=colorbarTicks(limits.vmin,limits.vmax,limits.stretch,limits.parameter);assert.equal(ticks.length,5);assert.ok(ticks.every(t=>/^-?\d+\.\d{2}$/.test(formatScaleNumber(t.value))));}
  assert.throws(()=>imageScaleValues([], 'linear'));assert.throws(()=>imageScaleValues([NaN], 'log'));
 });

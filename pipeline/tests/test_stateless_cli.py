@@ -16,6 +16,7 @@ from lens_agent.configuration import (
     EffectiveConfig,
     PIPELINE_RELEASE_ID,
     PipelineConfig,
+    STAGE_B_EXPANSION_POLICY,
 )
 from lens_agent.models import StageName
 from lens_agent.modeling.source_grid import source_grid_spec
@@ -354,6 +355,8 @@ def test_preflight_pins_pipeline_release_without_copying_pipeline(tmp_path: Path
             "input_y_direction": "increasing",
         },
         "geometry_evidence": None,
+        "position_threshold_arcsec": 0.05,
+        "stage_b_expansion_policy": STAGE_B_EXPANSION_POLICY,
         "stage_b_defaults": {"arc_snr_threshold": 3.0, "arc_ignor_size": 8},
     }
     assert (output_dir / "preflight" / "inspection.json").is_file()
@@ -542,10 +545,12 @@ def test_attempt_prepare_materializes_complete_initial_configuration(
     lens_dir = make_lens_dir(tmp_path)
     output_dir = tmp_path / "output" / lens_dir.name
     main(["preflight", "--lens-dir", str(lens_dir), "--output-dir", str(output_dir)])
+    manifest_path = output_dir / "run-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["stage_b_expansion_policy"] == STAGE_B_EXPANSION_POLICY
     if legacy_run:
-        manifest_path = output_dir / "run-manifest.json"
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         del manifest["stage_b_defaults"]
+        del manifest["stage_b_expansion_policy"]
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     decision = tmp_path / "inspector.json"
     decision.write_text(
@@ -1394,7 +1399,8 @@ def test_stage_b_selection_retry_binds_parent_component_catalog(tmp_path: Path) 
     parent = output_dir / "attempts" / "b" / "0"
     parent.mkdir(parents=True)
     (parent / "effective-config.json").write_text(
-        json.dumps(EffectiveConfig().model_dump(mode="json")) + "\n", encoding="utf-8"
+        EffectiveConfig(settings=PipelineConfig(arc_ext_size=1)).model_dump_json(),
+        encoding="utf-8",
     )
     (parent / "artifacts").mkdir()
     catalog_ref = "attempts/b/0/artifacts/stage_b_components.json"
@@ -1402,6 +1408,7 @@ def test_stage_b_selection_retry_binds_parent_component_catalog(tmp_path: Path) 
     component_labels[10, 10] = 1
     component_labels[20, 20] = 2
     component_labels[30, 30] = 3
+    component_labels[40, 40] = 4
     labels_ref = "artifacts/stage_b_component_labels.fits"
     fits.writeto(parent / labels_ref, component_labels)
     family = build_predicted_image_family(
@@ -1460,7 +1467,7 @@ def test_stage_b_selection_retry_binds_parent_component_catalog(tmp_path: Path) 
                     "reference": "attempts/a/0/artifacts/stage_a_predicted_image_family.json",
                     "sha256": hashlib.sha256(family_path.read_bytes()).hexdigest(),
                 },
-                "parameters": {"threshold": 2.0, "ignor_size": 5, "ext_size": 5, "close_size": 3},
+                "parameters": {"threshold": 3.0, "ignor_size": 8, "ext_size": 1, "close_size": 3},
                 "pixel_scale_arcsec": 0.1, "local_radius_arcsec": 0.3,
                 "mask_convention": "selected_arc_region True includes pixels",
                 "valid_modeling_domain": {
@@ -1475,7 +1482,7 @@ def test_stage_b_selection_retry_binds_parent_component_catalog(tmp_path: Path) 
         encoding="utf-8",
     )
     components = []
-    for component_id, pixel in enumerate((10, 20, 30), start=1):
+    for component_id, pixel in enumerate((10, 20, 30, 40), start=1):
         components.append(
             {
                 "id": component_id, "status": "kept", "pixel_count": 1,
@@ -1498,11 +1505,11 @@ def test_stage_b_selection_retry_binds_parent_component_catalog(tmp_path: Path) 
                 ),
                 "connectivity": 8,
                 "parameters": {
-                    "threshold": 2.0, "ignor_size": 5,
-                    "ext_size": 5, "close_size": 3,
+                    "threshold": 3.0, "ignor_size": 8,
+                    "ext_size": 1, "close_size": 3,
                 },
                 "selection": {
-                    "effective_keep_component_ids": [1, 2, 3],
+                    "effective_keep_component_ids": [1, 2, 3, 4],
                     "drop_component_ids": [],
                 },
                 "component_labels": {
@@ -1517,7 +1524,7 @@ def test_stage_b_selection_retry_binds_parent_component_catalog(tmp_path: Path) 
                         (parent / audit_ref).read_bytes()
                     ).hexdigest(),
                 },
-                "candidate_component_count": 3,
+                "candidate_component_count": 4,
                 "all_components_have_arc_seed": True,
                 "excluded_above_threshold_pixel_count": 0,
                 "components": components,
@@ -1551,10 +1558,10 @@ def test_stage_b_selection_retry_binds_parent_component_catalog(tmp_path: Path) 
                 "retry_repair": None,
                     "component_selection": {
                         "component_catalog": catalog_ref,
-                        "drop_component_ids": [2],
+                        "drop_component_ids": [2, 4],
                     },
                     "development_recommendation": None,
-                    "reason": "component 2 is an unrelated island",
+                    "reason": "components 2 and 4 are unrelated islands",
             }
         )
         + "\n",
@@ -1581,17 +1588,20 @@ def test_stage_b_selection_retry_binds_parent_component_catalog(tmp_path: Path) 
     )
 
     candidate = output_dir / "attempts" / "b" / "1"
+    parent_config = json.loads((parent / "effective-config.json").read_text())
+    candidate_config = json.loads((candidate / "effective-config.json").read_text())
+    assert candidate_config["settings"] == parent_config["settings"]
     assert json.loads((candidate / "arc-component-selection.json").read_text()) == {
         "schema_version": "arc_component_selection.v1",
         "component_catalog": catalog_ref,
-        "drop_component_ids": [2],
+        "drop_component_ids": [2, 4],
     }
     assert json.loads((candidate / "proposal-validation.json").read_text()) == {
         "status": "valid",
         "stage": "b",
         "kind": "component_selection",
         "component_catalog": catalog_ref,
-        "drop_component_ids": [2],
+        "drop_component_ids": [2, 4],
     }
 
 

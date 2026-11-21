@@ -104,7 +104,7 @@ class SubhaloReviewResponse(StageReviewResponse):
 
 class ComponentSelection(_StrictContract):
     component_catalog: NonEmpty
-    drop_component_ids: list[int]
+    drop_component_ids: Annotated[list[int], Field(min_length=1)]
 
 
 class PredictedImageDisposition(_StrictContract):
@@ -122,7 +122,7 @@ class PredictedImageDisposition(_StrictContract):
 class ArcReviewResponse(_StrictContract):
     stage: Literal["b"]
     refinement_kind: Literal[
-        "none", "parameters", "selection", "uncertain", "coverage_blocked"
+        "none", "parameters", "selection", "uncertain", "coverage_blocked", "cleanup_blocked"
     ]
     predicted_image_dispositions: Annotated[
         list[PredictedImageDisposition], Field(min_length=2)
@@ -157,12 +157,17 @@ class ArcReviewResponse(_StrictContract):
                     "covered_consistent", "supported_uncovered", "supported_partial"
                 }
             )
+        elif self.refinement_kind == "cleanup_blocked":
+            valid = (
+                self.retry_repair is None
+                and self.component_selection is None
+                and dispositions == {"covered_consistent"}
+            )
         elif self.refinement_kind == "parameters":
             valid = (
                 self.retry_repair is not None
                 and self.component_selection is None
                 and self.development_recommendation is None
-                and bool(dispositions & {"supported_uncovered", "supported_partial"})
                 and dispositions <= {
                     "covered_consistent", "supported_uncovered", "supported_partial"
                 }

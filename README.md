@@ -79,7 +79,7 @@ conda activate tinylens_gpu
 # 已有 TinyLensGpu 源码时可使用现有副本；为复现本接口，建议使用下列版本。
 git clone https://github.com/caoxiaoyue/TinyLensGpu.git
 cd TinyLensGpu
-git checkout c3c8f9d88e6917f9366917b418fcd3335d72e6b8
+git checkout 80016a8fef292d24c7fb746269b44a77e94daa3f
 python -m pip install -r requirements.txt
 python -m pip install -e .
 
@@ -92,7 +92,7 @@ python -m lens_agent.cli --help
 
 `config/science-constraints.txt` 记录原开发环境的关键 Python 版本，可在安装时通过 `-c config/science-constraints.txt` 使用；它不包含 CUDA 驱动，且不是所有操作系统的安装锁。
 
-`config/TinyLensGpu.revision` 记录接口开发所使用的上游版本；它与上游最新分支可能不同。更换上游版本前，需验证 pipeline 和只读模型重建调用的接口。CUDA/JAX 安装以 [TinyLensGpu 安装说明](https://github.com/caoxiaoyue/TinyLensGpu#installation) 为准；库能导入不等于 GPU 环境已可用。
+`config/TinyLensGpu.revision` 记录包含像素化非负 FISTA 求解器的已验证上游版本。更换上游版本前，需验证 pipeline 和只读模型重建调用的接口。CUDA/JAX 安装以 [TinyLensGpu 安装说明](https://github.com/caoxiaoyue/TinyLensGpu#installation) 为准；库能导入不等于 GPU 环境已可用。
 
 `nvidia-smi` 必须能可靠返回真实设备状态。GPU runner 默认使用系统 NVML 库；确有驱动兼容需要时，由管理员设置 `GPU_QUERY_LD_LIBRARY_PATH`，仓库不附带机器专用驱动库。默认空闲条件为已用显存 ≤2000 MiB、利用率 ≤10%，并使用同用户 GPU 文件锁；查询失败不会视为 GPU 空闲。
 
@@ -175,9 +175,11 @@ pnpm agent:server
 pnpm dev
 ```
 
-`doctor --remote` 只检查 SSH、依赖导入、角色占位符、Codex 版本和 app-server 帮助；不调用 AI、不验证模型服务可用性，也不启动 GPU 阶段。服务默认分别监听 `127.0.0.1:5184` 和 `127.0.0.1:5173`，不包含公网多用户部署的认证层。
+`doctor --remote` 检查 SSH、依赖导入、远程 Python 实际加载的 Pipeline Release 与 M0 网格策略、角色占位符、Codex 版本和 app-server 帮助。检查不调用 AI、不验证模型服务可用性，也不启动 GPU 阶段。服务默认分别监听 `127.0.0.1:5184` 和 `127.0.0.1:5173`，不包含公网多用户部署的认证层。
 
 打开 [真实 AI 工作台](http://127.0.0.1:5173/?design=studio)。首次任务没有作者的旧消息和结果；通过左栏新建任务，在对话中明确给出输入、输出目录及运行要求。仅打开页面、创建任务或切换任务不会启动科学计算；发送运行要求后，执行仍由 pipeline AI 决定。
+
+收到建模指令并确定目标后，Pipeline AI 通过 `tinylens_ui_report` 提交简短任务名，例如 `SDSSJ0946`。本机桥接在任务自己的状态目录登记 `task-name.json`，并通过同一个任务列表为左侧菜单和顶部标题供名。展开左侧菜单后可手动改名，手动保存的名称优先。
 
 默认让 GPU 服务器直接访问你自己的模型服务。如确需通过本机已有 HTTP 代理访问官方 OpenAI 服务，可设置 `TINYLENS_AI_NETWORK=loopback-proxy` 和 `TINYLENS_PROXY_PORT`。该可选通道使用临时认证，默认由 SSH 分配服务器回环端口，仅允许列出的官方域名。已有部署可继续用 `TINYLENS_REMOTE_PROXY_PORT` 指定固定端口。自定义 provider 使用服务器自己的网络通道。
 
@@ -226,7 +228,7 @@ Stage A 的标准 runner 还需按工作流添加 `--timeout-seconds 1800`。AI 
 
 阶段计算成功、AI 回合结束、生成诊断图、硬门槛通过和科学接受是不同状态。Web 仅显示 AI 明确报告且通过受限读取器核验的产物。缺少结果显示“—”；B 不显示虚构后验，M0 的证据扫描不作为归一化后验；参数中心值 q50 是带权中位数，不标为最大似然“最优值”。
 
-新建任务后，输入框位于欢迎页中央。发送首条消息后进入 Stage 工作台。任务可从当前浏览器的侧栏移入“已删除任务”，也可从该列表恢复。在该列表选择“彻底删除”并确认后，会清除桥接服务保存的该任务记录、会话日志、本地预览缓存及当前浏览器的草稿；服务器上的原始数据、科学结果和远程 Codex 会话不受影响。仍在运行或等待确认的任务需要先结束当前回合。切换 Stage 时保留可用页签与当前任务的色阶，可选 Linear、Log、Asinh 和 Z。
+新建任务后，输入框位于欢迎页中央。发送首条消息后进入 Stage 工作台。任务可从当前浏览器的侧栏移入“已删除任务”，也可从该列表恢复。选择“彻底删除”后，先核对 GPU 服务器上的结果目录，再确认清理结果和本地任务记录、会话日志、预览缓存及当前浏览器的草稿。原始观测、共享或身份未经核验的结果以及远程 Codex 会话会保留。仍在运行或等待确认的任务需要先结束当前回合。切换 Stage 时保留可用页签与当前任务的色阶，可选 Linear、Log、Asinh 和 Z。
 
 AI 正在运行时，输入补充内容并点击发送箭头或按 Enter，消息会作为引导交给当前回合。输入框为空时，方块用于停止当前回合。如果发送时回合已结束，输入框会保留草稿。
 
@@ -246,7 +248,7 @@ AI 正在运行时，输入补充内容并点击发送箭头或按 Enter，消�
 
 自动派发上限默认是 4，可填 1–16。计算阶段使用现有 runner 按需申领空闲 GPU，实际并行数取决于空闲设备和当前阶段。需你答复的任务等待各自会话里的决定。批次与派发记录保存在本机桥接的 `.local/`，关网页后继续派发。桥接重启后恢复队列并核对已送达的任务，送达有疑问时可打开任务检查原会话。进度里「已接受」与「人工审查」来自核验过的科学记录。
 
-A、M0、M1、M2 和 M3 可用已报告的数值产物展示六幅诊断图。M3 使用同一 attempt 的 EPL＋外剪切结果提供双向平面联动、临界线和焦散线。参数页保留采样参数与线性求解量的卡片，M0 显示扫描选定值和相对对数证据曲线。
+A、M0、M1、M2 和 M3 的结果预览上排为 Data image、Model image、Normalized residual，下排为 Lens light、Lensed source、Unlensed source。Lens light 和 Lensed source 与 Data image 共用色标上下限和拉伸方式。Lensed source 只显示该次已核验的拟合像素。M3 使用同一 attempt 的 EPL＋外剪切结果提供双向平面联动、临界线和焦散线。参数页保留采样参数与线性求解量的卡片，M0 显示扫描选定值和相对对数证据曲线。
 
 #### 阶段展示文件
 
@@ -256,9 +258,11 @@ A、M0、M1、M2 和 M3 可用已报告的数值产物展示六幅诊断图。M3
 | --- | --- | --- |
 | Data Preview | `preflight/display/` | `DataPreview_DataImage.fits`、`DataPreview_NoiseImage.fits`、`DataPreview_SNRImage.fits`、`DataPreview_PSFImage.fits` |
 | B | `attempts/b/<Attempt>/display/` | `StageB_DataImage.fits`、`StageB_LensedSource.fits`、`StageB_ArcMask.fits`、`StageB_ValidDomain.fits` |
-| A、M0、M1、M2、M3 | `attempts/<Stage 小写>/<Attempt>/display/` | `<StageName>_DataImage.fits`、`<StageName>_ModelImage.fits`、`<StageName>_LensedSource.fits`、`<StageName>_UnlensedSource.fits`、`<StageName>_NormalizedResidual.fits`、`<StageName>_ChiSquare.fits`。`<StageName>` 为 `StageA` 或 `StageM0` 至 `StageM3`。 |
+| A、M0、M1、M2、M3 | `attempts/<Stage 小写>/<Attempt>/display/` | `<StageName>_DataImage.fits`、`<StageName>_ModelImage.fits`、`<StageName>_LensLight.fits`、`<StageName>_LensedSource.fits`、`<StageName>_UnlensedSource.fits`、`<StageName>_NormalizedResidual.fits`、`<StageName>_ChiSquare.fits`。`<StageName>` 为 `StageA` 或 `StageM0` 至 `StageM3`。 |
 
-预检噪声图为 1σ RMS。B 的 `ArcMask` 和 `ValidDomain` 中 1 表示纳入，`LensedSource` 取自该次 B 实际依赖的 A。上游历史 attempt 缺少可核验的源图时，B 仍可展示 mask。A、M0–M3 的源平面保留独立边界。像素化模型用该次求得的源像素做同一算子的全网格投影，并对照原拟合区保存的预测。
+预检噪声图为 1σ RMS。B 的 `ArcMask` 和 `ValidDomain` 中 1 表示纳入，`LensedSource` 取自该次 B 实际依赖的 A。上游历史 attempt 缺少可核验的源图时，B 仍可展示 mask。A、M0–M3 的源平面保留独立边界。像素化模型用该次求得的源像素做同一算子的全网格投影，并对照原拟合区保存的预测。历史展示包缺少 Lens light 文件时，桥接可读取本次模型实际使用的、可核验的 Stage A 透镜光数组。
+
+每个建模 attempt 的 `display/` 还发布独立的 mask 图层。固定文件名是 `<StageName>_ApertureMask.fits`、`<StageName>_ContaminationMask.fits` 和 `<StageName>_ArcMask.fits`。三个文件分别用 1 表示圆内、污染像素和纳入弧区。Stage A 发布前两层，B 复用它已有的 `StageB_ArcMask.fits`，M0–M3 的弧区取自该次拟合依赖的 B attempt。展示清单的 `mask_layers` 记录文件路径和哈希，桥接核验像面几何后逐层提供给网页。缺少可核验证据的图层留空。`ValidDomain` 继续记录实际参与拟合的像素。
 
 每个阶段在同一个 `display/` 中写出 `StageName_Parameters.json`。预检使用 `DataPreview_Parameters.json`，A、B 和 M0–M3 分别使用 `StageA_Parameters.json`、`StageB_Parameters.json` 和 `StageM0_Parameters.json` 至 `StageM3_Parameters.json`。文件由 Pipeline 按 `tinylens.stage-parameters.v1` 写出，记录本次配置、统计量、实际固定值和可用的线性解。采样阶段保存带权边缘后验直方图和 q16、q50、q84。中心值为 q50，下误差为 q50−q16，上误差为 q84−q50。M0 保存粗、细证据扫描及选中的 `log_lambda_reg`。预检和 B 保存实际配置与统计量。
 
@@ -267,6 +271,12 @@ A、M0、M1、M2 和 M3 可用已报告的数值产物展示六幅诊断图。M3
 A、M0–M3 在 `display/` 发布 `StageName_LensMapping.json`，例如 `StageM3_LensMapping.json`。Pipeline 使用该 attempt 绘图时的质量模型和原始像平面视野，从 TinyLensGpu 计算临界曲线，并逐点映到源平面得到焦散线。文件记录成对的曲线坐标、参考射线、模型参数以及两平面的 FITS 几何。网页绘制保存的曲线，双向鼠标联动使用同一文件中的模型及校验射线。桥接同时核验运行 ID、attempt、输入哈希、两幅 FITS 哈希和映射文件哈希。映射文件缺失或校验失败时，该次图像和参数仍可展示。
 
 已有会话继续支持原来的报告和缓存。旧 attempt 缺少可核验的依赖时，对应图位保留“—”。新清单只在新预检或阶段计算完成后的导出步骤生成。
+
+「原始结果」展示与当前 Stage 和 attempt 绑定的 Pipeline 诊断图。M0–M3 的「Mask 图层」可单独勾选圆形视场、污染源和透镜弧。采样阶段的「联合后验」从 `Stage*_JointPosterior.json` 读取同一次联合样本和权重，选参时按需使用 GetDist 计算 68% 和 95% 概率轮廓。前端只接收该参数对的轮廓坐标。桥接所用 Python 环境通过 `requirements-display.txt` 安装 GetDist 和 ContourPy。旧运行可展示具备对应可核验证据的产物。
+
+数据预览的原始结果是 `preflight_6panel.png` 和 `preflight_2panel.png`。新版清单通过 `raw_artifacts` 核验文件哈希。缺少该索引的旧清单可从同一运行已核验的 `inspection.json` 读取其中声明的固定路径。没有展示清单的旧运行也可用明确报告的 `inspection.json` 或单张预检图作为入口，桥接核对冻结输入、运行版本和 PNG 格式。已登记哈希的图片校验失败时留空。
+
+Pipeline AI 在建模完成后登记 `modeling-comment.json`。新版文件按 `preflight`、`a`、`b`、`m0`、`m1`、`m2`、`m3` 保存每个阶段 1–2 句的总结和评价。「建模点评」在 M3 后按流程顺序逐行展示，旧运行仍可查看原先登记的简评。右侧的「最终参数」沿已接受的 M3 依赖关系查找每项参数最后一次优化的结果。采样参数显示加权后验中位数和 q16、q84 对应的非对称误差，证据扫描最优值和固定参数显示已保存的数值。
 
 历史 Stage A 的展示清单未登记映射文件时，工作台可以用该 attempt 已核验的质量参数 q50 和图像坐标标定重建曲线和双向平面联动。已有映射文件仍按清单核验。
 

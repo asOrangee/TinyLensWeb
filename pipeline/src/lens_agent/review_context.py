@@ -146,17 +146,25 @@ def _lineage(output_dir: Path, stage: StageName, current: int) -> list[dict[str,
 
 
 def unresolved_warnings(output_dir: Path, stage: StageName) -> list[dict[str, Any]]:
+    from .inherited_ab import inherited_stage_config
+
     warnings: dict[str, dict[str, Any]] = {}
+    manifest = _read_json(output_dir / "run-manifest.json") or {}
     for upstream in STAGE_DEPENDENCY_ORDER[: STAGE_DEPENDENCY_ORDER.index(stage)]:
         head_path = output_dir / "accepted" / f"{upstream.value}.json"
         head = _read_json(head_path)
+        inherited = "inherited_ab" in manifest and upstream in {StageName.A, StageName.B}
         if head is None:
+            if inherited:
+                raise ValueError("An inherited A/B Accepted Stage Head is missing")
             continue
         root = (head_path.parent / str(head.get("attempt_path", ""))).resolve()
         try:
             root.relative_to(output_dir)
         except ValueError as error:
             raise ValueError("Accepted Stage Head escapes the Lens Result Directory") from error
+        if inherited:
+            inherited_stage_config(output_dir, upstream, root / "effective-config.json")
         decision = _read_attempt_json(root, "decision.json") or {}
         snapshot = decision.get("unresolved_warnings")
         if isinstance(snapshot, list):

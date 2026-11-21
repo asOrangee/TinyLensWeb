@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import hashlib
+import io
 import json
 import os
 import tempfile
@@ -21,6 +22,7 @@ LEGACY_SCHEMA = "tinylens.stage-display.v1"
 DISPLAY_DIRECTORY = CONTRACT["directory"]
 DISPLAY_REFERENCE = {"schema": SCHEMA, "path": DISPLAY_DIRECTORY}
 PARAMETER_FILE = CONTRACT["parameterFile"]
+JOINT_POSTERIOR_FILE = CONTRACT["jointPosteriorFile"]
 MAPPING_FILE = CONTRACT["mappingFile"]
 MODEL_STAGES = ("a", "m0", "m1", "m2", "m3")
 _CAPTURE: ContextVar[dict | None] = ContextVar("tinylens_display", default=None)
@@ -46,13 +48,18 @@ def image_bounds(shape, pixel):
 
 
 def record_prediction(capture, image, rms, lens_light, lensed_source, *, valid=None):
+    lens_light = np.asarray(lens_light, dtype=float)
     source = np.asarray(lensed_source, dtype=float)
-    total = np.asarray(lens_light, dtype=float) + source
+    total = lens_light + source
     residual = (np.asarray(image, dtype=float) - total) / np.asarray(rms, dtype=float)
     capture["planes"].update({
         "model": total, "source-lensed": source,
         "residual": residual, "chi-square": np.square(residual),
     })
+    if lens_light.shape == np.shape(image) and lens_light.ndim == 2 and np.isfinite(lens_light).all():
+        capture["planes"]["lens-light"] = lens_light.copy()
+    else:
+        capture["planes"].pop("lens-light", None)
     if valid is not None:
         capture["valid_domain"] = np.asarray(valid, dtype=bool).copy()
 
@@ -66,6 +73,188 @@ def _reference(path, base):
     if not path.is_file() or path.resolve(strict=True) != path:
         raise ValueError(f"Invalid display dependency {path.name}")
     return {"path": path.relative_to(base).as_posix(), "sha256": file_sha256(path)}
+
+
+def _optional_reference(path, base):
+    try:
+        return _reference(path, base)
+    except (OSError, ValueError):
+        return None
+
+
+def _publish_original_artifacts(manifest, directory, result):
+    stage = manifest["stage"]
+    declared = result.get("artifacts", {})
+    references = {}
+    for key, relative in CONTRACT["rawArtifacts"][stage].items():
+        path = directory / relative
+        if declared.get(key) == (str(path) if stage == "preflight" else relative):
+            reference = _optional_reference(path, directory)
+            if reference:
+                references[key] = reference
+    if references:
+        manifest["raw_artifacts"] = references
+
+    relative = f"artifacts/stage_{stage}.pkl"
+    if stage in ("a", "m1", "m2", "m3") and declared.get("stage_pickle") == relative:
+        source = _optional_reference(directory / relative, directory)
+        if source:
+            manifest["posterior_source"] = source
+
+
+def _publish_mask_sources(run, manifest, upstream):
+    names = ("inspection.json", "segmentation.fits")
+    if manifest["stage"] != "preflight":
+        names += ("inspector.json", "modeling_mask.fits")
+    sources = {}
+    for name in names:
+        reference = _optional_reference(run / "preflight" / name, run)
+        if reference:
+            sources[name] = reference
+    if "b" in (upstream or {}):
+        reference = _optional_reference(Path(upstream["b"]) / "feature_mask.fits", run)
+        if reference:
+            sources["arc"] = reference
+    if sources:
+        manifest["mask_sources"] = sources
+
+
+def _verified_dependency(reference, base, relative):
+    if reference["path"] != relative:
+        raise ValueError("Unexpected display dependency")
+    path = base / relative
+    if not path.is_file() or path.resolve(strict=True) != path:
+        raise ValueError("Invalid display dependency")
+    content = path.read_bytes()
+    if hashlib.sha256(content).hexdigest() != reference["sha256"]:
+        raise ValueError("Display dependency changed")
+    return content
+
+
+def _mask_fits(reference, run, relative, shape, geometry):
+    raw = _verified_dependency(reference, run, relative)
+    with fits.open(io.BytesIO(raw), memmap=False) as hdus:
+        array, header = np.asarray(hdus[0].data), hdus[0].header
+    ny, nx = shape
+    pixel = geometry["pixel_scale_arcsec"]
+    expected = {
+        "CDELT1": pixel, "CDELT2": pixel,
+        "CRPIX1": (nx + 1) / 2, "CRPIX2": (ny + 1) / 2,
+        "CRVAL1": 0, "CRVAL2": 0, "CUNIT1": "arcsec", "CUNIT2": "arcsec",
+        "INPXDIR": geometry["input_x_direction"], "INPYDIR": geometry["input_y_direction"],
+    }
+    if array.shape != shape or any(header.get(key) != value for key, value in expected.items()):
+        raise ValueError("Mask array does not match the frozen input frame")
+    return array, header
+
+
+def _contamination_layer(run, manifest, frozen, sources, shape, geometry):
+    packet = json.loads(_verified_dependency(
+        sources["inspection.json"], run, "preflight/inspection.json",
+    ))
+    euclid = frozen.get("euclid_contamination")
+    if (packet["lens_id"] != manifest["lens_id"] or packet["image_shape"] != list(shape)
+            or packet["input_geometry"] != geometry or packet.get("euclid_contamination") != euclid):
+        raise ValueError("Contamination mask belongs to a different input")
+    labels, _ = _mask_fits(
+        sources["segmentation.fits"], run, "preflight/segmentation.fits", shape, geometry,
+    )
+    if labels.dtype.kind not in "iu" or np.any(labels < 0):
+        raise ValueError("Invalid contamination segmentation labels")
+    if euclid is not None:
+        from .inspection.euclid import binary_mask_sha256
+
+        contamination = labels > 0
+        if (euclid["image_shape"] != list(shape)
+                or euclid["input_fits_sha256"] != manifest["input"]["sha256"]
+                or euclid["canonical_mask_sha256"] != binary_mask_sha256(contamination)):
+            raise ValueError("Contamination does not match the verified Euclid mask")
+        return contamination
+
+    inspector = json.loads(_verified_dependency(
+        sources["inspector.json"], run, "preflight/inspector.json",
+    ))
+    ids = inspector["contaminant_ids"]
+    if (inspector["lens_id"] != manifest["lens_id"] or inspector["disposition"] != "model"
+            or not isinstance(ids, list) or any(type(value) is not int or value <= 0 for value in ids)
+            or not np.isin(ids, labels).all()):
+        raise ValueError("Contaminant IDs do not belong to the saved segmentation")
+    return np.isin(labels, ids)
+
+
+def _arc_layer(run, manifest, result, sources, shape, geometry, modeling):
+    if manifest["stage"] == "b":
+        summary = result
+        attempt = manifest["attempt"]
+        reference = manifest["feature_mask"]
+    else:
+        entry = next(item for item in manifest["upstream"] if item["stage"] == "b")
+        attempt = entry["attempt"]
+        summary = json.loads(_verified_dependency(
+            entry, run, f"attempts/b/{attempt}/stage-result.json",
+        ))
+        reference = sources["arc"]
+    if (summary["lens_id"], summary["stage"], summary["attempt"], summary["status"]) != (
+        manifest["lens_id"], "b", attempt, "success"
+    ) or summary["artifacts"]["feature_mask_fits"] != "artifacts/feature_mask.fits":
+        raise ValueError("The bound Stage B attempt does not declare the arc mask")
+    mask, _ = _mask_fits(
+        reference, run, f"attempts/b/{attempt}/artifacts/feature_mask.fits", shape, geometry,
+    )
+    arc = mask == 0
+    if (not np.isin(mask, (0, 1)).all() or np.any(arc & modeling)
+            or int(arc.sum()) != summary["metrics"]["included_arc_pixels"]):
+        raise ValueError("The arc pixels do not match the bound Stage B attempt")
+    return arc
+
+
+def _mask_layer_arrays(run, manifest, frozen, result, shape, domain_mask, arc_plane):
+    unavailable = (OSError, KeyError, TypeError, ValueError, IndexError)
+    sources = manifest.get("mask_sources", {})
+    geometry = frozen.get("input_geometry", {})
+    pixel = manifest["input"]["pixel_scale_arcsec"]
+    if (len(shape) != 2 or not 1 <= min(shape) <= max(shape) <= 512
+            or not np.isfinite(pixel) or pixel <= 0
+            or not isinstance(geometry, dict) or geometry.get("pixel_scale_arcsec") != pixel):
+        return {}
+    layers = {}
+    modeling = None
+    try:
+        reference = sources["modeling_mask.fits"]
+        if manifest.get("modeling_mask", reference) != reference:
+            raise ValueError("Mask layers disagree on the frozen modeling mask")
+        mask, header = _mask_fits(reference, run, "preflight/modeling_mask.fits", shape, geometry)
+        radius = header["MODELRAD"]
+        if (not np.isin(mask, (0, 1)).all() or not np.isfinite(radius) or radius <= 0
+                or (domain_mask is not None and not np.array_equal(mask == 1, domain_mask))):
+            raise ValueError("Invalid frozen modeling mask")
+        yy, xx = np.indices(shape)
+        aperture = np.hypot(xx - (shape[1] - 1) / 2, yy - (shape[0] - 1) / 2) <= radius / pixel
+        if np.any(~aperture & (mask == 0)):
+            raise ValueError("Frozen modeling mask contains pixels outside the aperture")
+        modeling = mask == 1
+        layers["aperture"] = aperture
+    except unavailable:
+        pass
+
+    try:
+        contamination = _contamination_layer(run, manifest, frozen, sources, shape, geometry)
+        if modeling is not None and not np.array_equal(modeling, ~layers["aperture"] | contamination):
+            raise ValueError("Independent contamination does not reproduce the frozen modeling mask")
+        layers["contamination"] = contamination
+    except unavailable:
+        pass
+
+    stage = manifest["stage"]
+    if modeling is not None and (stage == "b" or "arc" in sources):
+        try:
+            arc = _arc_layer(run, manifest, result, sources, shape, geometry, modeling)
+            if stage == "b" and not np.array_equal(arc, arc_plane):
+                raise ValueError("The published Stage B arc plane changed")
+            layers["arc"] = arc
+        except unavailable:
+            pass
+    return layers
 
 
 def _atomic_write(path, write):
@@ -150,7 +339,7 @@ def _mapping_packet(manifest, mapping):
     }
 
 
-def _publish_files(directory, manifest, planes, parameters, mapping):
+def _publish_files(directory, manifest, planes, parameters, mapping, joint, mask_layers):
     display = directory / DISPLAY_DIRECTORY
     with tempfile.TemporaryDirectory(prefix=".display-", dir=directory) as staging:
         prepared = Path(staging) / DISPLAY_DIRECTORY
@@ -161,6 +350,21 @@ def _publish_files(directory, manifest, planes, parameters, mapping):
             manifest["planes"][role].update(
                 path=f"{DISPLAY_DIRECTORY}/{name}", sha256=file_sha256(prepared / name)
             )
+        if mask_layers is not None:
+            mask_references = manifest["mask_layers"] = {}
+            prefix = CONTRACT["stagePrefixes"][manifest["stage"]]
+            for layer, hdu in mask_layers.items():
+                if layer == "arc" and manifest["stage"] == "b":
+                    if "mask" in planes:
+                        mask_references[layer] = {
+                            key: manifest["planes"]["mask"][key] for key in ("path", "sha256")
+                        }
+                    continue
+                name = f'{prefix}_{CONTRACT["maskLayerFiles"][layer]}.fits'
+                hdu.writeto(prepared / name)
+                mask_references[layer] = {
+                    "path": f"{DISPLAY_DIRECTORY}/{name}", "sha256": file_sha256(prepared / name),
+                }
         if parameters is not None:
             try:
                 _publish_sidecar(prepared, manifest, PARAMETER_FILE, "parameters", parameters)
@@ -171,17 +375,49 @@ def _publish_files(directory, manifest, planes, parameters, mapping):
                 _publish_sidecar(prepared, manifest, MAPPING_FILE, "mapping_file", _mapping_packet(manifest, mapping))
             except (OSError, KeyError, TypeError, ValueError) as error:
                 logging.getLogger(__name__).warning("Workbench lens mapping file unavailable: %s", error)
+        if joint is not None:
+            try:
+                _publish_sidecar(prepared, manifest, JOINT_POSTERIOR_FILE, "joint_posterior", joint)
+            except (OSError, TypeError, ValueError) as error:
+                logging.getLogger(__name__).warning("Workbench joint posterior file unavailable: %s", error)
         try:
             prepared.rename(display)
         except OSError:
             if display.is_symlink() or not display.is_dir():
                 raise
             files = list(manifest["planes"].values())
-            files.extend(manifest[key] for key in ("parameters", "mapping_file") if key in manifest)
+            files.extend(manifest.get("mask_layers", {}).values())
+            files.extend(manifest[key] for key in ("parameters", "mapping_file", "joint_posterior") if key in manifest)
             for item in files:
                 path = directory / item["path"]
                 if _reference(path, directory) != {key: item[key] for key in ("path", "sha256")}:
                     raise ValueError(f"Refusing to replace existing {path.name}")
+
+
+def _weighted_samples(payload):
+    names = payload["param_names"]
+    samples = np.asarray(payload["samples"], dtype=float)
+    weights = np.asarray(payload["weights"], dtype=float)
+    if (not isinstance(names, (list, tuple)) or not 1 <= len(names) <= 200
+            or any(not isinstance(name, str) or not 1 <= len(name) <= 160 for name in names)
+            or len(set(names)) != len(names) or weights.ndim != 1
+            or samples.shape != (len(weights), len(names))
+            or not np.isfinite(samples).all() or not np.isfinite(weights).all()
+            or np.any(weights < 0) or not 0 < weights.sum() < np.inf):
+        raise ValueError("Invalid saved weighted posterior")
+    return list(names), samples, weights / weights.sum()
+
+
+def _joint_posterior_packet(manifest, payload):
+    names, samples, weights = _weighted_samples(payload)
+    if samples.size + weights.size > JOINT_POSTERIOR_FILE["maxValues"]:
+        raise ValueError("Joint samples exceed display size limit")
+    packet = {key: manifest[key] for key in ("run", "run_id", "lens_id", "stage", "attempt") if key in manifest}
+    packet.update(schema=JOINT_POSTERIOR_FILE["schema"], input_sha256=manifest["input"]["sha256"],
+                  summary_sha256=manifest["summary"]["sha256"],
+                  source_sha256=manifest["posterior_source"]["sha256"],
+                  names=names, samples=samples.tolist(), weights=weights.tolist())
+    return packet
 
 
 def _posterior(stage, payload):
@@ -201,14 +437,7 @@ def _posterior(stage, payload):
                            "log_evidence": [float(v) if np.isfinite(v) else None for v in y]}
         return {"kind": "evidence_scan", "scan": scan}
 
-    names = payload["param_names"]
-    samples = np.asarray(payload["samples"], dtype=float)
-    weights = np.asarray(payload["weights"], dtype=float)
-    if (not names or len(set(names)) != len(names) or weights.ndim != 1 or samples.shape != (len(weights), len(names))
-        or not np.isfinite(samples).all() or not np.isfinite(weights).all()
-        or np.any(weights < 0) or not 0 < weights.sum() < np.inf):
-        raise ValueError("Invalid saved weighted posterior")
-    weights = weights / weights.sum()
+    names, samples, weights = _weighted_samples(payload)
     parameters = []
     for name, values in zip(names, samples.T):
         order = np.argsort(values)
@@ -291,7 +520,8 @@ def _image_hdus(arrays, stage, pixel, observation_shape, capture, units):
     hdus = {}
     metadata_by_role = {}
     for role, array in arrays.items():
-        value = np.asarray(array, dtype=np.uint8 if role in ("mask", "domain") else np.float64)
+        mask_plane = role in ("mask", "domain", "aperture", "contamination", "arc")
+        value = np.asarray(array, dtype=np.uint8 if mask_plane else np.float64)
         if value.ndim != 2 or not 1 <= min(value.shape) <= max(value.shape) <= 512 or not np.isfinite(value).all():
             raise ValueError(f"Invalid numerical display plane {role}")
         if role not in ("source", "psf") and value.shape != observation_shape:
@@ -334,7 +564,9 @@ def publish_display(run, directory, stage, attempt, data, *, upstream=None, capt
     if target.is_file():
         _reference(target, directory)
         existing = json.loads(target.read_text(encoding="utf-8"))
-        if existing.get("schema") in (LEGACY_SCHEMA, PREVIOUS_NAMED_SCHEMA):
+        if existing.get("schema") in (LEGACY_SCHEMA, PREVIOUS_NAMED_SCHEMA) or (
+            existing.get("schema") == SCHEMA and stage != "preflight" and "mask_layers" not in existing
+        ):
             return target
     pixel = data.pixel_scale_arcsec
     input_path = data.fits_path
@@ -346,7 +578,7 @@ def publish_display(run, directory, stage, attempt, data, *, upstream=None, capt
                  (("observation", "VIS_FLUX"), ("noise", "VIS_RMS"), ("psf", "VIS_PSF"))}
     units["data"] = units["observation"]
     units["snr"] = units["residual"] = units["chi-square"] = "1"
-    units["model"] = units["source-lensed"] = units["observation"]
+    units["model"] = units["source-lensed"] = units["lens-light"] = units["observation"]
     manifest = {
         "schema": SCHEMA, "run": str(run), "lens_id": lens_id, "stage": stage, "attempt": attempt,
         "input": {"path": str(input_path), "sha256": source_sha, "pixel_scale_arcsec": pixel},
@@ -354,7 +586,8 @@ def publish_display(run, directory, stage, attempt, data, *, upstream=None, capt
         "upstream": [],
         "planes": {},
     }
-    run_id = json.loads((run / "run-manifest.json").read_bytes()).get("run_id")
+    frozen = json.loads(_verified_dependency(manifest["run_manifest"], run, "run-manifest.json"))
+    run_id = frozen.get("run_id")
     if run_id is not None:
         manifest["run_id"] = run_id
     for name, artifact_dir in (upstream or {}).items():
@@ -368,9 +601,11 @@ def publish_display(run, directory, stage, attempt, data, *, upstream=None, capt
     if stage == "preflight":
         arrays = {"data": data.image, "noise": data.noise, "snr": data.image / data.noise, "psf": data.psf}
         manifest["inspection"] = _reference(directory / "inspection.json", directory)
+        _publish_original_artifacts(manifest, directory, json.loads((directory / "inspection.json").read_bytes()))
     else:
         manifest["summary"] = _reference(directory / "stage-result.json", directory)
         manifest["configuration"] = _reference(directory / "effective-config.json", directory)
+        _publish_original_artifacts(manifest, directory, result)
         if stage == "b":
             mask_path = directory / result["artifacts"]["feature_mask_fits"]
             domain_path = run / "preflight" / "modeling_mask.fits"
@@ -410,6 +645,14 @@ def publish_display(run, directory, stage, attempt, data, *, upstream=None, capt
                     arrays["domain"] = valid
         else:
             raise ValueError("Stage has no workbench display")
+    _publish_mask_sources(run, manifest, upstream)
+
+    masks = None
+    if stage != "preflight":
+        layers = _mask_layer_arrays(
+            run, manifest, frozen, result, data.image.shape, domain_mask, arrays.get("mask"),
+        )
+        masks, _ = _image_hdus(layers, stage, pixel, data.image.shape, capture, {})
 
     kind = stage if stage in ("preflight", "b") else "model"
     required = set(CONTRACT["required"][kind])
@@ -428,6 +671,12 @@ def publish_display(run, directory, stage, attempt, data, *, upstream=None, capt
         parameters = _parameter_packet(directory, manifest, result, capture, posterior_payload)
     except (OSError, KeyError, TypeError, ValueError) as error:
         logging.getLogger(__name__).warning("Workbench parameters unavailable: %s", error)
-    _publish_files(directory, manifest, hdus, parameters, capture.get("mapping"))
+    joint = None
+    if posterior_payload is not None and "posterior_source" in manifest:
+        try:
+            joint = _joint_posterior_packet(manifest, posterior_payload)
+        except (KeyError, TypeError, ValueError) as error:
+            logging.getLogger(__name__).warning("Workbench joint posterior unavailable: %s", error)
+    _publish_files(directory, manifest, hdus, parameters, capture.get("mapping"), joint, masks)
     _json(target, manifest)
     return target

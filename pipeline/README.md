@@ -59,6 +59,11 @@ stage retry. Correcting it requires a fresh run from preflight, preserving earli
 source-plane pixel scales or the physical position-likelihood tolerance. See
 [the input-geometry decision](docs/adr/0029-freeze-calibrated-input-geometry.md).
 
+Fresh runs record a position-likelihood tolerance of 0.05 arcsec at preflight.
+Runs created before this setting was recorded use 0.1 arcsec when producing
+the Stage-A predicted image family. M0–M3 use the tolerance stored in the
+accepted Stage-A family.
+
 ## Python operations
 
 The skill uses only these stateless commands:
@@ -151,15 +156,28 @@ historical evidence and are not resumable with this workflow; use a new output d
 A, B, M0, M1, M2, and M3 each use one persistent, write-capable Stage Expert per lens and stage. The
 expert runs only its assigned immutable Packaged Pipeline stage, reviews eligible evidence, submits
 one stage-specific strict response, and follows the canonical adjudicated decision through retry or
-promotion. Stage B may request one parameter change or removal of unrelated whole components; its
-decision is derived from that structured refinement evidence. The M0 expert reviews only whether
-coherent source emission is clipped by the current grid; Python alone selects the next fixed
-`±0.8 → ±1.0 → ±1.2 arcsec` footprint while preserving `0.02 arcsec` pixels. An accepted M0 attempt
-seals `source_grid_spec.json` for M1–M3; later stages can route newly visible clipping to Human
-Review but cannot resize or roll back the grid. Stage B has ten retries after its initial attempt;
-each other reviewed stage has five and
-the physical stages share fifteen per lens. Every accepted and rejected JSON, PNG, FITS, and PKL
-remains in its sealed attempt directory.
+promotion. When Stage B has sufficient arc coverage, the expert may remove independently verified
+unrelated components using the current catalog. A selection may drop several whole components at
+once and must preserve every covered predicted-image position. If a selection cannot safely resolve
+contamination, the expert may propose a one-unit increase in the S/N threshold using the current
+diagnostics. Each retry produces a new mask for review. Stage B has twenty retries after its initial
+attempt.
+
+Stage B compares the twenty integer residual S/N thresholds from 1 through 20. For a new run,
+the threshold determines the expansion after closing: below 5 uses 0 pixels, 5 through 10 uses
+1 pixel, and above 10 uses 2 pixels. The candidate, executed mask, and threshold retries use
+the same rule. Previously initialized runs use their recorded expansion setting.
+
+M0 starts with a square `100 × 100` source grid at `0.010 arcsec` per pixel. The M0 expert reviews
+only whether coherent source emission is clipped by the current grid. Each confirmed truncation
+triggers a full M0 rerun with 20 more pixels per side length, up to `200 × 200`, preserving the
+centre and pixel scale. An accepted M0 attempt seals `source_grid_spec.json` for M1–M3. Later stages
+route newly visible clipping to Human Review. A, M0, M1, M2 and M3 have at most five retries each and
+share fifteen per lens.
+
+The `source-reconstruction.v1` Pipeline Release applies these policies to new runs. Earlier runs
+keep their recorded grid and accepted results. Every accepted and rejected JSON, PNG, FITS, and
+PKL remains in its sealed attempt directory.
 
 ## Development
 

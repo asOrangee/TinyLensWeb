@@ -124,16 +124,18 @@ Stage B's persistent Arc Mask Expert owns scientific acceptance, deterministic r
 and uncertain routing. `supported_partial` means the predicted position is mechanically covered,
 but credible associated extended signal is omitted. Its existing `evidence` entries must cite current
 diagnostics, locate the omission, and explain the signal association; no automatic area-fraction
-threshold establishes sufficient coverage. `supported_uncovered` still requires mechanical
-non-coverage. Parameter refinement requires at least one of these two repairable states and permits
-no unsupported or indeterminate prediction. Repair coverage first, then select independent unrelated
-components: selection and acceptance both require every image to be `covered_consistent`, and
-acceptance additionally requires no unrelated component remaining. Selection must preserve covered
-predicted positions. Every retry is reviewed again; new omissions after selection return to parameter
-refinement when safe, which invalidates previous selections, or to `coverage_blocked` when no safe
-permitted repair remains. Arc-contaminant merges still require Human Review.
-These rules supersede the retry eligibility described in ADRs 0026 and 0027. Historical artifacts are
-not rewritten, but newly submitted responses must follow these rules. A Stage-B Hard Gate or
+threshold establishes sufficient coverage. `supported_uncovered` requires mechanical non-coverage.
+Repair coverage first. When every image is `covered_consistent`, a selection on the exact current
+catalog may remove multiple confirmed unrelated whole components while preserving covered predicted
+positions and credible arc support. The proposed set contains every component to drop. If a
+selection cannot safely resolve contamination and the diagnostics support a higher threshold,
+raise the S/N threshold by one. Reassess the new mask after either type of retry. Acceptance
+requires sufficient coverage and removal of unrelated components. A newly exposed omission calls
+for a coverage repair or `coverage_blocked`. Previously executed mask settings are ineligible for
+parameter retries.
+
+These rules supersede the retry eligibility described in ADRs 0026 and 0027 for new Lens Runs.
+A Stage-B Hard Gate or
 response-contract failure still uses the shared terminal `human_review` status with
 `reason_kind: operational_failure`.
 
@@ -147,15 +149,15 @@ the diagnostic location and credible signal in its `evidence`; explain the exhau
 repairs in `reason`. Both `retry_repair` and `component_selection` must be null; a development
 recommendation remains optional. Adjudication records `human_review` with
 `reason_kind: scientific_blocker` without requiring a retry proposal or an exhausted retry budget.
-Any unsupported or indeterminate prediction still uses `uncertain`; a fully covered family cannot
-use `coverage_blocked`. The expert assesses repair safety from diagnostics; the validators check
-the response structure and classification consistency, not the scientific meaning of free text.
+An unsupported or indeterminate prediction uses `uncertain`. A fully covered family with no safe
+remaining cleanup uses `cleanup_blocked`. The expert assesses repair safety from diagnostics, and
+the validators enforce response structure, threshold steps and preservation of covered positions.
 
 ## Stage M0 — global regularization calibration
 
-M0 fixes the Stage-A SIE+shear model, subtracts the Stage-A lens-light model, and searches for a global regularization strength. Its initial Source Grid Footprint is centred on the Stage-A posterior-median source centre and spans `±0.8 arcsec`, with `80×80` pixels at `0.02 arcsec` per pixel.
+M0 fixes the Stage-A SIE+shear model, subtracts the Stage-A lens-light model, and searches for a global regularization strength. Its initial Source Grid Footprint is centred on the Stage-A posterior-median source centre and spans `±0.5 arcsec`, with `100 × 100` pixels at `0.010 arcsec` per pixel.
 
-After the numerical Hard Gate passes, a persistent Stage-M0 Expert reviews only Source Grid Sufficiency using `stage_m0_source_grid.png` and its continuous edge-flux evidence. Confirmed coherent truncation advances the fixed symmetric sequence `±0.8 → ±1.0 → ±1.2 arcsec` and repeats the complete M0 calibration. The expert never selects a numerical size. Ambiguous evidence, or confirmed truncation at the maximum footprint, routes to Human Review. Acceptance seals `source_grid_spec.json` for M1–M3. General residual, mass, source-sign, and source-plausibility quality remain outside M0 review.
+After the numerical Hard Gate passes, a persistent Stage-M0 Expert reviews only Source Grid Sufficiency using `stage_m0_source_grid.png` and its continuous edge-flux evidence. Confirmed coherent truncation adds 20 pixels to each side length at the same centre and pixel scale and repeats the complete M0 calibration. Missing essential evidence or confirmed truncation at the maximum `200 × 200` footprint routes to Human Review. Acceptance seals `source_grid_spec.json` for M1–M3.
 
 ## Stage M1 — SIE+shear basin and source template
 
@@ -241,7 +243,7 @@ Warnings from an accepted stage are inputs to every downstream review. Each down
 
 ## Retry and tuning
 
-The existing budgets remain ceilings: at most five retries per non-B stage, fifteen shared retries per lens across A and M0–M3, and ten independent Stage-B refinements. Budget availability never creates a reason to retry.
+The retry ceilings are five per stage for A and M0–M3, fifteen shared across those stages, and twenty independent Stage-B refinements.
 
 Every scientific retry requires exactly one Retry Repair Hypothesis. The persistent
 Stage Reviewer returns that hypothesis and one typed, absolute-value

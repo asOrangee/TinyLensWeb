@@ -4,31 +4,43 @@ import math
 from typing import Any
 
 
-SOURCE_PIXEL_SCALE_ARCSEC = 0.02
-SOURCE_GRID_HALF_WIDTHS_ARCSEC = (0.8, 1.0, 1.2)
+SOURCE_PIXEL_SCALE_ARCSEC = 0.010
+SOURCE_GRID_SIZES_PIXELS = (100, 120, 140, 160, 180, 200)
+MAX_SOURCE_GRID_LEVEL = len(SOURCE_GRID_SIZES_PIXELS) - 1
 SOURCE_GRID_SPEC_SCHEMA_VERSION = "source_grid_spec.v1"
+_LEGACY_SOURCE_PIXEL_SCALE_ARCSEC = 0.02
+_LEGACY_SOURCE_GRID_SIZES_PIXELS = (80, 100, 120)
 
 
 def next_source_grid_level(level: int) -> int | None:
-    if isinstance(level, bool) or not 0 <= level < len(SOURCE_GRID_HALF_WIDTHS_ARCSEC):
+    if type(level) is not int or not 0 <= level <= MAX_SOURCE_GRID_LEVEL:
         raise ValueError("source grid level is outside the fixed policy")
-    return level + 1 if level + 1 < len(SOURCE_GRID_HALF_WIDTHS_ARCSEC) else None
+    return level + 1 if level < MAX_SOURCE_GRID_LEVEL else None
 
 
 def source_grid_spec(*, center_x: float, center_y: float, level: int) -> dict[str, Any]:
     """Return the complete coordinate specification for one source-grid policy level."""
-    if isinstance(level, bool) or not 0 <= level < len(SOURCE_GRID_HALF_WIDTHS_ARCSEC):
+    return _grid_spec(center_x, center_y, level, SOURCE_PIXEL_SCALE_ARCSEC, SOURCE_GRID_SIZES_PIXELS)
+
+
+def _grid_spec(
+    center_x: float,
+    center_y: float,
+    level: int,
+    pixel_scale: float,
+    sizes: tuple[int, ...],
+) -> dict[str, Any]:
+    if type(level) is not int or not 0 <= level < len(sizes):
         raise ValueError("source grid level is outside the fixed policy")
-    half_width = SOURCE_GRID_HALF_WIDTHS_ARCSEC[level]
-    half_pixel = 0.5 * SOURCE_PIXEL_SCALE_ARCSEC
-    center_half_width = half_width - half_pixel
-    nsrc = int(round(2.0 * half_width / SOURCE_PIXEL_SCALE_ARCSEC))
+    nsrc = sizes[level]
+    half_width = 0.5 * nsrc * pixel_scale
+    center_half_width = half_width - 0.5 * pixel_scale
     return {
         "schema_version": SOURCE_GRID_SPEC_SCHEMA_VERSION,
         "anchor_center": {"x": float(center_x), "y": float(center_y)},
         "grid_level": level,
         "half_width_arcsec": half_width,
-        "pixel_scale_arcsec": SOURCE_PIXEL_SCALE_ARCSEC,
+        "pixel_scale_arcsec": pixel_scale,
         "nsrc": nsrc,
         "footprint_bbox": [
             float(center_x - half_width),
@@ -50,6 +62,7 @@ def validate_source_grid_spec(
     *,
     source_shape: tuple[int, int] | None = None,
     expected_level: int | None = None,
+    allow_legacy: bool = False,
 ) -> dict[str, Any]:
     """Validate source-grid provenance against the immutable release policy."""
     if not isinstance(raw, dict):
@@ -78,7 +91,13 @@ def validate_source_grid_spec(
         raise ValueError("source grid level must be an integer")
     if expected_level is not None and level != expected_level:
         raise ValueError("source grid specification does not match its configuration")
-    expected = source_grid_spec(center_x=center_x, center_y=center_y, level=level)
+    if allow_legacy and raw["pixel_scale_arcsec"] == _LEGACY_SOURCE_PIXEL_SCALE_ARCSEC:
+        expected = _grid_spec(
+            center_x, center_y, level,
+            _LEGACY_SOURCE_PIXEL_SCALE_ARCSEC, _LEGACY_SOURCE_GRID_SIZES_PIXELS,
+        )
+    else:
+        expected = source_grid_spec(center_x=center_x, center_y=center_y, level=level)
     for name in ("schema_version", "grid_level", "nsrc"):
         if raw[name] != expected[name]:
             raise ValueError(f"source grid specification has inconsistent {name}")

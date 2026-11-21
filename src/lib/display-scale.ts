@@ -13,6 +13,14 @@ export function colorbarTicks(min:number,max:number,stretch:DisplayStretch='line
 
 export const formatScaleNumber=(value:number)=>(Math.abs(value)<.005?0:value).toFixed(2);
 
+export function hasLongColorbarTick(value: number) {
+  return Number.isFinite(value) && Math.abs(Number(formatScaleNumber(value))) >= 10_000;
+}
+
+export function formatColorbarTick(value: number) {
+  return hasLongColorbarTick(value) ? value.toExponential(1).replace('e+', 'e') : formatScaleNumber(value);
+}
+
 /** Five labels within the verified printed axis, without extrapolating its range. */
 export function nativeColorbarTicks(ticks:readonly {position:number;value:number}[]){
   if(ticks.length<2||ticks.some((tick,index)=>![tick.position,tick.value].every(Number.isFinite)||index>0&&(tick.position<=ticks[index-1].position||tick.value>=ticks[index-1].value)))throw new RangeError('Invalid native colorbar calibration');

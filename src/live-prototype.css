@@ -1,5 +1,77 @@
 .app-shell.live-prototype-workbench[data-design] .workspace{margin-left:var(--lens-nav-collapsed);margin-right:var(--conversation-width);width:auto;min-width:0;flex:1}
 .app-shell.live-prototype-workbench[data-design] .workbench-grid{display:block}
+.app-shell.live-workbench[data-design] .workbench-heading {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+.workbench-task-name {
+  position: relative;
+  text-align: center;
+}
+.workbench-task-name-copy {
+  display: block;
+  margin-inline: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.workbench-task-name-measure {
+  position: absolute;
+  inset: 0 auto auto 0;
+  width: max-content;
+  visibility: hidden;
+  white-space: nowrap;
+}
+.workbench-task-name[data-compact] .workbench-task-name-copy, .workbench-task-name-small {
+  font-size: 12px;
+  letter-spacing: normal;
+}
+.workbench-task-name[data-compact] .workbench-task-name-copy {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+}
+.app-shell.live-workbench[data-design] .workbench-heading .stage-track {
+  --stage-button-width: 70px;
+  flex: 1 1 min(100%, 550px);
+  flex-wrap: wrap;
+  gap: 2px 4px;
+  overflow: visible;
+}
+.app-shell.live-workbench[data-design][data-demo-language="en"] .workbench-heading .stage-track {
+  --stage-button-width: 120px;
+}
+.app-shell.live-workbench[data-design] .workbench-heading .stage-track .stage-nav-item {
+  flex: 1 1 min(100%, var(--stage-button-width));
+  min-width: 0;
+  max-width: 100%;
+  padding: 4px 0;
+  container: workbench-stage / inline-size;
+}
+.app-shell.live-workbench[data-design] .workbench-heading .stage-nav-item .stage-name-line .stage-step {
+  justify-content: center;
+  padding-inline: 3px;
+}
+.app-shell.live-workbench[data-design] .workbench-heading .stage-track .stage-description {
+  flex: 0 1 auto;
+  width: max-content;
+  max-width: 100%;
+}
+.stage-description > .stage-label-line {
+  display: block;
+  white-space: nowrap;
+}
+@container workbench-stage (min-width: 96px) {
+  .stage-description > .stage-label-line { display: inline; }
+}
+@container workbench-stage (min-width: 87px) {
+  .stage-description[data-characters="5"] > .stage-label-line { display: inline; }
+}
+@container workbench-stage (min-width: 77px) {
+  .stage-description[data-characters="4"] > .stage-label-line { display: inline; }
+}
 .app-shell.live-prototype-workbench[data-design] .conversation-rail{position:fixed;inset:0 0 0 auto;width:var(--conversation-width);height:100dvh;max-height:none;margin:0;border:0;border-left:1px solid var(--line);border-radius:0}
 .live-prototype-workbench .live-artifact-grid{grid-template-columns:minmax(0,1fr);padding:0;gap:12px}
 .live-prototype-workbench .live-artifact-image{background:var(--panel)}

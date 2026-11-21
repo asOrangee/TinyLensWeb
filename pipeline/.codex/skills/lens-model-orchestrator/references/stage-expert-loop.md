@@ -21,7 +21,8 @@ paths, identifiers, parameter names and values, mathematical notation, and raw e
   GPU yourself.
 - Mutate the Lens Result Directory only through `<Lens Agent Command> attempt prepare`, `<Lens
   Agent Command> review context`, `<Lens Agent Command> review adjudicate`, `<Lens Agent Command>
-  attempt promote`, and physical execution through `<GPU Stage Command>`.
+  attempt promote`, and physical execution through `<GPU Stage Command>`. The Stage B Expert
+  may also use the dedicated `stage-b prescan` and `stage-b select` commands below.
 - Write every agent-authored temporary response, draft, or auxiliary file only in the absolute
   `Agent Temporary Directory` supplied by the orchestrator, outside the Lens Result Directory.
   Use `attempt-<number>-response.json` for a proposed response and pass its absolute path with
@@ -47,16 +48,59 @@ paths, identifiers, parameter names and values, mathematical notation, and raw e
 
 ## Start or resume
 
+For initial Stage B only, run `<Lens Agent Command> stage-b prescan --lens-dir <input-lens>
+--output-dir <lens-result>` after verifying the accepted A. This writes one shared-scale diagnostic
+and a manifest for twenty masks at integer residual S/N thresholds 1 through 20. The minimum
+island size and closing setting come from the accepted configuration. In runs marked
+`stage_b_expansion_policy: snr-threshold.v1`, each candidate's threshold determines the outward
+expansion: 0 pixels below 5, 1 pixel from 5 through 10 inclusive, and 2 pixels above 10.
+Earlier runs use their saved expansion setting. Read the diagnostic and manifest and compare all twenty masks
+against the accepted Stage A model image and Predicted Image Family. On resume with a previously
+sealed S/N 2–10 prescan, compare the nine candidates recorded in its existing manifest.
+
+First assess coverage of the Stage A predicted image positions and all credible observed arc
+emission, including supported faint arc tails and counterimages. Position coverage is a mechanical
+check. Use the observed morphology and continuity to assess coverage of extended emission.
+Give priority to full coverage of credible arc signal.
+
+Among candidates with comparable credible coverage, prefer the mask with the smoother boundary
+and the tighter fit around the arc emission. Look for a contour that follows the observed shape
+with less unrelated peripheral area, fewer narrow spurs and fewer isolated noise islands.
+Judge smoothness and compactness relative to the credible arc morphology of this lens. A
+threshold's numerical value, the mask's pixel count, and the component count are descriptive
+evidence. Base the preference on which actual features each mask includes and excludes.
+Moving across 5 or 10 can change both the S/N cutoff and the outward expansion, so compare
+the resulting footprints directly.
+
+Select one credible starting mask, or select the best safely repairable starting point when none
+provides sufficient coverage. In the scientific rationale, identify the credible signal retained
+and the unrelated areas reduced compared with the closest plausible alternative. If every
+candidate misses credible signal or includes unrelated area, describe the remaining issue in
+the rationale for formal review. Register the threshold and rationale through
+`<Lens Agent Command> stage-b select
+--output-dir <lens-result> --attempt <number> --threshold <integer> --reason <rationale>`.
+The numbered parent directory of the prescan manifest gives the next attempt. Execute that number
+through the GPU Stage Command and perform the full formal review. Candidates consume no retries.
+
+When the orchestrator has explicit Stage B-only restart authorization, add `--restart` to both
+Stage B commands. Use the new attempt number after the terminal B Human Review. The approved
+restart is recorded alongside its original decision hash. Preserve the old decision and assess the
+new attempt independently. On resume, an already registered candidate is authoritative. Once the
+new attempt has started, follow its normal review and retry lineage. An older B Human Review bound
+to a registered restart remains historical evidence.
+
 1. Reread the current stage's Accepted Stage Head and numbered Stage Attempt Records.
 2. If the current stage already has an Accepted Stage Head, report `accepted` and stop without
    rerunning it.
-3. If any attempt has a `human_review` decision, report that terminal evidence and stop.
+3. If an attempt has an unsuperseded `human_review` decision, report that terminal evidence and stop,
+   unless the orchestrator explicitly authorized the Stage B-only restart above.
 4. If an attempt has an `accept` decision but no Accepted Stage Head, repeat `attempt promote` for
    that attempt.
 5. If the latest attempt has a `retry` decision and no next attempt, invoke the GPU Stage Command
    for the next number. It prepares the authorized configuration from the canonical parent review
    and decision before allocating a GPU.
 6. If no attempt exists, invoke the GPU Stage Command with `--attempt 0`; preparation is automatic.
+   For Stage B, first register the selected prescan threshold as above.
    For optional subhalo, first complete candidate registration and confirmed preview as specified
    in `stage-subhalo.md`; its two additional mutation commands are permitted.
 7. A prepared attempt with neither `stage-execution.json` nor `stage-result.json` may run once. An
@@ -100,9 +144,16 @@ Source Grid Enlargement policy, exact old and new values, warning lineage, stage
 budgets, decision mapping, and sealed attempts.
 Never substitute an Agent message for the resulting `decision.json` or Accepted Stage Head.
 
-When no allowed one-setting repair is scientifically credible, return the blocker with
-`retry_repair: null`, optionally add a non-executable `development_recommendation`, and let
-adjudication route the lens to Human Review. Never roll back an accepted upstream stage.
+Before submitting a response that would route to Human Review, check the referenced artifacts
+and the user's applicable standing rules. State which scientific conclusion depends on the
+unresolved evidence and whether an allowed local action can resolve it. Proceed with a supported
+in-scope default or permitted retry when it can resolve the issue. Use the stage's existing
+finding or warning fields for bounded uncertainty that leaves its acceptance criteria satisfied.
+
+When a material blocker remains and no allowed local repair is scientifically credible, return
+the blocker with `retry_repair: null` if the stage schema includes that field, optionally add a
+non-executable `development_recommendation`, and let adjudication route the lens to Human Review.
+Never roll back an accepted upstream stage.
 
 For M0, use its dedicated response schema: report only `grid_sufficient`,
 `source_bbox_truncation`, or `indeterminate`, and never supply a Retry Repair Proposal. A canonical

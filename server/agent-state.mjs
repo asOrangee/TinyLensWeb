@@ -6,9 +6,17 @@ export const WORKSPACE = connectionConfig.workspace;
 export const DATASET = connectionConfig.dataset;
 const statuses = ['idle', 'running', 'waiting', 'interrupted', 'completed', 'failed'];
 const terminal = ['completed', 'interrupted', 'failed'];
+const retryErrors = new WeakMap();
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const list = value => Array.isArray(value) ? structuredClone(value) : [];
 const tail = (text = '', n = 24000) => String(text).slice(-n);
+export function activeRetryError(state) {
+  const retry = retryErrors.get(state);
+  return retry && retry.turnId === state.turnId ? retry.message : null;
+}
+function clearRetryOnResponse(state, turnId, text) {
+  if (turnId === state.turnId && typeof text === 'string' && text.trim()) retryErrors.delete(state);
+}
 export function initialState(saved = {}) {
   if (!record(saved)) saved = {};
   const messages = list(saved.messages).filter(record);
@@ -42,12 +50,14 @@ export function applyTurn(state, turn) {
   if (turn.status === 'inProgress') {
     // An RPC response may arrive after the completion notification for this turn.
     if (state.finishedTurnIds.includes(turn.id) || (state.turnId && state.turnId !== turn.id)) return false;
+    if (state.turnId !== turn.id) retryErrors.delete(state);
     state.turnId = turn.id; state.lastTurnId = turn.id; state.remoteActive = true;
     state.requests = state.requests.filter(request => (request.scope?.rootTurnId ?? request.params.turnId) === turn.id);
     state.error = null; refreshStatus(state); return true;
   }
   if (!terminal.includes(turn.status) || (state.turnId && state.turnId !== turn.id)
     || (!state.turnId && state.lastTurnId && state.lastTurnId !== turn.id)) return false;
+  retryErrors.delete(state);
   state.turnId = null; state.lastTurnId = turn.id; state.remoteActive = false;
   state.finishedTurnIds = [...new Set([...state.finishedTurnIds, turn.id])].slice(-100);
   state.requests = state.requests.filter(request => (request.scope?.rootTurnId ?? request.params.turnId) !== turn.id);
@@ -80,11 +90,13 @@ export function receiveNotification(state, method, params = {}) {
     if (message?.complete) return false;
     if (!message) { message = { id: params.itemId, role: 'assistant', text: '' }; state.messages.push(message); }
     message.text += params.delta;
+    clearRetryOnResponse(state, params.turnId, params.delta);
   } else if ((method === 'item/started' || method === 'item/completed') && record(item) && typeof item.id === 'string') {
     if (item.type === 'agentMessage') {
       let message = state.messages.find(m => m.id === item.id);
       if (!message) { message = { id: item.id, role: 'assistant', text: '' }; state.messages.push(message); }
       if (message.complete && method === 'item/started') return false;
+      if (!message.complete && method === 'item/completed') clearRetryOnResponse(state, params.turnId, item.text);
       if (typeof item.text === 'string') message.text = item.text;
       message.phase = item.phase; message.complete = method === 'item/completed';
     } else if (['commandExecution', 'fileChange', 'collabAgentToolCall', 'dynamicToolCall', 'mcpToolCall', 'webSearch'].includes(item.type)) {
@@ -114,7 +126,15 @@ export function receiveNotification(state, method, params = {}) {
     else if (params.status.type === 'systemError') { state.status = 'failed'; state.error = 'The pipeline AI reported a system error'; }
   } else if (method === 'error') {
     if (params.turnId && params.turnId !== state.turnId) return false;
-    state.error = params.error?.message || params.message || 'AI protocol error';
+    const error = params.error?.message || params.message || 'AI protocol error';
+    const currentTurn = state.turnId && params.turnId === state.turnId && params.threadId === state.threadId;
+    if (params.willRetry === true) {
+      if (!currentTurn) return false;
+      retryErrors.set(state, { turnId: state.turnId, message: error });
+    } else {
+      if (currentTurn) retryErrors.delete(state);
+      state.error = error;
+    }
   } else return false;
   state.activities = state.activities.slice(-120);
   return true;
@@ -148,11 +168,13 @@ export function restoreThread(state, thread, turns = thread?.turns || []) {
     // A persisted in-progress turn on an idle runtime is interrupted, not running.
     state.lastTurnId = latest.id; state.status = 'interrupted';
   } else if (!latest && ['running', 'waiting'].includes(state.status)) state.status = 'interrupted';
+  if (retryErrors.get(state)?.turnId !== state.turnId) retryErrors.delete(state);
   state.needsReconcile = false;
 }
 export const reportTool = {
   type: 'function', name: 'tinylens_ui_report',
-  description: 'Report verified stage status or an existing artifact to the TinyLens interface. Use schema tinylens.stage-report.v1 with the run_id from run-manifest.json, its original absolute run_path, lens_id, stage (preflight, a, b, m0, m1, m2, m3), and attempt (null for preflight). For stage reports use running, executed, awaiting_review, reviewing, accepted, human_review, retry, failed or another declared status. Verify the accepted head before reporting accepted and put its absolute path in path (the canonical inspector.json for preflight). Report a published display-manifest.json as display_manifest or report the existing display directory as an artifact. After a full rerun archives a reported run, report the archived run-manifest.json as a preflight artifact with the archived run’s original run_id and run_path. For runs without run_id, report the explicit attempt file paths. This tool only updates the UI and never constitutes approval or scientific acceptance. ' + QUESTION_FORMAT,
+  description: 'Report verified stage status or an existing artifact to the TinyLens interface. Use schema tinylens.stage-report.v1 with the run_id from run-manifest.json, its original absolute run_path, lens_id, stage (preflight, a, b, m0, m1, m2, m3), and attempt (null for preflight). For stage reports use running, executed, awaiting_review, reviewing, accepted, human_review, retry, failed or another declared status. Verify the accepted head before reporting accepted and put its absolute path in path (the canonical inspector.json for preflight). Report a published display-manifest.json as display_manifest or report the existing display directory as an artifact. After a full rerun archives a reported run, report the archived run-manifest.json as a preflight artifact with the archived run’s original run_id and run_path. For runs without run_id, report the explicit attempt file paths. This tool only updates the UI and never constitutes approval or scientific acceptance. ' + QUESTION_FORMAT
+    + ' A short workbench task name uses kind note, stage task_name, status suggested, title, and the exact message Workbench task name.',
   inputSchema: { type: 'object', properties: {
     kind: { type: 'string', enum: ['stage', 'artifact', 'note'] }, stage: { type: 'string' }, status: { type: 'string' },
     title: { type: 'string' }, message: { type: 'string' }, path: { type: 'string' }, ...stageReportFields,
@@ -236,6 +258,7 @@ export function validateReply(request, result) {
   throw new Error('This request needs a supported reply form; no automatic approval was sent');
 }
 export function disconnected(state, error) {
+  retryErrors.delete(state);
   if (state.turnId || state.remoteActive || state.status === 'waiting') state.status = 'interrupted';
   state.turnId = null; state.remoteActive = false; state.requests = [];
   state.connection = 'error'; state.error = error;

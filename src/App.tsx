@@ -1,10 +1,11 @@
 import {useScaledPlanes} from './lib/use-scaled-planes';
 import {useDemoInput} from './lib/use-demo-input';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDownToLine, ArrowRight, BookOpen, ChevronRight, CircleHelp, Cpu, ExternalLink, FlaskConical, GitBranch, Info, Layers3, LayoutDashboard, LoaderCircle, Search, Settings2, SlidersHorizontal, X } from 'lucide-react';
+import { ArrowDownToLine, ArrowRight, BookOpen, CircleHelp, Cpu, ExternalLink, FlaskConical, Info, Layers3, LayoutDashboard, LoaderCircle, Search, Settings2, SlidersHorizontal, X } from 'lucide-react';
 import { stages as originalStages } from './data/stages';
 import type { StageId, Parameter } from './data/stages';
-import { advanceDemoRun, demoLenses, downloadJSON, initialRun, lastLensConversationAt, lensBranches, readRuns, stageOrder } from './lib/workspace';
+import { advanceDemoRun, demoLenses, downloadJSON, initialRun, lastLensConversationAt, readRuns, stageOrder } from './lib/workspace';
+import { demoStageHistory } from './lib/demo-stage-history';
 import type { LightModels, Run } from './lib/workspace';
 import ScienceViewer from './components/ScienceViewer';
 import StageWorkbench from './components/StageWorkbench';
@@ -17,6 +18,7 @@ import ParameterManual from './components/ParameterManual';
 import PreflightViewer from './components/PreflightViewer';
 import DemoSidebar from './components/DemoSidebar';
 import DeletedTaskList from './components/DeletedTaskList';
+import StageHistoryChart from './components/StageHistoryChart';
 import BlankTaskWorkspace from './components/BlankTaskWorkspace';
 import { activeTaskStorageKey, createBlankTask, patchTask, readActiveTask, readTasks, submitTaskMessage, tasksStorageKey, deletedLensesStorageKey, purgedLensesStorageKey, hideLens, readDeletedLenses, restoreLens } from './lib/demo-tasks';
 import ConversationRail, { type ConversationMessage } from './components/ConversationRail';
@@ -24,7 +26,7 @@ import { readDemoMessages, type DemoMessage } from './lib/demo-conversation';
 import PositionLikelihoodEditor from './components/PositionLikelihoodEditor';
 import {useImageScale} from './lib/use-image-scale';
 import preflightFixtures from './data/preflight-demo.json';
-import { draftFromPositionRequest, emptyPositionDraft, mergePositionPrompt, positionError, positionPrompt, positionRequest, validStoredPositionDraft, type PositionContext, type PositionDraft } from './lib/position-likelihood';
+import { draftFromPositionRequest, emptyPositionDraft, mergePositionPrompt, positionError, positionPrompt, positionRequest, restorePositionDraft, type PositionContext, type PositionDraft } from './lib/position-likelihood';
 import { createInitialMask } from './components/MaskEditor';
 import DemoMaskEditor from './components/DemoMaskEditor';
 import { EvidenceChart } from './components/PosteriorChart';
@@ -78,7 +80,7 @@ export default function App() {
   const run=runs.find(r=>r.id===runId) ?? runs.find(r=>r.lensId===lensId) ?? runs[0] ?? initialRun(lensId,createInitialMask());
   const stage=getStage(stageId);
   const posteriorParameters=parametersForPosterior(stage.id,stage.parameters);
-  const branches=lensBranches(runs,lensId);
+  const branches=modal==='history'&&!activeTask ? demoStageHistory(runs,lensId) : undefined;
   const parameter=stage.parameters.find(parameter=>parameter.key===parameterKey)??catalogParameters(stage).find(parameter=>parameter.key===parameterKey);
   const stageIndex=stageOrder.indexOf(stageId);
   const runIndex=runs.filter(r=>r.lensId===lensId).findIndex(r=>r.id===run.id)+1;
@@ -88,7 +90,7 @@ export default function App() {
   const [imageScale,setImageScale]=useImageScale('demo');
   const numericInput=useDemoInput(stageId==='preflight');
   const positionContext:PositionContext={target:lensId,synthetic:true,stage:'preflight',image:numericInput?.planes.find(p=>p.id==='data')?.variants[imageScale]?.src,frame:{shape:preflightFixtures.planes.find(p=>p.id==='data')!.shape as [number,number],pixelScale:preflightFixtures.pixel_scale_arcsec,xDirection:'increasing',yDirection:'decreasing'}};
-  const positionValue=validStoredPositionDraft(draft.position)?draft.position:run.positionLikelihood?draftFromPositionRequest(run.positionLikelihood):emptyPositionDraft();
+  const positionValue=restorePositionDraft(draft.position)??(run.positionLikelihood?draftFromPositionRequest(run.positionLikelihood):emptyPositionDraft());
   const positionManual=!!draft.positionPrompt&&!(draft.comment??'').includes(draft.positionPrompt);
   const editMask=drafts[`${run.id}:b`]?.mask??run.mask;
   const editModels=drafts[`${run.id}:a`]?.models??run.models;
@@ -220,12 +222,21 @@ export default function App() {
     </div>
     <ConnectionStatusBar connected={serverConnected}/>
 
-    <dialog ref={dialog} className={`modal modal-${modal}`} onCancel={()=>setModal(null)} onClick={e=>{if(e.target===dialog.current)setModal(null);}} aria-labelledby="modal-title"><div className="modal-header"><div>{modal!=='parameter'&&<span className="eyebrow">TINYLENS WORKSPACE</span>}<h2 id="modal-title">{modal==='trash'?t('已删除任务'):modal==='design'?t("外观与构图方案"):modal==='history'?t('{lens} 的分支历史',{lens:activeTask?taskName(activeTask.id):lensId}):modal==='manual'?t("参数手册"):modal==='settings'?t("连接与设置"):modal==='parameter'?t(parameter?.name??''):t("欢迎来到 TinyLens")}</h2></div><button className="icon-button" aria-label={t("关闭窗口")} onClick={()=>setModal(null)}><X size={20}/></button></div><div className="modal-body">
+    <dialog ref={dialog} className={`modal modal-${modal}`} onCancel={()=>setModal(null)} onClick={e=>{if(e.target===dialog.current)setModal(null);}} aria-labelledby="modal-title"><div className="modal-header"><div>{(modal==='settings'||modal==='design')&&<span className="eyebrow">TINYLENS WORKSPACE</span>}<h2 id="modal-title">{modal==='trash'?t('已删除任务'):modal==='design'?t("外观与构图方案"):modal==='history'?t('{lens} 的分支历史',{lens:activeTask?taskName(activeTask.id):lensId}):modal==='manual'?t("参数手册"):modal==='settings'?t("连接与设置"):modal==='parameter'?t(parameter?.name??''):t("欢迎来到 TinyLens")}</h2></div><button type="button" className="workspace-dialog-close" aria-label={t("关闭窗口")} onClick={()=>setModal(null)}><X size={20} aria-hidden="true"/></button></div><div className="modal-body">
       {modal==='trash'&&<DeletedTaskList tasks={allLenses.filter(lens=>deletedLenses.includes(lens.id)).map(lens=>({id:lens.id,name:'kind' in lens?lens.name:t(lens.name)}))} onRestore={id=>setDeletedLenses(previous=>restoreLens(previous,id))} onDelete={permanentlyDeleteLens}/>}
       {modal==='design'&&<DesignGallery value={designId} onChange={id=>{chooseDesign(id);setModal(null);}}/>}
       {modal==='history'&&!activeTask&&<button className="button secondary branch-export" onClick={exportRun}><ArrowDownToLine size={15}/>{t("导出当前演示记录")}</button>}
       {modal==='history'&&activeTask&&<p className="section-caption">{t('此任务尚无运行版本。')}</p>}
-      {modal==='history'&&!activeTask&&<><p className="section-caption">{t("{lens} 的全部本地演示版本，旧掩膜与意见保持可查看。",{lens:lensId})}</p><div className="run-history branch-history">{branches.map(({run:r,version,depth,parentVersion})=><div className="branch-entry" key={r.id} data-depth={depth} style={{marginLeft:Math.min(depth,4)*18}}><button className={r.id===run.id?'selected':''} aria-current={r.id===run.id?'true':undefined} onClick={()=>{setRunId(r.id);setModal(null);}}><span className="run-icon"><GitBranch size={19}/></span><div><strong>Version {String(version).padStart(2,'0')}<span className="tag">{r.status==='complete'?t("演示完成"):r.status==='running'?t("模拟中"):t("已中断")}</span></strong><small className="branch-origin">{parentVersion?t('从 Version {version} 分支',{version:String(parentVersion).padStart(2,'0')}):t('初始分支')}</small><p>{runComment(r)}</p><small>{r.requestedStages?`${prettyDate(r.createdAt,language)} · ${r.requestedStages.map(id=>stageNavigationTitle(getStage(id))).join(', ')}`:t("{date} · 从 {stage} 开始",{date:prettyDate(r.createdAt,language),stage:getStage(r.from).code})}</small></div><ChevronRight size={16}/></button></div>)}</div></>}
+      {branches&&<>
+        <p className="section-caption">{t('{lens} 的全部本地演示版本，旧掩膜与意见保持可查看。',{lens:lensId})}</p>
+        <StageHistoryChart {...branches} stageLabel={id=>getStage(id).code} renderNode={({run:r,version}, node)=><button type="button" className="stage-history-attempt"
+          title={`${prettyDate(r.createdAt,language)} · ${runComment(r)}`}
+          aria-current={r.id===run.id&&node.stage===stageId?'true':undefined} onClick={()=>{setRunId(r.id);chooseStage(node.stage);setModal(null);}}>
+          <span className="stage-history-attempt__title">Version {String(version).padStart(2,'0')}</span>
+          <span className="stage-history-attempt__meta">{prettyDate(r.createdAt,language)}</span>
+          <span className="stage-history-attempt__status">{r.status==='complete'?t('演示完成'):r.status==='running'?t('模拟中'):t('已中断')}</span>
+        </button>}/>
+      </>}
       {modal==='manual'&&<ParameterManual stages={stages} onSelect={(s,p)=>{chooseStage(s.id);setParameterKey(p.key);setModal('parameter');}}/>}
       {modal==='parameter'&&parameter&&<ParameterDetail parameter={parameter}/>}
       {modal==='settings'&&<><div className="connection-preview"><span className="connection-large"><Cpu size={27}/></span><h3>{t("本地交互预览")}</h3><p>{t("服务器 API 尚未接入。现在可以体验 Stage、mask 编辑、参数查看和版本流程。")}</p></div><div className="config-details"><div><span>{t("计划连接方式")}</span><strong>{t("本地代理 + SSH 隧道")}</strong></div><div><span>{t("SSH 别名")}</span><strong>gpu</strong></div><div><span>{t("计算执行端")}</span><strong>{t("远程 TinyLens pipeline")}</strong></div><div><span>{t("GPU 状态")}</span><strong>{t("未查询")}</strong></div><div><span>{t("当前存储")}</span><strong>{storageError?t("不可用，请导出记录"):t("浏览器 localStorage")}</strong></div></div><button className="button secondary" onClick={exportRun}><ArrowDownToLine size={15}/>{t("导出当前演示记录")}</button></>}

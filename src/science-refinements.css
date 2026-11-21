@@ -4,20 +4,19 @@
 .app-shell[data-design] .science-viewer .science-scale>span{color:#fff}
 .app-shell[data-design] .science-viewer .science-crosshair i{border-color:#fff}
 .app-shell[data-design] .science-viewer .science-crosshair b{border-color:#fff}
-.science-viewer{--science-bar-width:52px;--science-bar-gap:3px}
-.preflight-viewer{--science-bar-width:60px}
-.science-plane-body{display:grid;grid-template-columns:minmax(0,1fr) minmax(var(--science-bar-width),max-content);gap:var(--science-bar-gap);align-items:stretch;min-width:0}
-.science-colorbar-column{position:relative;min-width:0;align-self:stretch;color:#000;font:10px/1.2 var(--mono)}
+.science-viewer{--science-bar-width:60px;--science-bar-gap:3px}
+.science-plane-body{display:grid;grid-template-columns:minmax(0,1fr) var(--science-bar-width);gap:var(--science-bar-gap);align-items:stretch;min-width:0}
+.science-colorbar-column,.joint-contour-plot canvas{font:10px/1.2 var(--mono)}
+.science-colorbar-column{position:relative;min-width:0;align-self:stretch;color:#000}
+.science-colorbar-unit{position:absolute;inset-inline:0;bottom:calc(100% + 3px);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .app-shell[data-design="observatory"] .science-colorbar-column{background:#f6f8fc;border-radius:2px}
 .app-shell[data-design] .science-colorbar-column>.science-colorbar{position:absolute;inset:0 auto 0 0;width:5px;height:auto;min-height:0;flex:none;border-radius:2px;background:linear-gradient(to top,#000003,#0a0722,#1c1046,#350f6a,#50127b,#691c80,#822581,#9c2e7f,#b63679,#ce4070,#e55063,#f4685b,#fb8660,#fda470,#fec286,#fddfa1,#fbfcbf)}
 .app-shell[data-design] .science-colorbar-column>.science-colorbar.red-blue{background:linear-gradient(to top,#1b4c70,#5791ac,#b3cfd9,#f3f2ed,#e2beae,#bc6f5b,#7b2627)}
 .app-shell[data-design] .science-colorbar-column>.science-colorbar.is-constant{background:url('/demo/preflight/noise-linear.png') center / 100% 100% no-repeat}
 .science-colorbar-tick{position:absolute;left:0;right:0;height:0;color:#000}
 .science-colorbar-tick>i{position:absolute;left:5px;top:0;width:3px;border-top:1px solid #000}
-.science-colorbar-tick>span{position:absolute;left:10px;top:0;white-space:nowrap;color:#000;font-size:10px}
-.science-scale-number{display:inline-grid;grid-template-columns:1ch var(--scale-integer-width) 1ch 2ch;font-variant-numeric:tabular-nums;letter-spacing:0}
-.science-scale-sign,.science-scale-dot,.science-scale-decimal{text-align:left}
-.science-scale-integer{text-align:right}
+.science-colorbar-tick>span{position:absolute;left:9px;right:0;top:0;text-align:left;white-space:nowrap;color:#000;font-size:10px}
+.science-scale-number{font-variant-numeric:tabular-nums;letter-spacing:0}
 .app-shell[data-design] .model-viewer .science-panels{gap:4px 6px}
 .app-shell[data-design] :is(.model-viewer,.preflight-viewer) .science-plane-heading{display:flex;justify-content:center;align-items:center;text-align:center;white-space:normal;width:calc(100% - var(--science-bar-width) - var(--science-bar-gap));min-height:22px;margin-bottom:5px}
 .app-shell[data-design] :is(.model-viewer,.preflight-viewer) .science-plane-heading strong{width:100%;text-align:center;letter-spacing:0;font-size:12px;line-height:1.45}
@@ -42,11 +41,14 @@
 .stage-content-header:has(.preflight-toolbar) .stage-viewer-tools{margin-left:auto}
 .stage-viewer-tools .preflight-scale-controls select{font-size:10px}
 .app-shell.demo-workspace[data-design] .stage-viewer-tools .science-toolbar{display:flex;align-items:center;gap:5px;flex-wrap:nowrap;margin:0;padding-bottom:3px}
-.stage-viewer-tools .science-icon-button{display:grid;place-items:center;width:28px;height:28px;padding:0;border-radius:5px}
+.science-icon-button{display:grid;place-items:center;flex-shrink:0;width:28px;height:28px;padding:0;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--muted);cursor:pointer}
+.science-icon-button:is([aria-pressed="true"],[data-active="true"],:hover:not(:disabled)),.image-display-menu[open]>summary.science-icon-button{background:var(--green-soft);color:var(--green)}
+.science-icon-button:disabled{opacity:.55;cursor:default}
 .stage-viewer-tools .science-tools{gap:6px;margin:0;color:var(--muted)}
 .stage-viewer-tools .science-tools input{width:56px}
 .stage-viewer-tools .science-tools button{width:28px;height:28px;color:var(--muted)}
 .stage-viewer-tools .science-zoom-label{width:36px;font-size:9px;color:var(--muted)}
+.science-model-zoom .science-zoom-label{width:auto;margin-inline-end:-2.5px}
 .science-coordinate-readout{position:absolute;top:8px;right:8px;z-index:3;display:flex;flex-direction:column;align-items:flex-end;gap:2px;max-width:calc(100% - 16px);padding:3px 4px;border:0;border-radius:0;background:transparent;box-shadow:none;color:#fff;font:clamp(6.5px,1.1cqw,8.5px)/1.4 var(--mono);text-align:right;pointer-events:none;text-shadow:0 1px 2px #000}
 .science-coordinate-readout>span{display:block;white-space:nowrap}
 .science-coordinate-readout.is-image-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:3px 4px;width:min(224px,calc(100% - 48px));box-sizing:border-box;align-items:start;text-align:left;font-size:clamp(6px,.9cqw,7px);font-variant-numeric:tabular-nums}
@@ -58,9 +60,6 @@
 .science-lens-curves .curve-halo{stroke:#000;stroke-width:2.4;fill:none;stroke-linejoin:round}
 .science-lens-curves .curve-line{stroke:#fff;stroke-width:1.05;fill:none;stroke-linejoin:round}
 .science-lens-curves.critical-curves path{stroke-dasharray:none}
-.plane-link-toggle{display:flex;align-items:center;gap:5px;flex-shrink:0;padding:5px 7px;border:1px solid transparent;border-radius:5px;background:transparent;color:var(--muted);font-size:10px;cursor:pointer}
-.plane-link-toggle[aria-pressed="true"]{background:var(--green-soft);color:var(--green)}
-.plane-link-toggle:disabled{opacity:.55;cursor:default}
 .science-mapped-marker{position:absolute;width:11px;height:11px;transform:translate(-50%,-50%);border:1.5px solid #fff;border-radius:50%;box-shadow:0 0 0 1px #000b;pointer-events:none;z-index:2}
 .science-mapped-marker:before,.science-mapped-marker:after{content:"";position:absolute;background:#fff;box-shadow:0 0 1px #000}
 .science-mapped-marker:before{left:3.5px;top:-4px;width:1px;height:16px}
@@ -91,13 +90,27 @@
 .lens-sidebar[data-expanded="true"] .lens-trash-link{display:flex}
 .lens-item-row{display:flex;align-items:center;min-width:0;border:1px solid transparent;border-radius:8px;overflow:hidden}
 .lens-item-row.selected,.lens-item-row:hover{background:var(--lens-nav-active);border-color:color-mix(in srgb,var(--lens-nav-accent) 26%,transparent)}
-.lens-sidebar .lens-item-row .lens-item{flex:1;min-width:0;min-height:46px;border:0;background:transparent;border-radius:0}
+/* Leave room for the thumbnail and its padding as the row actions appear. */
+.lens-sidebar .lens-item-row .lens-item{flex:1;min-width:40px;min-height:46px;border:0;background:transparent;border-radius:0}
 .lens-sidebar .lens-item-row .lens-item-meta{display:none;min-width:0;width:0;flex:1}
 .lens-sidebar[data-expanded="true"] .lens-item-row .lens-item-meta{display:flex;width:auto}
 .lens-sidebar .lens-item-row .lens-item-meta strong,.lens-sidebar .lens-item-row .lens-item-meta time{max-width:164px}
+.lens-sidebar .lens-item-row .lens-item-meta time{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .lens-delete-button{display:none;align-items:center;justify-content:center;width:26px;height:30px;flex:0 0 26px;margin:0 5px 0 0;padding:0;background:transparent;border:0;border-radius:5px;color:var(--lens-nav-ink);cursor:pointer}
 .lens-sidebar[data-expanded="true"] .lens-delete-button{display:flex}
 .lens-delete-button:hover{background:color-mix(in srgb,#b23e42 12%,transparent);color:#b23e42}
+html:has(.modal-trash[open]){overflow-y:hidden;scrollbar-gutter:auto}
+.app-shell[data-design] .modal.modal-history{max-width:900px}
+.modal-history[open]{display:flex;flex-direction:column;overflow:hidden}
+.modal-history .modal-header{flex-shrink:0}
+.modal-history .modal-header h2{overflow-wrap:anywhere}
+.modal-history .modal-body{min-height:0;max-height:none;overflow:auto;overscroll-behavior:contain}
+.modal-trash[open]{display:flex;flex-direction:column;overflow:hidden}
+.modal-trash .modal-header{flex-shrink:0}
+.modal-trash .modal-body{min-height:0;max-height:none;overflow-y:auto;overscroll-behavior:contain}
+.workspace-dialog-close{display:grid;place-items:center;flex:0 0 32px;width:32px;height:32px;padding:0;border:0;border-radius:4px;background:transparent;color:inherit;cursor:pointer}
+.workspace-dialog-close:focus-visible{outline:2px solid currentColor;outline-offset:2px}
+.workspace-dialog-close:disabled{cursor:default}
 .deleted-lens-list{display:flex;flex-direction:column;gap:8px}
 .deleted-lens-list>div{display:flex;flex-direction:column;gap:12px;padding:10px 12px;border:1px solid var(--line);border-radius:7px}
 .deleted-lens-list strong{font-size:12px;overflow-wrap:anywhere}
@@ -106,4 +119,7 @@
 .app-shell[data-design] .deleted-lens-list .button.deleted-task-danger{color:#ad363e;border-color:color-mix(in srgb,#ad363e 35%,var(--line))}
 .deleted-task-confirmation{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--line);padding-top:10px}
 .deleted-task-confirmation p,.deleted-task-error{margin:0;font-size:12px;line-height:1.6}
+.deleted-task-plan{display:flex;flex-direction:column;gap:4px;min-width:0}
+.deleted-task-plan ul{margin:0 0 6px;padding-inline-start:1.25em;font-size:12px;line-height:1.5}
+.deleted-task-plan code{overflow-wrap:anywhere}
 .deleted-task-error{color:#ad363e}

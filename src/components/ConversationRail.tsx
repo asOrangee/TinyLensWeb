@@ -13,7 +13,7 @@ type Props = {
   disabled?: boolean; busy?: boolean; replyPending?: boolean; error?: string; textareaId: string;
   inputRef?: RefObject<HTMLTextAreaElement | null>; onInterrupt?: () => void | Promise<unknown>; attention?: ReactNode; attentionCount?: number;
   interruptAvailable?: boolean; steerAvailable?: boolean; newTask?: boolean; inactive?: boolean; composerOnly?: boolean;
-  connectionAction?: ReactNode; conversationId?: string; aiName?: string;
+  connectionAction?: ReactNode; conversationId?: string; aiName?: string; finalResult?: ReactNode;
 };
 export default function ConversationRail(props: Props) {
   const { t } = useDemoI18n();
@@ -83,7 +83,7 @@ export default function ConversationRail(props: Props) {
     window.addEventListener('resize', resizeInput);
     return () => { observer.disconnect(); theme.disconnect(); window.removeEventListener('resize', resizeInput); };
   }, [resizeInput, props.composerOnly]);
-  useEffect(() => { if (pinned.current && log.current) log.current.scrollTop = log.current.scrollHeight; }, [props.messages, props.attentionCount, props.replyPending]);
+  useEffect(() => { if (pinned.current && log.current) log.current.scrollTop = log.current.scrollHeight; }, [props.messages, props.attentionCount, props.replyPending, !!props.finalResult]);
   const hasDraft = !!props.value.trim();
   const steering = props.busy && props.steerAvailable;
   const stopButton = canInterrupt && !(steering && hasDraft);
@@ -129,6 +129,7 @@ export default function ConversationRail(props: Props) {
           {!!message.stages?.length && <div className="conversation-message-stages">{message.stages.map(stage => <span key={stage}>{requestStageLabel(stage)}</span>)}</div>}
           {message.note && <small className="conversation-message-note">{message.note}</small>}
         </article>)}
+        {props.finalResult}
         {props.replyPending && <div className="conversation-typing" role="status" aria-label={t('AI 正在处理，回复尚未结束')}><span className="conversation-typing-dot" aria-hidden="true"/><span className="conversation-typing-dot" aria-hidden="true"/><span className="conversation-typing-dot" aria-hidden="true"/></div>}
         {props.attention && <div className="conversation-attention">{props.attention}</div>}
       </div>

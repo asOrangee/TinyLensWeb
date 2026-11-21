@@ -53,7 +53,13 @@ export const attemptStatus = (value?: string) => {
   return Object.hasOwn(aliases, status) ? aliases[status] : status;
 };
 
-export type StageAttempt = { identity: AttemptIdentity; status?: string; report?: AgentUpdate; archived: boolean };
+export type StageAttempt = {
+  identity: AttemptIdentity;
+  status?: string;
+  report?: AgentUpdate;
+  firstReportedAt?: string;
+  archived: boolean;
+};
 
 export function stageAttempts(updates: readonly AgentUpdate[]) {
   const attempts = new Map<string, StageAttempt>();
@@ -80,6 +86,12 @@ export function stageAttempts(updates: readonly AgentUpdate[]) {
     if (!identity) continue;
     const archived = archiveKeys.has(runKey(identity)) || (!identity.runId && /\/_archive\/[^/]+_old_\d+$/.test(identity.runPath));
     const current = attempts.get(identity.key) ?? { identity, archived };
+    if (update.at) {
+      const reportedAt = Date.parse(update.at);
+      if (Number.isFinite(reportedAt) && (!current.firstReportedAt || reportedAt < Date.parse(current.firstReportedAt))) {
+        current.firstReportedAt = update.at;
+      }
+    }
     if (status && current.status !== 'accepted') {
       current.status = status;
       current.report = update;

@@ -1,7 +1,7 @@
 import {numericalFixture} from './fixtures/numerical-plane.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { legacyAcceptanceReport, selectStageResults, stageDisplayCandidates, parseLiveResult } from '../src/lib/live-results.ts';
+import { inheritedConfigurationAnchor, legacyAcceptanceReport, selectStageResults, stageDisplayCandidates, parseLiveResult } from '../src/lib/live-results.ts';
 import type { AgentUpdate } from '../src/lib/agent-types.ts';
 import { parseReportedPanels } from '../src/lib/reported-panels.ts';
 import { currentStageAttempt, stageAttempts } from '../src/lib/stage-attempts.ts';
@@ -29,13 +29,29 @@ test('preflight parameters follow the current reported run and retain only saved
 });
 
 const artifact = (id: string, run: string, attempt: number, file: string, stage = 'a'): AgentUpdate => ({ id, kind: 'artifact', stage, path: `/project/output/${run}/lens/attempts/${stage}/${attempt}/${file}` });
-test('derived total-model and per-pixel chi-square planes retain the reported attempt and raw numeric range',()=>{
+
+test('inherited configuration can be requested only via a downstream report of the active run', () => {
+  const report = (runId: string, stage: string, file: string): AgentUpdate => ({
+    ...artifact(runId + stage, runId, 0, file, stage),
+    schema: 'tinylens.stage-report.v1', run_path: `/project/output/${runId}/lens`, run_id: runId, lens_id: 'lens', attempt: 0,
+  });
+  const old = report('old', 'm3', 'display-manifest.json');
+  const current = report('current', 'm0', 'stage-result.json');
+  const newest = report('fresh', 'm0', 'effective-config.json');
+  assert.equal(inheritedConfigurationAnchor([old, current])?.id, current.id);
+  assert.equal(inheritedConfigurationAnchor([old, current, newest]), undefined);
+  assert.equal(inheritedConfigurationAnchor([artifact('legacy', 'old', 0, 'stage-result.json', 'm3')]), undefined);
+});
+test('lens-light and legacy chi-square planes retain the reported attempt and raw numeric range',()=>{
  const update=artifact('summary','run',0,'stage-result.json');
  const plane={...numericalFixture([151,151]),shape:[151,151],bounds_arcsec:[-3.775,3.775,-3.775,3.775],half_extent_arcsec:3.775,vmin:0,vmax:9,data_min:0,data_max:64,stretch:'linear',asinh_a:1};
  const value={schema:'tinylens.readonly-result.v1',kind:'summary',stage:'a',attempt:0,path:update.path,result:{stage:'a',attempt:0,metrics:{}},planes:{model:plane,'chi-square':plane}};
  assert.equal(parseLiveResult(value,update).planes?.['chi-square']?.data_max,64);
+ assert.equal(parseLiveResult(value,update).planes?.['lens-light'],undefined);
+ const lensLight={...plane,data_max:9};
+ assert.equal(parseLiveResult({...value,planes:{...value.planes,'lens-light':lensLight}},update).planes?.['lens-light'],lensLight);
  assert.throws(()=>parseLiveResult({...value,attempt:1},update));
- assert.throws(()=>parseLiveResult({...value,planes:{...value.planes,model:{...plane,src:'/demo/model.png'}}},update));
+ assert.throws(()=>parseLiveResult({...value,planes:{...value.planes,'lens-light':{...lensLight,src:'/demo/lens-light.png'}}},update));
 });
 test('changing run or attempt never mixes old posterior, summary or diagnostic images', () => {
   const updates = [artifact('old-json', 'run1', 0, 'stage-result.json'), artifact('old-samples', 'run1', 0, 'artifacts/stage_a.pkl'), artifact('old-image', 'run1', 0, 'diagnostics/model.png'), artifact('new-json', 'run2', 0, 'stage-result.json'), artifact('new-image', 'run2', 0, 'diagnostics/model.png')];
@@ -102,6 +118,17 @@ test('a legacy accepted head can bind a unique earlier attempt in the same turn 
   assert.equal(stageAttempts([result, { ...accepted, turnId: 'different' }])[0].status, undefined);
   assert.ok(stageAttempts([result, { ...artifact('other', 'run1', 1, 'stage-result.json'), turnId: 'verified-turn' }, accepted])
     .every(item => item.status !== 'accepted'));
+});
+
+test('attempts retain their earliest valid report date regardless of delivery or acceptance order', () => {
+  const result = artifact('result', 'run', 1, 'stage-result.json', 'b');
+  const accepted: AgentUpdate = { ...result, kind: 'stage', status: 'accepted', at: '2026-11-21T04:00:00Z' };
+  const earlier = { ...result, at: '2026-11-21T10:00:00+08:00' };
+  const attempts = stageAttempts([accepted, { ...result, at: 'unavailable' }, earlier, { ...result, at: '2026-11-21T03:00:00Z' }]);
+
+  assert.equal(attempts[0].firstReportedAt, earlier.at);
+  assert.equal(attempts[0].status, 'accepted');
+  assert.equal(attempts[0].report, accepted);
 });
 
 test('legacy decisions and acceptance reports restore numeric displays only in the same unversioned run', () => {

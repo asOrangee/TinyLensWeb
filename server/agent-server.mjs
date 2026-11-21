@@ -13,11 +13,12 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { createAiNetworkProxy } from './ai-network-proxy.mjs';
+import { readTaskNameSuggestion } from './agent-task-names.mjs';
 import { prepareQuestionAnswer } from './agent-questions.mjs';
-import { initialState, receiveNotification, receiveReport, receiveRequest, validateReply, validateRequestScope,
+import { activeRetryError, initialState, receiveNotification, receiveReport, receiveRequest, validateReply, validateRequestScope,
   restoreThread, applyTurn, hasBlockingRequest, normalizeStage, disconnected, reportTool, WORKSPACE } from './agent-state.mjs';
 import { connectionConfig, appServerCommand } from './connection-config.mjs';
-import { readStageScope, stageReportSchema } from './stage-reports.mjs';
+import { isModelingCommentReport, readStageScope, stageReportSchema } from './stage-reports.mjs';
 import { dispatchBatchTool, prepareBatchTool, validBatchId } from './agent-batches.mjs';
 const defaultDirectory = fileURLToPath(new URL('../.local/', import.meta.url));
 function unusedThread(state) {
@@ -43,7 +44,8 @@ async function allocatedProxyPort(stderr, localPort, timeoutMs) {
 // Injection is solely for local protocol tests; the executable entry point uses SSH.
 export async function createAgentServer({ stateDirectory = defaultDirectory, spawnProcess = spawn, rpcTimeoutMs = 60000, logger = console,
   aiNetwork = false, networkProxyFactory = createAiNetworkProxy, remoteProxyPort = connectionConfig.remoteProxyPort, datasetPath,
-  stageScopeLookup = readStageScope, approvalsReviewer = connectionConfig.approvalsReviewer, batchRunPath, batchToolAccess } = {}) {
+  stageScopeLookup = readStageScope, approvalsReviewer = connectionConfig.approvalsReviewer, batchRunPath, batchToolAccess,
+  taskNameHandler } = {}) {
   if (!Number.isInteger(remoteProxyPort) || (remoteProxyPort !== 0 && remoteProxyPort < 1024) || remoteProxyPort > 65535) throw new Error('Invalid remote proxy port');
   const statePath = `${stateDirectory}/agent-state.json`;
   let saved;
@@ -59,7 +61,9 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
   if (batchToolAccess && saved?.batchDraft?.threadId === state.threadId) state.batchDraft = saved.batchDraft;
   const displayPublications = await readDisplayPublications(stateDirectory, logger);
   function publicState() {
-    const view = withDisplayPublications(state, displayPublications);
+    let view = withDisplayPublications(state, displayPublications);
+    const retryError = activeRetryError(state);
+    if (!view.error && retryError) view = { ...view, error: retryError };
     if (!view.batchDraft) return view;
     const { batchDraft, ...visible } = view;
     return { ...visible, batchPlan: batchToolAccess?.view(batchDraft) };
@@ -220,10 +224,31 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
                 await persist();
                 return JSON.stringify(result);
               }
-              validateRequestScope(state, message.params);
               if (tool !== reportTool.name) throw Error('Unexpected report source');
-              if (state.updates.some(update => update.callId === message.params.callId && update.turnId === message.params.turnId)) return;
               const report = message.params.arguments;
+              if (report?.stage === 'task_name') {
+                if (!taskNameHandler || threadId !== state.threadId) throw Error('Task names belong to their own workbench conversation.');
+                const name = readTaskNameSuggestion(report);
+                await pendingMessageRpc?.catch(() => {});
+                const ordinaryUser = () => state.messages.findLast(item => item.role === 'user' && !item.questionId);
+                const origin = ordinaryUser();
+                const assertCurrent = () => {
+                  if (closed || transport !== current) throw Error('The workbench conversation connection changed.');
+                  validateRequestScope(state, message.params);
+                  if (origin?.delivery !== 'delivered' || ordinaryUser() !== origin) {
+                    throw Error('A workbench task name requires a delivered user message.');
+                  }
+                };
+                assertCurrent();
+                await persist();
+                const published = await taskNameHandler({ name, threadId }, assertCurrent);
+                if (published) {
+                  for (const client of clients) if (!client.destroyed) client.write('event: task-name\ndata: {}\n\n');
+                }
+                return published ? 'Task name recorded by TinyLens.' : 'The existing task name was kept.';
+              }
+              validateRequestScope(state, message.params);
+              if (state.updates.some(update => update.callId === message.params.callId && update.turnId === message.params.turnId)) return;
               if (batchRunPath && (report?.schema === stageReportSchema ? report.run_path !== batchRunPath
                 : ['stage', 'artifact'].includes(report?.kind) && typeof report.path === 'string' && !report.path.startsWith(batchRunPath + '/'))) {
                 throw Error('The report belongs to a different batch lens.');
@@ -483,6 +508,20 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
     });
     if (request.method === 'GET' && path === '/api/agent/mask') return serveReportedMask(request, response, state, { cacheDirectory: resolve(stateDirectory, 'mask-cache') });
     if (request.method === 'GET' && path === '/api/agent/display') return serveReportedDisplay(request, response, publicState(), { cacheDirectory: resolve(stateDirectory, 'display-cache') });
+    if (request.method === 'GET' && path === '/api/agent/completion') {
+      const params = new URL(request.url, 'http://localhost').searchParams;
+      const updates = state.updates.filter(update => !update.threadId || update.threadId === state.threadId);
+      const report = updates.find(update => update.id === params.get('updateId'));
+      if (!report || report.schema !== stageReportSchema || report.kind !== 'stage' || report.status !== 'accepted' || report.stage !== 'm3') {
+        return json(response, 404, { error: 'No reported M3 acceptance.' });
+      }
+      const includeComment = updates.some(update => isModelingCommentReport(update) && update.run_id === report.run_id
+        && update.run_path === report.run_path && update.attempt === report.attempt);
+      try {
+        const completion = await stageScopeLookup(report, WORKSPACE, { completion: true, includeComment });
+        return json(response, completion ? 200 : 404, completion ?? { error: 'No verified completion.' });
+      } catch { return json(response, 404, { error: 'The reported M3 result could not be verified.' }); }
+    }
     if (request.method === 'GET' && path === '/api/agent/accepted-stage') return serveAcceptedDisplay(request, response, state, { cacheDirectory: resolve(stateDirectory, 'model-cache') });
     if (request.method === 'GET' && path === '/api/agent/input') return serveReportedInput(request, response, state, { cacheDirectory: resolve(stateDirectory, 'input-cache') });
     if (request.method === 'GET' && ['/api/agent/artifact', '/api/agent/panels'].includes(path)) return json(response,410,{error:'Scientific image panels require numerical outputs.'});

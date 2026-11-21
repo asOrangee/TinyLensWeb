@@ -50,5 +50,6 @@ export const connectionConfig = readConnectionConfig();
 export const shellQuote = value => "'" + String(value).replaceAll("'", "'\\''") + "'";
 export function appServerCommand(networkBootstrap = '', config = connectionConfig) {
   const home = config.codexHome ? `export CODEX_HOME=${shellQuote(config.codexHome)} && ` : '';
-  return `cd ${shellQuote(config.workspace)} && ${home}${networkBootstrap}exec ${shellQuote(config.codex)} app-server --listen stdio://`;
+  const python = `export TINYLENS_PIPELINE_PYTHON=${shellQuote(config.python)} && `;
+  return `cd ${shellQuote(config.workspace)} && ${home}${python}${networkBootstrap}exec ${shellQuote(config.codex)} app-server --listen stdio://`;
 }

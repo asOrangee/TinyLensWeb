@@ -35,10 +35,13 @@ def _likelihood(n=4, rho_mode="dynamic"):
 
 
 def test_pixel_overlay_uses_posterior_parameters_and_restores_model(tmp_path, monkeypatch):
-    p, likelihood, medians, names = _likelihood(n=80)
-    grid = p.source_grid_spec(center_x=0.0, center_y=0.0, level=0)
+    from lens_agent.modeling.source_grid import source_grid_spec
+
+    grid = source_grid_spec(center_x=0.0, center_y=0.0, level=0)
+    n = grid["nsrc"]
+    p, likelihood, medians, names = _likelihood(n=n)
     solved = {
-        "model_1d": np.ones(64), "source_image": np.ones((80, 80)),
+        "model_1d": np.ones(64), "source_image": np.ones((n, n)),
         "source_bbox": grid["pixel_center_bbox"],
     }
     seen = []
@@ -59,6 +62,8 @@ def test_pixel_overlay_uses_posterior_parameters_and_restores_model(tmp_path, mo
 def test_source_solution_reports_evaluated_rho_after_context_exit(rho_mode):
     p, likelihood, medians, names = _likelihood(rho_mode=rho_mode)
     solved = p._solve_source(likelihood, medians, names)
+    assert likelihood.solver_type == "fista"
+    assert np.all(solved["source_pixels"] >= 0.0)
     expected_rho = 5.47 if rho_mode == "dynamic" else 2.0
     assert solved["adaptive_reg_rho"] == pytest.approx(expected_rho)
     template = np.linspace(0.1, 1.0, 16)
@@ -66,6 +71,19 @@ def test_source_solution_reports_evaluated_rho_after_context_exit(rho_mode):
     np.testing.assert_allclose(solved["reg_scale_image"].ravel(), np.exp(expected_rho * (1 - brightness)), rtol=2e-6)
     rho = likelihood.phys_model.source_light[0].adaptive_reg_rho
     assert float(getattr(rho, "value", rho)) == pytest.approx(2.0)
+
+
+def test_m0_scan_does_not_treat_failed_source_solves_as_evidence():
+    pytest.importorskip("TinyLensGpu")
+    from lens_agent.modeling.pipeline_template import _scan_m0_evidence
+
+    grid = np.arange(3.0)
+    np.testing.assert_array_equal(
+        _scan_m0_evidence(lambda _: [-1.0e10, -45.0, np.nan], grid, "coarse"),
+        [-np.inf, -45.0, -np.inf],
+    )
+    with pytest.raises(RuntimeError, match="fine evidence grid has no converged"):
+        _scan_m0_evidence(lambda _: [-1.0e10, np.nan, np.inf], grid, "fine")
 
 
 def test_stage_a_workbench_exports_mapping_at_posterior_medians():
@@ -150,7 +168,8 @@ def test_pixel_workbench_exports_full_cutout_and_keeps_fitted_pixels(mass_kind):
 
     planes = capture["planes"]
     np.testing.assert_array_equal(capture["valid_domain"], ~mask)
-    assert set(planes) == {"source", "source-lensed", "model", "residual", "chi-square"}
+    assert set(planes) == {"source", "source-lensed", "lens-light", "model", "residual", "chi-square"}
+    np.testing.assert_array_equal(planes["lens-light"], lens_light)
     lensed = planes["source-lensed"]
     assert lensed.shape == observation.shape
     np.testing.assert_array_equal(lensed[~mask], solved["model_1d"])

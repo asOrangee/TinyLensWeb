@@ -6,9 +6,33 @@
     "schema": "tinylens.stage-parameters.v1",
     "suffix": "Parameters.json"
   },
+  "jointPosteriorFile": {
+    "schema": "tinylens.stage-joint-posterior.v1",
+    "suffix": "JointPosterior.json",
+    "maxValues": 1200000
+  },
   "mappingFile": {
     "schema": "tinylens.lens-mapping.v2",
     "suffix": "LensMapping.json"
+  },
+  "maskLayerFiles": {
+    "aperture": "ApertureMask",
+    "contamination": "ContaminationMask",
+    "arc": "ArcMask"
+  },
+  "rawArtifacts": {
+    "preflight": { "human_audit_png": "preflight_6panel.png", "inspector_prompt_png": "preflight_2panel.png" },
+    "a": { "model_png": "diagnostics/stage_a_model.png" },
+    "b": {
+      "stage_b_prescan_png": "diagnostics/stage_b_prescan.png",
+      "stage_b_mask_png": "diagnostics/stage_b_mask.png",
+      "stage_b_components_png": "diagnostics/stage_b_components.png",
+      "stage_b_morphology_audit_png": "diagnostics/stage_b_morphology_audit.png"
+    },
+    "m0": { "model_png": "diagnostics/stage_m0_model.png", "source_grid_png": "diagnostics/stage_m0_source_grid.png" },
+    "m1": { "model_png": "diagnostics/stage_m1_model.png" },
+    "m2": { "model_png": "diagnostics/stage_m2_model.png" },
+    "m3": { "model_png": "diagnostics/stage_m3_model.png" }
   },
   "stagePrefixes": {
     "preflight": "DataPreview",
@@ -26,6 +50,7 @@
     "psf": "PSFImage",
     "observation": "DataImage",
     "model": "ModelImage",
+    "lens-light": "LensLight",
     "source-lensed": "LensedSource",
     "source": "UnlensedSource",
     "residual": "NormalizedResidual",
@@ -40,6 +65,6 @@
   },
   "optional": {
     "b": ["source-lensed"],
-    "model": ["domain"]
+    "model": ["domain", "lens-light"]
   }
 }

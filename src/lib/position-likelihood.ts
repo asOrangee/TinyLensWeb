@@ -7,7 +7,8 @@ export type PositionFrame = {
 export type PositionView={zoom:number;pan:{x:number;y:number}};
 export type PositionSource={report_id:string;provenance_path:string;provenance_sha256:string;fits_path:string;fits_sha256:string};
 export type PositionContext = { target: string; synthetic: boolean; stage: string; frame?: PositionFrame; coordinateFrame?:PositionFrame; image?: string; imageReference?:string; source?:PositionSource };
-export const emptyPositionDraft = (): PositionDraft => ({ points: [], threshold: '0.1', strength: '10000000000' });
+const defaultPositionStrength = '10000000000';
+export const emptyPositionDraft = (): PositionDraft => ({ points: [], threshold: '0.05', strength: defaultPositionStrength });
 export const positionStart = '[TinyLens position likelihood]';
 export const positionEnd = '[/TinyLens position likelihood]';
 const finite = (value: string) => value.trim() !== '' && Number.isFinite(Number(value));
@@ -95,4 +96,12 @@ export function validStoredPositionDraft(value: unknown): value is PositionDraft
   if (!value || typeof value !== 'object') return false;
   const d = value as PositionDraft;
   return typeof d.threshold === 'string' && typeof d.strength === 'string' && (d.target === undefined || typeof d.target === 'string') && (d.inputFitsSha256===undefined||typeof d.inputFitsSha256==='string'&&/^[a-f0-9]{64}$/.test(d.inputFitsSha256)) && Array.isArray(d.points) && d.points.length <= 32 && d.points.every(p => p && typeof p.id === 'string' && typeof p.x === 'string' && typeof p.y === 'string');
+}
+
+export function restorePositionDraft(value: unknown): PositionDraft | undefined {
+  if (!validStoredPositionDraft(value)) return undefined;
+  // Older workspaces saved the default fields even before any positions were entered.
+  if (value.points.length === 0 && value.target === undefined && value.inputFitsSha256 === undefined
+      && value.threshold === '0.1' && value.strength === defaultPositionStrength) return emptyPositionDraft();
+  return value;
 }

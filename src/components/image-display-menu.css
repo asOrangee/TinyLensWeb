@@ -1,0 +1,38 @@
+.image-display-menu { position: relative; flex-shrink: 0; }
+.image-display-menu summary { list-style: none; cursor: pointer; }
+.image-display-menu summary::-webkit-details-marker { display: none; }
+.image-display-menu summary:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
+.image-display-menu-panel {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 15;
+  min-width: 138px;
+  margin: 4px 0 0;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface, var(--panel, Canvas));
+  color: var(--ink);
+  box-shadow: 0 5px 20px #0002;
+}
+.result-mask-layer-control label { display: flex; align-items: center; gap: 6px; padding: 4px 2px; font-size: 12px; white-space: nowrap; }
+.result-mask-layer-control label:has(input:disabled) { opacity: .55; }
+.image-display-menu-panel button:hover { background: var(--green-soft); color: var(--green); }
+.image-display-menu-panel button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.image-display-menu-panel button[aria-pressed="true"] { font-weight: 650; }

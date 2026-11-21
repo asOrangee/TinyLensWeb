@@ -236,6 +236,50 @@ test('unknown message delivery is persisted and never automatically resent on re
   assert.equal(processes[0].sent.filter(message => message.method === 'thread/resume').length, 1);
 });
 
+test('model retry notice clears on an actual response from the same turn, while delivery and terminal errors remain visible', async t => {
+  const scope = { threadId: 'thread-1', turnId: 'turn-1' };
+  const retry = 'Reconnecting... 1/5';
+  const { bridge, processes, stateDirectory } = await fixture(t, (message, proc) => {
+    baseHandler(message, proc);
+    if (message.method !== 'turn/start') return;
+    const turn = { id: scope.turnId, status: 'inProgress' };
+    proc.emitMessage({ method: 'turn/started', params: { threadId: scope.threadId, turn } });
+    proc.emitMessage({ method: 'error', params: { ...scope, willRetry: true, error: { message: retry } } });
+    proc.emitMessage({ id: message.id, result: { turn } });
+  }, { rpcTimeoutMs: 50 });
+  await bridge.connect();
+  await bridge.submitMessage({ text: 'Test message' });
+  async function visibleError() {
+    let state;
+    await bridge.routeRequest({ method: 'GET', url: '/api/agent/state' }, {
+      writeHead: code => assert.equal(code, 200),
+      end: body => { state = JSON.parse(body); },
+    });
+    return state.error;
+  }
+  async function notify(method, params) {
+    processes[0].emitMessage({ method, params: { ...scope, ...params } });
+    await tick();
+  }
+
+  assert.equal(await visibleError(), retry);
+  const journal = JSON.parse(await readFile(join(stateDirectory, 'agent-state.json'), 'utf8'));
+  assert.equal(journal.error, null);
+  await notify('item/agentMessage/delta', { itemId: 'other-thread', threadId: 'thread-2', delta: 'Other thread' });
+  await notify('item/agentMessage/delta', { itemId: 'old-turn', turnId: 'old-turn', delta: 'Other turn' });
+  await notify('item/agentMessage/delta', { itemId: 'assistant', delta: ' ' });
+  assert.equal(await visibleError(), retry);
+  await notify('item/agentMessage/delta', { itemId: 'assistant', delta: 'Reply resumed.' });
+  assert.equal(await visibleError(), null);
+
+  await notify('error', { willRetry: true, error: { message: retry } });
+  await assert.rejects(bridge.submitMessage({ text: 'Test steering', expectedTurnId: scope.turnId }), /delivery is unconfirmed/);
+  await notify('item/completed', { item: { type: 'agentMessage', id: 'assistant', text: 'Reply complete.' } });
+  assert.match(await visibleError(), /delivery is unconfirmed/);
+  await notify('turn/completed', { turn: { id: scope.turnId, status: 'failed', error: { message: 'Upstream request failed.' } } });
+  assert.equal(await visibleError(), 'Upstream request failed.');
+});
+
 test('old transports cannot alter a reconnected thread and paginated resume restores latest remote status', async t => {
   const { bridge, processes } = await fixture(t, (message, proc) => {
     if (message.method !== 'thread/resume') return baseHandler(message, proc);

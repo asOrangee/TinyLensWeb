@@ -32,7 +32,7 @@ from TinyLensGpu.utils import generate_radial_basis_knots
 from TinyLensGpu.visualizer import overlay_critical_and_caustics, plot_model_results
 import caskade as ck
 
-from ..configuration import PipelineConfig, PriorConfig
+from ..configuration import POSITION_THRESHOLD_ARCSEC, PipelineConfig, PriorConfig
 from .arc_mask import construct_arc_mask
 from .arc_components import (
     MASK_CONVENTION as ARC_MASK_COMPONENT_CONVENTION,
@@ -58,7 +58,7 @@ NSUB = 4
 MASK_RADIUS = 4.0
 NSUB_PIX = 4
 REGULARIZATION_TYPE = "first-order"
-SOLVER_TYPE = "pcg"
+SOLVER_TYPE = "fista"
 PLOT_CMAP_IMAGE = "inferno"
 PLOT_CMAP_RESIDUAL = "RdBu_r"
 PARAMETRIC_SOURCE_NPIX = 200
@@ -76,8 +76,8 @@ POSITION_SOLVER_CONFIG = {
     "tolerance": 5.0e-4,
     "cluster_tol": 0.08,
 }
-POSITION_THRESHOLD_ARCSEC = 0.1
 POSITION_MIN_LOG_LIKE = -1.0e10
+_POSITION_THRESHOLD_ARCSEC = POSITION_THRESHOLD_ARCSEC
 
 
 _CONFIG = PipelineConfig()
@@ -92,10 +92,11 @@ def configure_runtime(
     upstream_dirs: dict[str, Path],
     dropped_component_ids: tuple[int, ...] = (),
     stage_attempt_reference: str = "attempts/a/0",
+    position_threshold_arcsec: float = POSITION_THRESHOLD_ARCSEC,
 ) -> None:
     """Bind one validated attempt to this fixed packaged implementation."""
     global _CONFIG, OUT_DIR, DIAGNOSTICS_DIR, _UPSTREAM_DIRS, _ARC_DROP_COMPONENT_IDS
-    global _STAGE_ATTEMPT_REFERENCE, DPIX
+    global _STAGE_ATTEMPT_REFERENCE, _POSITION_THRESHOLD_ARCSEC, DPIX
     _CONFIG = config
     DPIX = config.pixel_scale_arcsec
     OUT_DIR = Path(artifact_dir)
@@ -105,6 +106,7 @@ def configure_runtime(
         dropped_component_ids, field="dropped_component_ids"
     )
     _STAGE_ATTEMPT_REFERENCE = str(stage_attempt_reference)
+    _POSITION_THRESHOLD_ARCSEC = position_threshold_arcsec
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     (OUT_DIR / "input_geometry.json").write_text(
         json.dumps(_input_geometry_metadata(), indent=2, allow_nan=False) + "\n",
@@ -1179,7 +1181,7 @@ def _write_stage_a_predicted_image_family(
         stage_attempt=_STAGE_ATTEMPT_REFERENCE,
         solver=POSITION_SOLVER,
         solver_config=POSITION_SOLVER_CONFIG,
-        threshold_arcsec=POSITION_THRESHOLD_ARCSEC,
+        threshold_arcsec=_POSITION_THRESHOLD_ARCSEC,
         min_log_like=POSITION_MIN_LOG_LIKE,
     )
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -1308,7 +1310,7 @@ class _FixedSourceTemplateOperator(PixelizedImageProbModelOperator):
 def _pixel_likelihood(
     image, noise, psf, feature_mask, circular_mask, mass_profiles,
     source: PixelizedSourceModel, position_likelihood, *, fixed_source_bbox,
-    fixed_reg_template=None, **kwargs,
+    fixed_reg_template=None, solver_type: str = SOLVER_TYPE, **kwargs,
 ):
     mask = np.asarray(feature_mask, dtype=bool)
     if circular_mask is not None:
@@ -1324,7 +1326,7 @@ def _pixel_likelihood(
     return operator(
         image_data=image, noise_map=noise, psf_kernel=psf, dpix=DPIX,
         nsub=NSUB_PIX, phys_model=physical, mask=mask,
-        position_likelihood=position_likelihood, solver_type=SOLVER_TYPE,
+        position_likelihood=position_likelihood, solver_type=solver_type,
         fixed_source_bbox=_normalize_source_bbox(fixed_source_bbox), **kwargs,
     )
 
@@ -1427,19 +1429,23 @@ def _load_source_grid_spec(path: Path) -> dict[str, Any]:
     )
 
 
-def _validate_runtime_source_grid(source_grid: dict[str, Any]) -> dict[str, Any]:
+def _validate_runtime_source_grid(
+    source_grid: dict[str, Any], *, allow_legacy: bool = False,
+) -> dict[str, Any]:
     return validate_source_grid_spec(
-        source_grid, expected_level=_CONFIG.source_grid_level
+        source_grid, expected_level=_CONFIG.source_grid_level, allow_legacy=allow_legacy,
     )
 
 
-def _pixel_center_bbox(source_grid: dict[str, Any]) -> tuple[float, float, float, float]:
-    validated = validate_source_grid_spec(source_grid)
+def _pixel_center_bbox(
+    source_grid: dict[str, Any], *, allow_legacy: bool = False,
+) -> tuple[float, float, float, float]:
+    validated = validate_source_grid_spec(source_grid, allow_legacy=allow_legacy)
     return tuple(float(value) for value in validated["pixel_center_bbox"])
 
 
 def _validate_source_template_package(
-    package: dict[str, Any], source_grid: dict[str, Any] | None = None,
+    package: dict[str, Any], source_grid: dict[str, Any] | None = None, *, allow_legacy: bool = False,
 ):
     required = {
         "source_pixels", "source_bbox", "source_x_axis", "source_y_axis",
@@ -1449,7 +1455,10 @@ def _validate_source_template_package(
     if missing:
         raise KeyError(f"source template missing: {', '.join(missing)}")
     n = int(package["n"])
-    expected_grid = validate_source_grid_spec(source_grid) if source_grid is not None else None
+    expected_grid = (
+        validate_source_grid_spec(source_grid, allow_legacy=allow_legacy)
+        if source_grid is not None else None
+    )
     if (
         (expected_grid is not None and n != expected_grid["nsrc"])
         or np.asarray(package["source_pixels"]).shape != (n * n,)
@@ -1475,9 +1484,9 @@ def _validate_source_template_package(
 
 
 def _fixed_source_template_kwargs(
-    package: dict[str, Any], source_grid: dict[str, Any],
+    package: dict[str, Any], source_grid: dict[str, Any], *, allow_legacy: bool = False,
 ) -> dict[str, Any]:
-    package = _validate_source_template_package(package, source_grid)
+    package = _validate_source_template_package(package, source_grid, allow_legacy=allow_legacy)
     return {
         "fixed_source_bbox": tuple(float(value) for value in package["source_bbox"]),
         "fixed_reg_template": jnp.asarray(package["source_pixels"], dtype=jnp.float32),
@@ -1673,6 +1682,15 @@ def _save_grid_stage(log_z: float, extra: dict[str, Any]) -> None:
         pickle.dump(payload, handle)
 
 
+def _scan_m0_evidence(evaluate, grid, pass_name: str) -> np.ndarray:
+    values = np.asarray(evaluate(grid.reshape(-1, 1)), dtype=float)
+    # TinyLensGpu assigns a large negative sentinel to failed source solves.
+    valid = np.isfinite(values) & (values > -1.0e10)
+    if not valid.any():
+        raise RuntimeError(f"M0 {pass_name} evidence grid has no converged finite evaluation")
+    return np.where(valid, values, -np.inf)
+
+
 def run_stage_m0(
     image, noise, psf, feature_mask, lens_light_model, stage_a,
     position_likelihood, source_grid_anchor, circular_mask=None,
@@ -1697,20 +1715,16 @@ def run_stage_m0(
     )
     evaluate = make_likelihood(likelihood, vectorized=True)
     coarse = jnp.linspace(_CONFIG.m0_log_lam_min, _CONFIG.m0_log_lam_max, _CONFIG.m0_n_grid)
-    coarse_ev = np.asarray(evaluate(coarse.reshape(-1, 1)), dtype=float)
-    if not np.isfinite(coarse_ev).any():
-        raise RuntimeError("M0 coarse evidence grid contains no finite values")
-    coarse_index = int(np.nanargmax(coarse_ev))
+    coarse_ev = _scan_m0_evidence(evaluate, coarse, "coarse")
+    coarse_index = int(np.argmax(coarse_ev))
     half_width = 0.5 * np.log(10.0)
     fine = jnp.linspace(
         float(coarse[coarse_index]) - half_width,
         float(coarse[coarse_index]) + half_width,
         _CONFIG.m0_n_grid,
     )
-    fine_ev = np.asarray(evaluate(fine.reshape(-1, 1)), dtype=float)
-    if not np.isfinite(fine_ev).any():
-        raise RuntimeError("M0 fine evidence grid contains no finite values")
-    fine_index = int(np.nanargmax(fine_ev))
+    fine_ev = _scan_m0_evidence(evaluate, fine, "fine")
+    fine_index = int(np.argmax(fine_ev))
     best = float(fine[fine_index])
     best_ev = float(fine_ev[fine_index])
     extra = {

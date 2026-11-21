@@ -255,6 +255,36 @@
           ]
         ]
       }
+    },
+    "lens-light": {
+      "offset": 16778184,
+      "byte_length": 2097152,
+      "values_sha256": "ff600ba57f2f201fccbaa1b7fed5128bd33b91d31cd8ac653e35605f330bb887",
+      "plane": {
+        "src": "",
+        "shape": [
+          512,
+          512
+        ],
+        "vmin": 0.0,
+        "vmax": 0.93,
+        "data_min": 4.3532884957128796e-07,
+        "data_max": 1.119593062405118,
+        "stretch": "asinh",
+        "asinh_a": 25.0,
+        "colormap": "magma",
+        "unit": "a.u.",
+        "half_extent_arcsec": 4.007827788649706,
+        "pixel_scale_arcsec": 0.015655577299412915,
+        "sha256": "8c9c1e3db758ba0caa98b852a75386fcb1792bac95162bc40733fe91ce901772",
+        "colormap_src": "",
+        "bounds_arcsec": [
+          -4.007827788649706,
+          4.007827788649706,
+          -4.007827788649706,
+          4.007827788649706
+        ]
+      }
     }
   },
   "input": {
@@ -506,5 +536,5 @@
       }
     ]
   },
-  "byte_length": 16778184
+  "byte_length": 18875336
 }

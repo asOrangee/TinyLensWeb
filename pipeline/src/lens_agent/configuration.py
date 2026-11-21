@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .modeling.artifact_validation import finite_number
+from .modeling.source_grid import MAX_SOURCE_GRID_LEVEL
 from .result_paths import (
     require_lens_local_tree,
     require_nonhistorical_lens_result,
@@ -14,8 +16,13 @@ from .result_paths import (
 )
 
 
-PIPELINE_RELEASE_ID = "input-geometry.v1"
+PIPELINE_RELEASE_ID = "source-reconstruction.v1"
 CONFIG_SCHEMA_VERSION = "lens_pipeline_config.v5"
+POSITION_THRESHOLD_ARCSEC = 0.05
+LEGACY_POSITION_THRESHOLD_ARCSEC = 0.1
+ARC_SNR_THRESHOLD_MIN = 1
+ARC_SNR_THRESHOLD_MAX = 20
+STAGE_B_EXPANSION_POLICY = "snr-threshold.v1"
 
 Limits = tuple[float, float]
 
@@ -44,6 +51,28 @@ def _validated_run(
 
 def validate_run_manifest(output_dir: Path) -> dict[str, object]:
     return _validated_run(output_dir, require_current_pipeline_release=True)[1]
+
+
+def uses_stage_b_threshold_expansion(manifest: dict[str, object]) -> bool:
+    if "stage_b_expansion_policy" not in manifest:
+        return False  # Runs created before this policy keep their saved footprint.
+    if manifest["stage_b_expansion_policy"] != STAGE_B_EXPANSION_POLICY:
+        raise ValueError("Invalid Stage B expansion policy in Lens Run Manifest")
+    return True
+
+
+def stage_b_threshold_ext_size(threshold: float) -> int:
+    """Translate the expansion radius in pixels to the square footprint side length."""
+    if threshold < 5:
+        return 1
+    if threshold <= 10:
+        return 3
+    return 5
+
+
+def require_writable_preflight(manifest: dict[str, object]) -> None:
+    if "inherited_ab" in manifest:
+        raise ValueError("Preflight and stages A/B are frozen by the inheritance record")
 
 
 def validated_run_root(output_dir: Path) -> Path:
@@ -129,6 +158,14 @@ def run_input_geometry(output_dir: Path) -> InputGeometry:
     return geometry
 
 
+def run_position_threshold_arcsec(output_dir: Path) -> float:
+    manifest = validate_run_manifest(output_dir)
+    threshold = manifest.get("position_threshold_arcsec", LEGACY_POSITION_THRESHOLD_ARCSEC)
+    if not finite_number(threshold) or threshold <= 0:
+        raise ValueError("Run position-likelihood threshold must be a positive finite value")
+    return float(threshold)
+
+
 class PipelineConfig(InputGeometry):
     stage_a_n_live: int = 200
     stage_a_n_eff: int = 800
@@ -211,11 +248,11 @@ class PipelineConfig(InputGeometry):
             raise ValueError("M0 log-lambda minimum must be below maximum")
         if not 0 < self.adaptive_reg_rho_prior_max <= 100:
             raise ValueError("adaptive_reg_rho_prior_max must be between 0 and 100")
-        if self.source_grid_level not in {0, 1, 2}:
+        if not 0 <= self.source_grid_level <= MAX_SOURCE_GRID_LEVEL:
             raise ValueError("source_grid_level is outside the fixed grid policy")
         if self.n_gaussians_src <= 0 or self.n_gaussians_lens <= 0:
             raise ValueError("model resolution settings must be positive")
-        if not 1.0 <= self.arc_snr_threshold <= 10.0 or any(
+        if not ARC_SNR_THRESHOLD_MIN <= self.arc_snr_threshold <= ARC_SNR_THRESHOLD_MAX or any(
             not 0 < value <= 10_000
             for value in (self.arc_ext_size, self.arc_close_size)
         ):
@@ -231,7 +268,7 @@ class PipelineConfig(InputGeometry):
 
 class EffectiveConfig(StrictModel):
     schema_version: Literal["lens_pipeline_config.v5"] = CONFIG_SCHEMA_VERSION
-    pipeline_release_id: Literal["input-geometry.v1"] = (
+    pipeline_release_id: Literal["source-reconstruction.v1"] = (
         PIPELINE_RELEASE_ID
     )
     parent_config: str | None = None
@@ -361,7 +398,8 @@ TUNABLE_CATALOG: dict[str, TunableSpec] = {
         cross_field_relation="gte",
     ),
     "arc_snr_threshold": TunableSpec(
-        "b", "stage_b_expert", frozenset({"arc_mask"}), float, 1.0, 10.0
+        "b", "stage_b_expert", frozenset({"arc_mask"}), float,
+        ARC_SNR_THRESHOLD_MIN, ARC_SNR_THRESHOLD_MAX,
     ),
     "arc_ext_size": TunableSpec(
         "b", "stage_b_expert", frozenset({"arc_mask"}), int, 1, 10_000

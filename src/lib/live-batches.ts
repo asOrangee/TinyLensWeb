@@ -10,10 +10,10 @@ export type BatchJobStatus = 'queued' | 'starting' | 'running' | 'waiting_gpu' |
 
 export type BatchJob = {
   taskId: string; lensId: string; runPath: string; existing: boolean; canOpen: boolean; status: BatchJobStatus;
-  stage?: string; stageStatus?: string; updatedAt?: string; message?: string;
+  stage?: string; stageStatus?: string; updatedAt?: string; message?: string; delivered?: true;
 };
 
-export type Batch = BatchSummary & { jobs: BatchJob[] };
+export type Batch = BatchSummary & { jobs: BatchJob[]; retryableStartCount?: number };
 export type BatchPlan = {
   id: string; status: 'preview' | 'submitted'; inputDir: string; outputDir: string;
   parallelism: number; targets: { lensId: string; existing: boolean }[]; message?: string;

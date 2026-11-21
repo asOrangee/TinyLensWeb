@@ -16,21 +16,19 @@
 .app-shell[data-design="observatory"] .batch-dialog { --batch-surface: #161f2d; --batch-soft: #202c3c; --batch-error: #ffadb3; color-scheme: dark; }
 .app-shell[data-design="paper"] .batch-dialog { --batch-surface: #fffefb; --batch-soft: #f5f2eb; }
 .batch-dialog::backdrop { background: #0b14274d; }
-.batch-header, .batch-toolbar, .batch-overview { display: flex; align-items: center; gap: 12px; }
+.batch-header, .batch-overview { display: flex; align-items: center; gap: 12px; }
 .batch-header { position: sticky; top: 0; z-index: 2; justify-content: space-between; padding: 16px 22px; border-bottom: 1px solid var(--line); background: var(--batch-surface); }
 .batch-header h2 { display: flex; align-items: center; gap: 10px; font-size: 18px; }
 .batch-header h2 svg { color: var(--green); }
-.batch-close, .batch-open-task { display: inline-flex; align-items: center; gap: 5px; color: var(--green); background: transparent; border: 0; }
-.batch-close { padding: 6px; border-radius: 5px; color: var(--muted); }
-.batch-close:hover, .batch-open-task:hover { background: var(--batch-soft); }
+.batch-open-task { display: inline-flex; align-items: center; gap: 5px; color: var(--green); background: transparent; border: 0; }
+.batch-open-task:hover { background: var(--batch-soft); }
 .batch-body { padding: 18px 22px 22px; font-size: 13px; }
-.batch-toolbar { justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; }
-.batch-toolbar label { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.batch-toolbar select { min-width: 180px; max-width: min(520px, 64vw); }
+.batch-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; margin-bottom: 16px; }
+.batch-toolbar h3 { margin: 0; font-size: 17px; overflow-wrap: anywhere; }
+.batch-toolbar select { width: min(390px, 46vw); min-width: 0; text-overflow: ellipsis; }
 .batch-body :is(input, select) { padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); background: var(--batch-surface); font: inherit; }
 .batch-hint, .batch-error { color: var(--muted); line-height: 1.55; }
 .batch-error { margin-top: 14px; color: var(--batch-error); }
-.batch-overview h3 { margin: 0; font-size: 17px; }
 .batch-plan-card { --batch-soft: var(--chat-input, var(--green-soft)); min-width: 0; }
 .batch-plan-card h2 { margin: 0 0 10px; }
 .batch-plan-instruction { margin: 10px 0; color: var(--muted); }
@@ -45,9 +43,10 @@
 .batch-message { margin: 12px 0; color: var(--muted); }
 .batch-message summary { cursor: pointer; }
 .batch-message pre { margin: 8px 0 0; padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--batch-soft); }
-.batch-overview { justify-content: space-between; }
+.batch-overview { justify-content: space-between; flex-wrap: wrap; }
 .batch-overview > div { min-width: 0; }
-.batch-output { margin-top: 5px; font: 11px var(--mono); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.batch-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-inline-start: auto; }
+.batch-output { flex: 1 1 210px; font: 11px var(--mono); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .batch-counts { display: flex; flex-wrap: wrap; align-items: baseline; gap: 7px 14px; margin-top: 15px; }
 .batch-counts span { color: var(--muted); }
 .batch-meter { width: 100%; height: 7px; margin: 9px 0 14px; display: block; accent-color: var(--green); }
@@ -59,6 +58,7 @@
 .batch-table th:first-child { width: 29%; }
 .batch-table th:nth-child(2) { width: 16%; }
 .batch-table th:last-child { width: 100px; }
+.batch-table--standalone th:first-child { width: auto; }
 .batch-table tbody tr:last-child > * { border-bottom: 0; }
 .batch-table tbody tr:hover { background: var(--batch-soft); }
 .batch-table-wrap > p { padding: 9px 12px; }

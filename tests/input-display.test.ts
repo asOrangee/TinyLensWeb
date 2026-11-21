@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { parseInputDisplay, selectInputReport } from '../src/lib/input-display.ts';
 import { formatScaleNumber } from '../src/lib/display-scale.ts';
 import type { AgentUpdate } from '../src/lib/agent-types.ts';
+import { stageDisplayCandidates } from '../src/lib/live-results.ts';
 
 const report: AgentUpdate = { id: 'input', kind: 'artifact', stage: 'preflight', path: '/project/output/run/input-provenance.json' };
 const fixture = () => ({ schema: 'tinylens.input-display.v1', source: { provenance_path: report.path, fits_sha256: 'a'.repeat(64) }, pixel_scale_arcsec: .05, log_a: 1000, psf_sum: 1, x_direction: 'increasing', y_direction: 'decreasing', planes: ['data', 'noise', 'snr', 'psf'].map(id => ({ id, shape: [11, 11], half_extent_arcsec: .275, half_extent_x_arcsec: .275, scale_bar_arcsec: .1, numeric:{...numericalFixture([11,11]),src:'',colormap_src:'',input_fits_sha256:'a'.repeat(64),array_y_direction:'decreasing'}, variants: Object.fromEntries(['linear', 'log', 'zscale'].map(scale => [scale, { src: '', vmin: 1e-12, vmax: .0037 }])) })) });
@@ -20,6 +21,47 @@ test('a new reported preflight audit uses the current run and requires its own r
   assert.throws(() => parseInputDisplay(resolved, report), /不匹配/);
   assert.throws(() => parseInputDisplay(response, audit), /不匹配/);
 });
+
+const runPath = '/project/output/run/lens';
+const manifestPath = `${runPath}/preflight/display-manifest.json`;
+const oldManifest: AgentUpdate = {
+  id: 'old-manifest', kind: 'artifact', schema: 'tinylens.stage-report.v1',
+  stage: 'preflight', run_id: 'old-run', run_path: runPath, lens_id: 'lens', attempt: null, path: manifestPath,
+};
+const archive: AgentUpdate = { ...oldManifest, id: 'archive', path: '/project/output/run/_archive/lens_old_0/run-manifest.json' };
+const inspection: AgentUpdate = {
+  ...oldManifest, id: 'inspection', kind: 'stage', run_id: 'current-run', status: 'reviewing', path: `${runPath}/preflight/inspection.json`,
+};
+
+test('preflight thumbnails resolve attached manifests with the same report identity as the stage viewer', () => {
+  const reviewing = { ...inspection, display_manifest: manifestPath };
+  const accepted = { ...reviewing, id: 'inspector', status: 'accepted', path: `${runPath}/preflight/inspector.json` };
+  for (const update of [reviewing, accepted]) {
+    const updates = [oldManifest, archive, update];
+    const selected = selectInputReport(updates);
+    assert.deepEqual(selected, { ...update, kind: 'artifact', path: manifestPath });
+    assert.deepEqual(selected, stageDisplayCandidates(updates, 'preflight')[0].published);
+    const response = fixture();
+    response.source.provenance_path = manifestPath;
+    assert.doesNotThrow(() => parseInputDisplay(response, selected!));
+    assert.throws(() => parseInputDisplay(response, update), /不匹配/);
+  }
+});
+
+test('preflight thumbnails do not select a prior run at the same path', () => {
+  const stageA = { ...inspection, id: 'stage-a', stage: 'a', attempt: 0, path: `${runPath}/attempts/a/0/stage-result.json` };
+  assert.equal(selectInputReport([oldManifest, archive, inspection]), inspection);
+  assert.equal(selectInputReport([oldManifest, archive, stageA]), undefined);
+  assert.equal(selectInputReport([oldManifest, archive, stageA, report]), undefined);
+});
+
+test('a task with only archived runs can still use its own reported preflight', () => {
+  const lastManifest = { ...oldManifest, id: 'last-manifest', run_id: 'last-run' };
+  const lastArchive = { ...archive, id: 'last-archive', run_id: lastManifest.run_id, path: archive.path!.replace('old_0', 'old_1') };
+  assert.equal(selectInputReport([oldManifest, archive]), oldManifest);
+  assert.equal(selectInputReport([oldManifest, archive, lastManifest, lastArchive]), lastManifest);
+});
+
 test('input display refuses another run, missing images, false geometry or external image URLs', () => {
   assert.equal(parseInputDisplay(fixture(), report).planes.length, 4);
   const another = fixture(); another.source.provenance_path += '.old'; assert.throws(() => parseInputDisplay(another, report));

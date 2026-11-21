@@ -234,6 +234,7 @@ def test_stage_a_writes_the_predicted_image_family_from_its_median_model(
     family = pipeline._write_stage_a_predicted_image_family(medians, (300, 300))
 
     assert family["stage_attempt"] == "attempts/a/2"
+    assert family["position_likelihood"]["threshold_arcsec"] == 0.05
     assert family["images"] == [
         {"image_id": "image_1", "position_arcsec": [-0.7, -1.0]},
         {"image_id": "image_2", "position_arcsec": [1.2, 1.1]},
@@ -309,12 +310,14 @@ def test_mass_schedule_uses_sie_until_m3(monkeypatch) -> None:
 def test_source_template_must_match_m0_sealed_grid(monkeypatch) -> None:
     pipeline = _load_pipeline_template(monkeypatch)
     grid = source_grid_spec(center_x=0.0, center_y=0.0, level=0)
+    n = grid["nsrc"]
+    xmin, xmax, ymin, ymax = grid["pixel_center_bbox"]
     package = {
-        "source_pixels": np.ones(80 * 80),
+        "source_pixels": np.ones(n * n),
         "source_bbox": tuple(grid["pixel_center_bbox"]),
-        "source_x_axis": np.linspace(-0.79, 0.79, 80),
-        "source_y_axis": np.linspace(-0.79, 0.79, 80),
-        "n": 80,
+        "source_x_axis": np.linspace(xmin, xmax, n),
+        "source_y_axis": np.linspace(ymin, ymax, n),
+        "n": n,
         "lambda_best": 1.0,
         "log_lambda_best": 0.0,
     }
@@ -538,11 +541,12 @@ def test_pixelized_stage_writes_five_panel_centered_diagnostic(tmp_path: Path, m
         phys_model=SimpleNamespace(),
     )
     grid = source_grid_spec(center_x=0.0, center_y=0.0, level=0)
+    n = grid["nsrc"]
     solved = {
         "model_1d": image[unmask] * 0.9,
-        "source_image": np.arange(80 * 80, dtype=float).reshape(80, 80),
+        "source_image": np.arange(n * n, dtype=float).reshape(n, n),
         "source_bbox": tuple(grid["pixel_center_bbox"]),
-        "reg_scale_image": np.linspace(1.0, 3.0, 80 * 80).reshape(80, 80),
+        "reg_scale_image": np.linspace(1.0, 3.0, n * n).reshape(n, n),
         "adaptive_reg_rho": 2.5,
         "adaptive_regularization": True,
     }
@@ -588,7 +592,7 @@ def test_source_panel_stays_at_bbox_when_caustic_extends_outside(
     grid = source_grid_spec(center_x=0.0, center_y=-0.1, level=0)
     solved = {
         "model_1d": image.ravel(),
-        "source_image": np.ones((80, 80), dtype=float),
+        "source_image": np.ones((grid["nsrc"], grid["nsrc"]), dtype=float),
         "source_bbox": tuple(grid["pixel_center_bbox"]),
     }
     likelihood = SimpleNamespace(
@@ -604,8 +608,8 @@ def test_source_panel_stays_at_bbox_when_caustic_extends_outside(
     )
 
     source_axis = [axis for axis in figures[-1].axes if axis.get_title()][3]
-    assert source_axis.get_xlim() == pytest.approx((-0.8, 0.8))
-    assert source_axis.get_ylim() == pytest.approx((-0.9, 0.7))
+    assert source_axis.get_xlim() == pytest.approx(grid["footprint_bbox"][:2])
+    assert source_axis.get_ylim() == pytest.approx(grid["footprint_bbox"][2:])
 
 
 def test_pixelized_uniform_stage_labels_the_unit_regularization_scale(tmp_path: Path, monkeypatch) -> None:
@@ -623,7 +627,7 @@ def test_pixelized_uniform_stage_labels_the_unit_regularization_scale(tmp_path: 
     grid = source_grid_spec(center_x=0.0, center_y=0.0, level=0)
     solved = {
         "model_1d": image.ravel(),
-        "source_image": np.ones((80, 80), dtype=float),
+        "source_image": np.ones((grid["nsrc"], grid["nsrc"]), dtype=float),
         "source_bbox": tuple(grid["pixel_center_bbox"]),
     }
 
@@ -643,8 +647,10 @@ def test_m0_source_grid_review_plot_marks_outer_two_pixel_ring(
     figures = []
     monkeypatch.setattr(pipeline.plt, "close", figures.append)
     grid = source_grid_spec(center_x=0.1, center_y=-0.2, level=0)
-    source = np.zeros((80, 80), dtype=float)
-    source[35:45, 35:45] = 1.0
+    n = grid["nsrc"]
+    source = np.zeros((n, n), dtype=float)
+    interior = slice(n // 2 - 5, n // 2 + 5)
+    source[interior, interior] = 1.0
     solved = {
         "source_image": source,
         "source_bbox": tuple(grid["pixel_center_bbox"]),

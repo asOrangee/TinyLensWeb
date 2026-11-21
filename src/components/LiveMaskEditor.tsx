@@ -15,7 +15,7 @@ type Props={source?:Source;report?:AgentUpdate;threadId:string;summary:LiveResul
 function DraftEditor({source,report,threadId,scale,onPromptChange,disabled,toolbarTarget,background}:Props&{source:Source;report:AgentUpdate;background:Background}){
  const reportId=report.display_source_report_id??report.id!;
  const key=maskDraftKey(source,threadId,reportId),[pixels,setPixels]=useState(()=>{try{return restoreMaskDraft(localStorage.getItem(key),source)}catch{return source.pixels}});
- const scaled=useScaledPlanes({observation:source.plane,'source-lensed':source.lensed_source_plane},scale,true,['observation','source-lensed']);
+ const scaled=useScaledPlanes({observation:source.plane,'source-lensed':source.lensed_source_plane},scale,true,['observation','source-lensed'],{showFitExcluded:true});
  const backgroundSrc=scaled.planes?.[background]?.src??'';
  const geometry=useMemo(()=>({height:source.shape[0],width:source.shape[1],domain:source.domain,backgroundSrc,pixelScale:source.pixel_scale_arcsec,initialPixels:source.pixels,radius:source.modeling_radius_arcsec}),[source,backgroundSrc]);
  function change(next:number[]){setPixels(next);try{localStorage.setItem(key,encodeMaskDraft(next));}catch{/* Keep the current draft when storage is unavailable. */}onPromptChange(maskPrompt(next,source,threadId,reportId));}

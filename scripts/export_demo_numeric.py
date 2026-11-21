@@ -32,7 +32,6 @@ def entry(values,plane):
     parts.append(raw);offset+=len(raw)
     return out
 for name,base in manifest['planes'].items():
-    if name=='lens-light':continue
     values=namespace['model_planes'][name]
     expected=namespace['residual_colour'](values) if name=='residual' else namespace['chi_square_colour'](values) if name=='chi-square' else namespace['intensity'](values)
     np.testing.assert_array_equal(expected,np.asarray(Image.open(root/f'public/demo/{name}.png')))

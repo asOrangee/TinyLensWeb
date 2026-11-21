@@ -1,4 +1,5 @@
 .model-config-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px 12px;padding:4px 15px 15px}
+.model-config-inheritance{grid-column:1/-1;margin:0;color:var(--muted);font-size:12px}
 .model-config-card{display:grid;grid-template-rows:subgrid;grid-row:span 4;min-width:0;row-gap:18px;padding:18px 15px 15px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink)}
 .model-config-card header{display:flex;flex-direction:column;gap:12px}
 .model-config-title{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 9px;min-width:0}

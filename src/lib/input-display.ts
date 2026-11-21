@@ -1,7 +1,8 @@
 import type { AgentUpdate } from './agent-types';
 import type {LivePlane} from './live-results';
 import {hasNumericRaster,type ImageScale} from './image-scale.ts';
-import { isPublishedDisplayReport } from './display-report.ts';
+import { isPublishedDisplayReport, publishedDisplayReport } from './display-report.ts';
+import { activeRun, resultIdentity, runKey, stageAttempts } from './stage-attempts.ts';
 
 type InputVariant = { src: string; vmin: number; vmax: number; sha256?: string; constant_color?: string };
 export type InputPlane = {
@@ -22,9 +23,21 @@ export type InputDisplay = {
 const inputReportPath = /\/(?:input-provenance\.json|preflight\/(?:inspection\.json|preflight_[26]panel\.png|display-manifest\.json|display\/?))$/;
 
 export function selectInputReport(updates: AgentUpdate[]) {
-  const reports = updates.filter(update => update.id && (update.kind === 'artifact' || update.kind === 'stage'
-    && update.path?.endsWith('/preflight/inspection.json'))
-    && update.stage?.trim().toLowerCase() === 'preflight' && update.path && inputReportPath.test(update.path));
+  const versioned = updates.some(update => update.run_id);
+  const attempts = versioned ? stageAttempts(updates) : [];
+  const run = activeRun(attempts) ?? attempts.filter(({ archived, identity }) =>
+    archived && identity.runId && identity.stage === 'preflight').at(-1)?.identity;
+  const reports: AgentUpdate[] = [];
+  for (const update of updates) {
+    if (!update.id || update.stage?.trim().toLowerCase() !== 'preflight') continue;
+    if (versioned) {
+      const identity = resultIdentity(update);
+      if (!run || !identity || runKey(identity) !== runKey(run)) continue;
+    }
+    const report = publishedDisplayReport(update) ?? update;
+    if ((report.kind === 'artifact' || report.kind === 'stage' && report.path?.endsWith('/preflight/inspection.json'))
+        && report.path && inputReportPath.test(report.path)) reports.push(report);
+  }
   const latest = reports.at(-1);
   const directory = latest?.path?.match(/^(.*\/preflight)\//)?.[1];
   return (directory && reports.filter(update => isPublishedDisplayReport(update) && update.path?.startsWith(directory + '/')).at(-1)) || latest;

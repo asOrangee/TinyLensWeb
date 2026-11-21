@@ -1,4 +1,4 @@
-import type {LivePlane} from './live-results';
+import type {LegacyFitDomain, LivePlane} from './live-results';
 
 export const imageScaleOptions = [
   ['linear', 'Linear'],
@@ -19,12 +19,25 @@ export function imageScaleStretch(scale: ImageScale, logA = 1000) {
 }
 
 export type NumericRaster={values_base64:string;values_sha256:string;mask_base64:string;array_y_direction:'increasing'|'decreasing';color_lut_base64:string;color_lut_sha256:string};
+type NumericalPlane = LivePlane & NumericRaster;
 export const hasNumericRaster=(plane:LivePlane|undefined):plane is LivePlane&NumericRaster=>!!plane?.values_base64&&/^[a-f0-9]{64}$/.test(plane.values_sha256??'')&&!!plane.mask_base64&&['increasing','decreasing'].includes(plane.array_y_direction??'')&&!!plane.color_lut_base64&&/^[a-f0-9]{64}$/.test(plane.color_lut_sha256??'');
-export const scalablePlanes=new Set(['observation','model','source-lensed']);
+export const scalablePlanes = ['observation', 'model', 'lens-light', 'source-lensed'] as const;
 /** Sample in display order, matching the existing preflight ZScale reader. */
-export function displayScalePixels(values:readonly number[],mask:ArrayLike<number>,shape:readonly number[],direction:NumericRaster['array_y_direction']){
- if(shape.length!==2||values.length!==shape[0]*shape[1]||mask.length!==values.length)throw Error('Display raster shape mismatch');
- const result:number[]=[];for(let row=0;row<shape[0];row++)for(let col=0;col<shape[1];col++){const i=(direction==='increasing'?shape[0]-1-row:row)*shape[1]+col;if(mask[i]===1)result.push(values[i]);}return result;
+export function displayScalePixels(values: readonly number[], mask: ArrayLike<number> | undefined,
+  shape: readonly number[], direction: NumericRaster['array_y_direction']) {
+  const [height, width] = shape;
+  if (shape.length !== 2 || values.length !== height * width || (mask && mask.length !== values.length)) {
+    throw Error('Display raster shape mismatch');
+  }
+  const result: number[] = [];
+  for (let row = 0; row < height; row++) {
+    const offset = (direction === 'increasing' ? height - 1 - row : row) * width;
+    for (let column = 0; column < width; column++) {
+      const index = offset + column;
+      if (!mask || mask[index] === 1) result.push(values[index]);
+    }
+  }
+  return result;
 }
 
 /** Astropy ZScaleInterval defaults: 1000 samples, contrast=.25, five rejections. */
@@ -54,7 +67,7 @@ export function imageScaleValues(values:readonly number[],scale:ImageScale){
 
 export type RasterLimits={vmin:number;vmax:number;stretch:string;parameter:number};
 /** Numeric pixels only. No decoded observation/diagnostic image enters this renderer. */
-export function numericPixels(values:ArrayLike<number>,mask:ArrayLike<number>,shape:readonly number[],direction:NumericRaster['array_y_direction'],limits:RasterLimits,colors:ArrayLike<number>,stops?:number[][]){
+export function numericPixels(values:ArrayLike<number>,mask:ArrayLike<number>,shape:readonly number[],direction:NumericRaster['array_y_direction'],limits:RasterLimits,colors:ArrayLike<number>,stops?:number[][],showFitExcluded=false){
  const [height,width]=shape,count=height*width;
  if(shape.length!==2||!shape.every(n=>Number.isInteger(n)&&n>0&&n<=512)||values.length!==count||mask.length!==count||colors.length!==1024||!['increasing','decreasing'].includes(direction)||![limits.vmin,limits.vmax,limits.parameter].every(Number.isFinite)||limits.vmax<limits.vmin||!['linear','log','asinh'].includes(limits.stretch)||limits.parameter<=0)throw Error('Invalid numerical display geometry or limits.');
  if(stops&&(stops.length<2||stops.some(row=>row.length!==3||row.some(v=>!Number.isFinite(v)||v<0||v>255))))throw Error('Invalid numerical color stops.');
@@ -62,7 +75,7 @@ export function numericPixels(values:ArrayLike<number>,mask:ArrayLike<number>,sh
  for(let row=0;row<height;row++)for(let col=0;col<width;col++){
   const source=(direction==='increasing'?height-row-1:row)*width+col,target=(row*width+col)*4,value=values[source];
   if(!Number.isFinite(value)||(mask[source]!==0&&mask[source]!==1))throw Error('Invalid numerical display pixels.');
-  if(!mask[source])continue;
+  if(!mask[source]&&!showFitExcluded)continue;
   let normal=range===0?.5:Math.max(0,Math.min(1,(value-limits.vmin)/range));
   if(range!==0&&limits.stretch==='log')normal=Math.log1p(limits.parameter*normal)/Math.log1p(limits.parameter);
   if(range!==0&&limits.stretch==='asinh')normal=Math.asinh(limits.parameter*Math.max(0,Math.min(range,value-limits.vmin)))/Math.asinh(limits.parameter*range);
@@ -73,6 +86,19 @@ export function numericPixels(values:ArrayLike<number>,mask:ArrayLike<number>,sh
  return pixels;
 }
 const decode=(text:string)=>Uint8Array.from(atob(text),c=>c.charCodeAt(0));
+
+export function maskOverlayPixels(encoded: string, shape: readonly [number, number], excluded: 0 | 1) {
+  const [height, width] = shape;
+  const mask = decode(encoded);
+  if (mask.length !== height * width || mask.some(pixel => pixel !== 0 && pixel !== 1)) return;
+
+  const image = new Uint8ClampedArray(mask.length * 4);
+  for (let index = 0; index < mask.length; index++) {
+    if (mask[index] === excluded) image.fill(255, index * 4, index * 4 + 4);
+  }
+  return image;
+}
+
 const sha=async(bytes:Uint8Array)=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',new Uint8Array(bytes)))].map(v=>v.toString(16).padStart(2,'0')).join('');
 const decoded=new Map<string,Promise<{values:number[];mask:Uint8Array}>>();
 async function raster(plane:LivePlane&NumericRaster){
@@ -101,14 +127,38 @@ async function palette(plane:LivePlane&NumericRaster){
  return palettes.get(key)!;
 }
 const rendered=new Map<string,Promise<{src:string;colormap_src:string;limits:RasterLimits}>>();
-/** A shared reference changes only intensity normalization and palette, never science pixels or geometry. */
-export async function scaleImagePlane(plane:LivePlane&NumericRaster,scale:ImageScale|'original',reference:LivePlane&NumericRaster=plane):Promise<LivePlane>{
+
+export async function lensedSourceFitPlane(source: NumericalPlane, legacyDomain?: LegacyFitDomain): Promise<NumericalPlane> {
+  const { mask } = await raster(source);
+  if (!legacyDomain) {
+    // Older published packets used an all-one mask when fit coverage was absent.
+    if (!mask.includes(1) || (source.mask_scope !== 'likelihood-fit' && !mask.includes(0))) {
+      throw Error('Missing lensed-source fit domain.');
+    }
+    return source;
+  }
+
+  // Legacy readers store the scientific fit mask separately from the full-grid projection.
+  const fit = decode(legacyDomain.fit_mask_base64);
+  const count = fit.reduce((total, pixel) => total + pixel, 0);
+  if (legacyDomain.schema !== 'tinylens.model-display-derivation.v1' || legacyDomain.fit_support !== 'actual_likelihood_mask'
+      || !mask.every(pixel => pixel === 1) || fit.length !== mask.length || fit.some(pixel => pixel !== 0 && pixel !== 1)
+      || count === 0 || count !== legacyDomain.statistics?.pixel_count || await sha(fit) !== legacyDomain.fit_mask_sha256) {
+    throw Error('Invalid lensed-source fit domain.');
+  }
+  return { ...source, mask_base64: legacyDomain.fit_mask_base64, mask_sha256: legacyDomain.fit_mask_sha256 };
+}
+
+/** Rendering excluded pixels and choosing a normalization region are independent. */
+export async function scaleImagePlane(plane:NumericalPlane,scale:ImageScale|'original',reference:NumericalPlane=plane,
+ {showFitExcluded=false,fullReference=false}={}):Promise<LivePlane>{
  if(!hasNumericRaster(plane)||!hasNumericRaster(reference))throw Error('A numerical image and display reference are required.');
- const key=JSON.stringify([plane.values_sha256,plane.mask_base64,plane.shape,plane.array_y_direction,scale,reference.values_sha256,reference.mask_base64,reference.shape,reference.array_y_direction,reference.color_lut_sha256,reference.color_stops,reference.vmin,reference.vmax,reference.stretch,reference.asinh_a]);
+ const key=JSON.stringify([plane.values_sha256,plane.mask_base64,plane.shape,plane.array_y_direction,scale,showFitExcluded,fullReference,reference.values_sha256,reference.mask_base64,reference.shape,reference.array_y_direction,reference.color_lut_sha256,reference.color_stops,reference.vmin,reference.vmax,reference.stretch,reference.asinh_a]);
  if(!rendered.has(key))rendered.set(key,(async()=>{
   const [{values,mask},referencePixels,{colors,src:colormap_src}]=await Promise.all([raster(plane),raster(reference),palette(reference)]);
-  const limits:RasterLimits=scale==='original'?{vmin:reference.vmin,vmax:reference.vmax,stretch:reference.stretch,parameter:reference.asinh_a??1}:imageScaleValues(displayScalePixels(referencePixels.values,referencePixels.mask,reference.shape,reference.array_y_direction),scale);
-  const pixels=numericPixels(values,mask,plane.shape,plane.array_y_direction,limits,colors,reference.color_stops);
+  const referenceMask = fullReference ? undefined : referencePixels.mask;
+  const limits:RasterLimits=scale==='original'?{vmin:reference.vmin,vmax:reference.vmax,stretch:reference.stretch,parameter:reference.asinh_a??1}:imageScaleValues(displayScalePixels(referencePixels.values,referenceMask,reference.shape,reference.array_y_direction),scale);
+  const pixels=numericPixels(values,mask,plane.shape,plane.array_y_direction,limits,colors,reference.color_stops,showFitExcluded);
   const canvas=document.createElement('canvas');canvas.width=plane.shape[1];canvas.height=plane.shape[0];const ctx=canvas.getContext('2d')!,image=ctx.createImageData(canvas.width,canvas.height);
   image.data.set(pixels);ctx.putImageData(image,0,0);
   return {src:canvas.toDataURL('image/png'),colormap_src,limits};

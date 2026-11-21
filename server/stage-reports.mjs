@@ -5,6 +5,8 @@ import { promisify } from 'node:util';
 import { connectionConfig, shellQuote } from './connection-config.mjs';
 
 export const stageReportSchema = 'tinylens.stage-report.v1';
+export const isModelingCommentReport = report => report?.schema === stageReportSchema && report.kind === 'artifact'
+  && report.stage === 'm3' && report.path === `${report.run_path}/modeling-comment.json`;
 export const stageReportFields = {
   schema: { type: 'string', enum: [stageReportSchema] },
   run_id: { type: 'string' }, run_path: { type: 'string' }, lens_id: { type: 'string' },
@@ -44,7 +46,7 @@ export function validateStageReport(report, workspace) {
     throw Error('The display manifest belongs to a different attempt.');
   }
   if (report.kind === 'artifact') {
-    if (!inside(report.path, folder) && !archiveForReport(report)) throw Error('The artifact belongs to a different attempt.');
+    if (!inside(report.path, folder) && !archiveForReport(report) && !isModelingCommentReport(report)) throw Error('The artifact belongs to a different attempt.');
     return;
   }
   if (!statuses.has(report.status)) throw Error('Invalid stage report status.');
@@ -80,7 +82,7 @@ function legacyScope(report, workspace, stage) {
 }
 
 /** Existing Codex threads can still report canonical paths with their original tool schema. */
-export async function readStageScope(report, workspace, { verifyHumanReview = false, expectedLensDirectory } = {}) {
+export async function readStageScope(report, workspace, { verifyHumanReview = false, expectedLensDirectory, completion = false, includeComment = false } = {}) {
   if (!['stage', 'artifact'].includes(report?.kind)) return undefined;
   if (typeof report.stage !== 'string') return undefined;
   validateStageReport(report, workspace);
@@ -88,6 +90,7 @@ export async function readStageScope(report, workspace, { verifyHumanReview = fa
   if (!stages.has(stage)) return undefined;
   const accepted = report.kind === 'stage' && report.status === 'accepted';
   const versioned = report.schema === stageReportSchema;
+  if (completion && (!versioned || !accepted || stage !== 'm3')) throw Error('An accepted M3 report is required.');
   const humanReview = verifyHumanReview && versioned && report.kind === 'stage' && report.status === 'human_review';
   if (humanReview && report.path !== `${stageDirectory(report)}/${stage === 'preflight' ? 'inspector.json' : 'decision.json'}`) {
     throw Error('Report the canonical Human Review record for this stage.');
@@ -97,15 +100,15 @@ export async function readStageScope(report, workspace, { verifyHumanReview = fa
   if (!info) return undefined;
   const lens_id = posix.basename(info.run_path);
   const request = { root: workspace, storage: info.storage, lens_id, stage, attempt: info.attempt, accepted,
-    human_review: humanReview, input_lens: expectedLensDirectory };
+    human_review: humanReview, input_lens: expectedLensDirectory, completion, include_comment: includeComment };
   try {
     const command = [shellQuote(connectionConfig.python), '-B', '-c', shellQuote(STAGE_SCOPE_READER), shellQuote(JSON.stringify(request))].join(' ');
     const { stdout } = await execute('ssh', ['-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=3', connectionConfig.sshHost, command],
-      { timeout: 5000, maxBuffer: 32 * 1024 });
+      { timeout: 5000, maxBuffer: (completion ? 96 : 32) * 1024 });
     const scope = JSON.parse(stdout);
     if (versioned) {
       if (scope.run_id !== report.run_id || scope.attempt !== report.attempt) throw Error('Run version disagrees with the scientific record.');
-      return undefined;
+      return completion ? scope.completion : undefined;
     }
     if (!scope.run_id) return accepted && stage !== 'preflight' ? { verified_attempt: scope.attempt } : undefined;
     const aliases = { review_pending: 'awaiting_review', pending_review: 'awaiting_review', in_review: 'reviewing',

@@ -24,7 +24,7 @@ from .review_context import unresolved_warnings
 
 
 _STAGE_RETRY_LIMIT = 5
-_STAGE_B_RETRY_LIMIT = 10
+_STAGE_B_RETRY_LIMIT = 20
 _SHARED_RETRY_LIMIT = 15
 _SHARED_RETRY_STAGES = {
     StageName.A,
@@ -419,7 +419,7 @@ def adjudicate_attempt(
         refinement = review["refinement_kind"]
         if refinement == "none":
             decision_name = "accept"
-        elif refinement == "coverage_blocked":
+        elif refinement in {"coverage_blocked", "cleanup_blocked"}:
             decision_name = "human_review"
         elif refinement in {"parameters", "selection"}:
             validate_retry_review(output_dir, stage, attempt, review)

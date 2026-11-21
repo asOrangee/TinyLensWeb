@@ -15,12 +15,14 @@ const optimizationGroups = [
   { role: 'fixed', label: '固定' },
 ] as const;
 
-export default function StageConfiguration({ stage, live = false, summary, model, onDetail }: {
-  stage: Stage; live?: boolean; summary?: LiveResult; model?: LiveResult; onDetail: (parameter: Parameter) => void;
+export default function StageConfiguration({ stage, live = false, summary, model, inherited, onDetail }: {
+  stage: Stage; live?: boolean; summary?: LiveResult; model?: LiveResult; inherited?: boolean;
+  onDetail: (parameter: Parameter) => void;
 }) {
   const { t } = useDemoI18n();
   const definitions = catalogParameters(stage);
   return <div className="model-config-grid" aria-label={t('当前模型')}>
+    {inherited && <p className="model-config-inheritance">{t('沿用原运行的 Stage A 配置')}</p>}
     {modelConfigurationCards(stage.id, live, summary, model).map(card => <article className="model-config-card" key={card.id} aria-label={card.label}>
       <header><h3>{card.label}</h3><div className="model-config-title"><strong className="model-config-name">{card.model}</strong>{card.model==='MGE'&&card.details.map(detail=><span className="model-config-brief" key={typeof detail==='string'?detail:detail.template}>{typeof detail==='string'?t(detail):t(detail.template,detail.values)}</span>)}</div></header>
       <p className="model-config-introduction">{t(card.introduction)}</p>

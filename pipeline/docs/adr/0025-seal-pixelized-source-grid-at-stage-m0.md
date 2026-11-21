@@ -4,6 +4,10 @@ status: accepted
 
 # Size and seal the pixelized-source grid at Stage M0
 
+This ADR records the original grid sizes. The `source-reconstruction.v1` release starts at
+100 × 100 pixels with a 0.010″ pixel scale and increases each dimension by 20 pixels per
+enlargement, up to 200 × 200. It retains the Stage A anchor and M0 acceptance rules below.
+
 Use the Stage-A posterior-median source centre with an initial Source Grid Footprint of `±0.8 arcsec` and `0.02 arcsec` source pixels. The footprint denotes outer cell edges, so its 80 pixel centres span `±0.79 arcsec`. The fixed enlargement sequence is `±0.8 → ±1.0 → ±1.2 arcsec`, represented in configuration only by `source_grid_level`; the Pipeline Release derives `80×80`, `100×100`, or `120×120` pixels so inconsistent half-width and pixel-count combinations cannot exist.
 
 A persistent Stage-M0 Expert judges only grid sufficiency through a dedicated response contract and reports `grid_sufficient`, `source_bbox_truncation`, or `indeterminate`. Confirmed truncation selects the next predetermined footprint, while indeterminate evidence routes to Human Review with `reason_kind: scientific_uncertainty`. Every enlargement consumes the existing M0 and shared physical-stage retry budgets and repeats the complete M0 regularization calibration. Truncation at the maximum `±1.2 arcsec` footprint routes to Human Review rather than further enlargement.

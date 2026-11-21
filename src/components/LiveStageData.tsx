@@ -7,12 +7,15 @@ import StageConfiguration from './StageConfiguration';
 import { liveParameters } from '../lib/live-parameters';
 import { parametersForPosterior } from '../lib/parameter-presentation';
 import { EvidenceChart } from './PosteriorChart';
-import { legacyAcceptanceReport, parseLiveResult, resultIdentity, stageDisplayCandidates, type LiveResult } from '../lib/live-results';
+import { JointPosteriorView } from './StageArtifactViews';
+import { useDemoI18n } from '../lib/demo-i18n';
+import { inheritedConfigurationAnchor, legacyAcceptanceReport, parseLiveResult, resultIdentity, stageDisplayCandidates, type LiveResult } from '../lib/live-results';
 import { parseMaskSource } from '../lib/mask-user-input';
 import { fetchPublishedDisplay } from '../lib/published-display';
 import { useAgentTaskId } from '../lib/agent-task-context';
 import { agentTaskUrl } from '../lib/live-tasks';
 import { isNamedDisplayDirectory, isNamedDisplaySchema, namedDisplaySchema } from '../lib/display-report';
+import { useStageView } from '../lib/stage-artifacts';
 
 const number = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? (value !== 0 && (Math.abs(value) < .001 || Math.abs(value) >= 1e6) ? value.toExponential(4) : Number(value.toPrecision(7)).toString()) : '—';
 const object = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -115,10 +118,13 @@ async function loadAttempt(taskId: string, reports: Selection, stage: string, si
 
 const hasImage = (value: StageDisplay) => value.mask || value.model?.planes?.model || value.model?.planes?.source;
 
-export function useLiveStageData(stage: Stage, updates: AgentUpdate[], historical?: string) {
+export function useLiveStageData(stage: Stage, updates: AgentUpdate[], historical?: string, showConfiguration = false) {
   const taskId = useAgentTaskId();
   const candidates = stageDisplayCandidates(updates, stage.id, historical);
   const acceptance = legacyAcceptanceReport(updates, stage.id, historical);
+  const inheritanceAnchor = showConfiguration && stage.id === 'a' && !historical && !candidates[0].identity
+    ? inheritedConfigurationAnchor(updates) : undefined;
+  const inherited = useStageView('inherited_configuration', inheritanceAnchor);
   // Report delivery updates other session fields frequently. Reload only when
   // a scoped report changes, including a newly announced result in the same run.
   const signature = JSON.stringify([acceptance?.id, historical, candidates.map(({ identity, published, summary, posterior, declaration, legacyReadable }) =>
@@ -154,9 +160,19 @@ export function useLiveStageData(stage: Stage, updates: AgentUpdate[], historica
     ? loaded : undefined;
   const reports = current?.value.reports ?? candidates[0];
   const { summary, posterior, model, mask, maskReport } = current?.value ?? { reports };
-  const parameterDetails = liveParameters(stage, summary, posterior, model);
+  const source = inheritanceAnchor && resultIdentity(inheritanceAnchor);
+  const configuration = inherited.value;
+  const inheritedSummary: LiveResult | undefined = configuration && source ? {
+    schema: 'tinylens.readonly-result.v1', kind: 'summary', stage: 'a', attempt: configuration.attempt,
+    path: `${source.runPath}/attempts/a/${configuration.attempt}/stage-result.json`,
+    sha256: configuration.summary_sha256, run_id: configuration.run_id, config: configuration.config,
+    result: { lens_id: source.lensId, stage: 'a', attempt: configuration.attempt, status: 'success',
+      metrics: configuration.mass_model ? { a_mass_model: configuration.mass_model } : {} },
+  } : undefined;
+  const parameterDetails = liveParameters(stage, summary ?? inheritedSummary, posterior, model);
   return {
     reports, summary, posterior, modelResult: model, modelPlanes: model?.planes, mask, maskReport,
+    configurationSummary: summary ?? inheritedSummary, configurationInherited: !summary && !!inheritedSummary,
     loading: current?.signature !== signature && !!(acceptance || reports.summary || reports.posterior || reports.published),
     parameterDetails, parameters: parametersForPosterior(stage.id, parameterDetails),
   };
@@ -166,14 +182,28 @@ export default function LiveStageData({ stage, data, view, onDetail, connection 
   stage: Stage; data: ReturnType<typeof useLiveStageData>; view: 'parameters' | 'config';
   onDetail: (parameter: Parameter) => void; connection?: string;
 }) {
+  const { t } = useDemoI18n();
+  const [posteriorView, setPosteriorView] = useState<'marginal' | 'joint'>('marginal');
   const { summary, posterior, parameters } = data;
   const source = summary ?? posterior;
   const histograms = posterior?.parameters?.filter(item => parameters.some(parameter => parameter.key === item.name&&parameter.role==='sampled')) ?? [];
-  if (view === 'config') return <StageConfiguration stage={stage} live summary={summary} model={data.modelResult} onDetail={onDetail}/>;
-  return <div className="live-numerical-results" data-result-attempt={source?.attempt}>
-    {stage.id === 'm0' ? <EvidenceChart parameter={parameters.find(p => p.key === 'log_lambda_reg')}
-      data={posterior?.kind === 'evidence_scan' ? posterior.scan : undefined} onDetail={onDetail} real/>
-      : <div className="panel"><ParameterCards parameters={parameters} histograms={histograms} live onDetail={onDetail}/></div>}
+  if (view === 'config') return <StageConfiguration stage={stage} live summary={data.configurationSummary}
+    inherited={data.configurationInherited} model={data.modelResult} onDetail={onDetail}/>;
+  const hasJointView = ['a', 'm1', 'm2', 'm3'].includes(stage.id);
+  const showJoint = hasJointView && posteriorView === 'joint';
+  const switcher = hasJointView && <div className="posterior-view-switch" role="group" aria-label={t('后验图类型')}>
+      <button type="button" aria-pressed={!showJoint} onClick={() => setPosteriorView('marginal')}>{t('一维后验')}</button>
+      <button type="button" aria-pressed={showJoint} onClick={() => setPosteriorView('joint')}>{t('联合后验')}</button>
+    </div>;
+  return <div className="live-numerical-results" data-posterior-view={showJoint ? 'joint' : 'marginal'} data-result-attempt={source?.attempt}>
+    {showJoint ? <JointPosteriorView switcher={switcher} report={data.reports.published ?? data.reports.summary}
+      parameters={data.parameterDetails} marginal={posterior}/>
+      : <>
+        {switcher && <div className="posterior-toolbar">{switcher}</div>}
+        {stage.id === 'm0' ? <EvidenceChart parameter={parameters.find(p => p.key === 'log_lambda_reg')}
+          data={posterior?.kind === 'evidence_scan' ? posterior.scan : undefined} onDetail={onDetail} real/>
+          : <div className="panel"><ParameterCards parameters={parameters} histograms={histograms} live onDetail={onDetail}/></div>}
+      </>}
     {(stage.id === 'b' || stage.id === 'preflight') && <div className="empty-state"><Layers3 size={28}/><h3>这个阶段没有采样后验</h3><p>{stage.id === 'b' ? '使用掩膜与覆盖信息检查本阶段结果。' : '使用预检图像和 Inspector 的证据检查本阶段结果。'}</p></div>}
   </div>;
 }

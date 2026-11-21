@@ -27,6 +27,65 @@ through the exact absolute `GPU Stage Command`; every other pipeline operation u
 to run even when the preflight morphology is not unique; downstream Stage Experts route unresolved
 structural failures to Human Review.
 
+## Routine decisions and Human Review
+
+Apply the user's explicit rules and established defaults within their stated lens or batch scope.
+When several scientifically safe options are available within that scope, choose the one you
+recommend from the evidence, record the reason in the normal stage evidence, and continue. Ask
+only when a missing decision materially changes the scientific interpretation or the authorized
+scope and the current artifacts and allowed repairs cannot resolve it.
+
+Pass applicable user rules to each Stage Expert with the delegation so the expert can apply
+them during review. Use the existing review and retry paths to test a safe recommendation.
+Record local scientific uncertainty through the stage's applicable warning or finding fields
+when the result meets the acceptance criteria. Keep any required command approval or explicit
+authorization for scope changes with the user. In a batch, report the exact blocker for the
+affected lens and continue any independent lenses already authorized to proceed.
+When user input is necessary, explain the concrete blocker, your recommendation, and its
+consequence in one request. Reuse the user's answer within the same scope unless the evidence
+or required authorization changes.
+
+## Task name in TinyLens Web
+
+When a user gives a modeling instruction in TinyLens Web and `tinylens_ui_report` is available,
+choose a short display name as soon as the target is clear. Use the object's familiar survey
+identifier, such as `SDSSJ0946`, if supported by the user's input or the input inventory. For a
+batch, use a concise name that identifies the whole set. Use a single line of at most 40 characters
+and report it once for the task, before the first preflight or batch preview where possible.
+If the target is still ambiguous, report the name once the user has clarified it.
+
+Send this structured output with `tinylens_ui_report`, substituting the chosen title:
+
+```json
+{"kind":"note","stage":"task_name","status":"suggested","title":"SDSSJ0946","message":"Workbench task name"}
+```
+
+Continue the existing modeling workflow after the report. The workbench gives a manually saved
+name priority.
+
+## Command defaults for a fresh Web run
+
+For a fresh run requested directly in the TinyLens Web workbench, locate the deployment's Python
+when the Lens Result Directory has no existing run evidence.
+The operator may publish the absolute interpreter in `workspace/releases/default-python` under
+the resolved Repository Root as a single non-empty line. When that file exists, read the path
+without evaluating the file as shell code. Otherwise use the bridge's `TINYLENS_PIPELINE_PYTHON`
+setting. Resolve a configured command name with `command -v`. Verify the resulting path is absolute
+and executable. Keep the interpreter path used to enter its environment, including a virtual
+environment's `bin/python` path.
+
+Verify that `scripts/run_lens_stage_on_idle_gpu.sh` is executable under the resolved Repository
+Root. When the user supplied neither command, use `<python> -m lens_agent.cli` for the Lens Agent Command and
+`<absolute runner> --python <python>` for the GPU Stage Command. Quote each path when assembling
+the commands and pass these exact commands to every delegated expert. If either default cannot be
+verified, ask for the explicit commands. Use the exact commands supplied for a resumed run or
+in a delegated batch. Preserve any explicitly supplied command and ask for any missing counterpart.
+
+If a fresh Web run supplies its own commands, check the Pipeline Release and initial M0 source
+grid of the selected Python environments against the deployment before preflight. If a command
+points to an older release and the user has not explicitly selected that release, report the
+discrepancy and ask for corrected commands before writing run evidence.
+
 ## Agent temporary files
 
 Before the first agent-authored temporary write, resolve the absolute repository root supplied as
@@ -66,6 +125,31 @@ or rerunning computation. Report retained paths in the terminal response; do not
 expire old directories.
 
 ## Full Lens Rerun and resume
+
+An explicit request to rerun from M0 onward while retaining an accepted A and B permits a new
+Lens Run with verified A/B evidence from a compatible earlier Pipeline Release. Wait until the
+source run has no active expert, scientific review, or command for this lens. Use the current
+deployment's interpreter and runner. Choose a fresh Lens Result Directory under a different batch
+directory with the same lens ID, then run:
+
+```text
+<Lens Agent Command> rerun from-m0 --source-run <current-source-result> --output-dir <fresh-result>
+```
+
+Verify the new manifest and the inheritance record. The original run stays at its original path.
+The inherited stages retain their original acceptance, decisions, and input geometry. Do not
+repeat preflight, A, or B, and do not register them as newly executed or reapproved. Start at M0/0
+on the new release's initial source grid and follow the normal expert reviews, retry rules, and
+stage-reporting procedure through the requested endpoint. Use only the new run ID for new results.
+If evidence validation fails, report the specific problem and wait for the user to choose how
+to proceed.
+
+An explicit request to rerun **only Stage B** authorizes a Stage B-only restart. Resolve the
+existing Lens Result Directory, verify that A is accepted, B's latest attempt has terminal
+Human Review, and B and downstream stages have no accepted results or downstream attempts.
+Preserve the existing run, Stage A head, and every old B record. Delegate a fresh Stage B Expert
+with the explicit restart authorization and stop at the new B decision. Do not start M0 for
+this request. Repeat the ordinary scope and terminal-evidence checks for the new B attempt.
 
 Treat explicit “重新分析”, “重跑”, “从头开始”, or unambiguous equivalents as a Full Lens Rerun.
 Wait for any active expert or command for that lens to finish, then run:
@@ -219,6 +303,21 @@ working files while a requested subhalo stage remains incomplete. No subhalo req
 original fixed stage sequence and completion conditions remain unchanged.
 
 ## Finish
+
+After a lens has an accepted M3 and has reached the requested endpoint, prepare `comment-draft.json`
+in the Agent Temporary Directory. Write a UTF-8 JSON object whose keys are `preflight`, `a`, `b`,
+`m0`, `m1`, `m2`, and `m3`. Each value is one or two short sentences in the user's reply language,
+on one line. For each stage, state its principal result and assess its quality or most relevant
+limitation. Use the canonical `preflight/inspector.json` for preflight and the accepted attempt's
+`stage-result.json`, `review.json`, and `decision.json` for the physical stages. For a run with
+inherited preflight and A/B, use the original accepted evidence identified by the inheritance record
+and describe those results as inherited. Preserve any material warning or uncertainty recorded in
+the review. This is a summary of the saved evidence and decisions.
+
+Reuse an already registered `modeling-comment.json` when resuming. For a new comment, run
+`<Lens Agent Command> modeling-comment --output-dir <lens-result> --comment-file <draft>` and
+reread the registered file. When the TinyLens UI report tool is available, report it as an
+`artifact` for stage `m3`, with the accepted M3 attempt and the same run identity.
 
 After every requested lens reaches its requested endpoint or Human Review, run:
 

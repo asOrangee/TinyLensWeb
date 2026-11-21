@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import tempfile
 from pathlib import Path
@@ -19,6 +20,9 @@ from .configuration import (
     PIPELINE_RELEASE_ID,
     PipelineConfig,
     TUNABLE_CATALOG,
+    require_writable_preflight,
+    stage_b_threshold_ext_size,
+    uses_stage_b_threshold_expansion,
     validate_run_manifest,
     validated_run_root,
 )
@@ -144,6 +148,13 @@ def _load_config(path: Path) -> EffectiveConfig:
     return EffectiveConfig.model_validate_json(path.read_text(encoding="utf-8"), strict=True)
 
 
+def load_accepted_stage_config(output_dir: Path, stage: StageName, path: Path) -> EffectiveConfig:
+    from .inherited_ab import inherited_stage_config
+
+    inherited = inherited_stage_config(output_dir, stage, path)
+    return inherited if inherited is not None else _load_config(path)
+
+
 def _resolve_within(base: Path, reference: str, boundary: Path) -> Path:
     target = (base / reference).resolve()
     try:
@@ -174,7 +185,8 @@ def _accepted_config(output_dir: Path, stage: StageName) -> tuple[EffectiveConfi
     config_path = _resolve_within(
         head_path.parent, str(head.get("effective_config", "")), output_dir
     )
-    return _load_config(config_path), config_path.relative_to(output_dir).as_posix()
+    config = load_accepted_stage_config(output_dir, upstream, config_path)
+    return config, config_path.relative_to(output_dir).as_posix()
 
 
 def _proposal_from_response(raw: dict[str, Any], stage: StageName) -> tuple[_Proposal, str]:
@@ -208,10 +220,11 @@ def _selection_from_response(
     )
     ids = selection.drop_component_ids
     if (
-        any(isinstance(value, bool) or value <= 0 for value in ids)
+        not ids
+        or any(isinstance(value, bool) or value <= 0 for value in ids)
         or ids != sorted(set(ids))
     ):
-        raise ValueError("drop_component_ids must be sorted unique positive integers")
+        raise ValueError("drop_component_ids must be a nonempty list of sorted unique positive integers")
     expected = (
         parent_root / "artifacts" / "stage_b_components.json"
     ).relative_to(output_dir).as_posix()
@@ -302,13 +315,7 @@ def _selection_from_response(
             "component selection would uncover predicted images: "
             + ", ".join(uncovered)
         )
-    current_path = parent_root / "arc-component-selection.json"
-    current_ids: list[int] = []
-    if current_path.is_file():
-        current_ids = json.loads(current_path.read_text(encoding="utf-8")).get(
-            "drop_component_ids", []
-        )
-    if ids == current_ids:
+    if ids == catalog["selection"]["drop_component_ids"]:
         raise ValueError("component selection must change the dropped-component set")
     return selection
 
@@ -333,7 +340,8 @@ def _apply_proposal(
     if proposal.old_value != current:
         raise ValueError("proposal old_value does not match the parent configuration")
     new_value = proposal.new_value
-    if isinstance(new_value, bool) or type(new_value) is not spec.value_type:
+    integer_snr = proposal.parameter == "arc_snr_threshold" and type(new_value) is int
+    if type(new_value) is not spec.value_type and not integer_snr:
         raise ValueError("proposal new_value has the wrong type")
     if not spec.minimum <= new_value <= spec.maximum:
         raise ValueError("proposal new_value is outside the Tuning Safety Envelope")
@@ -342,7 +350,7 @@ def _apply_proposal(
     if new_value == current:
         raise ValueError("proposal must change the selected parameter")
     values = parent.settings.model_dump()
-    values[proposal.parameter] = new_value
+    values[proposal.parameter] = float(new_value) if integer_snr else new_value
     return PipelineConfig.model_validate(values, strict=True)
 
 
@@ -360,7 +368,11 @@ def validate_retry_review(
     parent = _load_config(parent_path)
     response = validate_reviewer_response(raw_response, stage)
     component_selection = None
+    threshold_expansion = False
     if stage == StageName.B:
+        threshold_expansion = uses_stage_b_threshold_expansion(validate_run_manifest(output_dir))
+        if threshold_expansion and parent.settings.arc_ext_size != stage_b_threshold_ext_size(parent.settings.arc_snr_threshold):
+            raise ValueError("Stage-B parent expansion differs from its S/N threshold")
         component_selection = _selection_from_response(
             response, output_dir, parent_root
         )
@@ -377,13 +389,16 @@ def validate_retry_review(
             component_selection,
         )
     proposal, blocker = _proposal_from_response(response, stage)
-    if stage == StageName.B and any(
-        item["disposition"] == "supported_uncovered"
-        for item in response["predicted_image_dispositions"]
-    ):
-        if (
-            proposal.parameter != "arc_snr_threshold"
-            or proposal.new_value >= proposal.old_value
+    if stage == StageName.B:
+        if threshold_expansion and proposal.parameter == "arc_ext_size":
+            raise ValueError("Stage-B expansion is determined by arc_snr_threshold for this run")
+        if proposal.parameter == "arc_snr_threshold" and (
+            type(proposal.old_value) not in (int, float) or type(proposal.new_value) not in (int, float)
+        ):
+            raise ValueError("Stage-B arc_snr_threshold values must be numbers")
+        dispositions = {item["disposition"] for item in response["predicted_image_dispositions"]}
+        if "supported_uncovered" in dispositions and (
+            proposal.parameter != "arc_snr_threshold" or proposal.new_value >= proposal.old_value
         ):
             raise ValueError(
                 "Stage-B supported_uncovered repair requires lowering arc_snr_threshold"
@@ -391,6 +406,21 @@ def validate_retry_review(
     settings = _apply_proposal(
         parent, proposal, blocker, stage, parent_reference
     )
+    if stage == StageName.B:
+        if threshold_expansion:
+            settings = settings.model_copy(update={"arc_ext_size": stage_b_threshold_ext_size(settings.arc_snr_threshold)})
+        if dispositions == {"covered_consistent"} and not math.isclose(
+            settings.arc_snr_threshold - parent.settings.arc_snr_threshold,
+            1.0, rel_tol=0.0, abs_tol=1e-12,
+        ):
+            raise ValueError("Stage-B unrelated-component cleanup requires raising arc_snr_threshold by 1")
+        for index in range(attempt):
+            earlier = parent_root.parent / str(index)
+            if (
+                (earlier / "stage-result.json").is_file()
+                and _load_config(earlier / "effective-config.json").settings == settings
+            ):
+                raise ValueError(f"Stage-B mask parameters already evaluated in attempt {index}")
     return (
         settings,
         {
@@ -471,14 +501,22 @@ def _prepare_attempt(output_dir: Path, stage: StageName, attempt: int) -> Path:
 
 def configuration_bundle(output_dir: Path, stage: StageName, attempt: int) -> dict[str, Any]:
     """Derive the complete authorized preparation without filesystem writes."""
+    from .stage_b_selection import SELECTION_FILE, load_stage_b_selection
+
     output_dir = validated_run_root(output_dir)
+    threshold_expansion = False
+    if stage in {StageName.A, StageName.B}:
+        run_manifest = validate_run_manifest(output_dir)
+        require_writable_preflight(run_manifest)
+        threshold_expansion = stage == StageName.B and uses_stage_b_threshold_expansion(run_manifest)
     parent_reference: str | None = None
     settings = PipelineConfig()
     validation: dict[str, Any] | None = None
     component_selection: _ComponentSelection | None = None
     visual_prior_provenance: dict[str, Any] | None = None
     attempt_dir(output_dir, stage, attempt)
-    if attempt == 0:
+    prescan_selection = load_stage_b_selection(output_dir, attempt) if stage == StageName.B else None
+    if attempt == 0 or prescan_selection is not None:
         accepted, accepted_reference = _accepted_config(output_dir, stage)
         settings = accepted.settings
         if stage in {StageName.A, StageName.B, StageName.M0} and settings.source_grid_level != 0:
@@ -498,6 +536,15 @@ def configuration_bundle(output_dir: Path, stage: StageName, attempt: int) -> di
             visual_prior_provenance["source_inspector"] = "preflight/inspector.json"
         else:
             parent_reference = accepted_reference
+        if prescan_selection is not None:
+            settings = settings.model_copy(update={"arc_snr_threshold": float(prescan_selection["threshold"])})
+        if threshold_expansion:
+            settings = settings.model_copy(update={"arc_ext_size": stage_b_threshold_ext_size(settings.arc_snr_threshold)})
+        if prescan_selection is not None and any(
+            getattr(settings, name) != prescan_selection[name]
+            for name in ("arc_ignor_size", "arc_ext_size", "arc_close_size")
+        ):
+            raise ValueError("Stage B prescan differs from its effective configuration")
     else:
         parent_root = attempt_dir(output_dir, stage, attempt - 1)
         parent_path = parent_root / "effective-config.json"
@@ -528,6 +575,8 @@ def configuration_bundle(output_dir: Path, stage: StageName, attempt: int) -> di
         raise ValueError("Attempt input geometry differs from the run manifest; start a new run")
     config = EffectiveConfig(parent_config=parent_reference, settings=settings)
     bundle = {"effective-config.json": config.model_dump(mode="json")}
+    if prescan_selection is not None:
+        bundle[SELECTION_FILE] = prescan_selection
     if component_selection is not None:
         selection_payload = {
             "schema_version": "arc_component_selection.v1",

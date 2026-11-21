@@ -1,5 +1,6 @@
 import type { StageId } from '../data/stages.ts';
 import type { LiveResult } from './live-results.ts';
+import { resultNumber } from './live-parameters.ts';
 import { mgeReference } from '../data/scientific-references.ts';
 
 type Reference = { label: string; url: string };
@@ -20,8 +21,39 @@ const papers = {
 const object = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const parameters = (keys: string[], role: ModelParameterRole | ((key: string) => ModelParameterRole) = 'sampled') => keys.map(key => ({ key, symbol: key, role: typeof role === 'function' ? role(key) : role }));
 const count = (value: unknown) => Number.isInteger(value) && Number(value) > 0 ? String(value) : '—';
+const supportedReleases = new Set(['input-geometry.v1', 'source-reconstruction.v1']);
+const isGridShape = (shape: unknown): shape is [number, number] =>
+  Array.isArray(shape) && shape.length === 2 && shape.every(size => Number.isSafeInteger(size) && size > 0);
+const positiveNumber = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0;
 
-/** Verified config.v5 / input-geometry.v1 forms. Real cards require the selected
+function sourceGridDetail(summary?: LiveResult, model?: LiveResult): Detail | undefined {
+  const grid = object(object(summary?.result?.metrics).source_grid_spec);
+  const savedShape = grid.schema_version === 'source_grid_spec.v1' ? [grid.nsrc, grid.nsrc] : undefined;
+  const source = summary && model?.stage === summary.stage && model.path === summary.path
+    && model.run_id === summary.run_id && model.sha256 === summary.sha256 && model.attempt === summary.attempt
+    ? model.planes?.source : undefined;
+  const publishedShape = summary?.parameter_contract ? summary.linear_parameters?.source_brightness?.shape : undefined;
+  const shape = isGridShape(publishedShape) ? publishedShape : isGridShape(source?.shape) ? source.shape : savedShape;
+  if (!isGridShape(shape)) return undefined;
+  const [ny, nx] = shape;
+  let pixel = ny === grid.nsrc && nx === grid.nsrc && savedShape && positiveNumber(grid.pixel_scale_arcsec)
+    ? grid.pixel_scale_arcsec : undefined;
+  const bounds = source?.bounds_arcsec;
+  if (pixel === undefined && source?.shape[0] === ny && source.shape[1] === nx
+    && bounds?.length === 4 && bounds.every(Number.isFinite)) {
+    const [xmin, xmax, ymin, ymax] = bounds;
+    const dx = (xmax - xmin) / nx, dy = (ymax - ymin) / ny;
+    if (positiveNumber(dx) && positiveNumber(dy) && Math.abs(dx - dy) <= Math.max(dx, dy) * 1e-9) {
+      pixel = (dx + dy) / 2;
+    }
+  }
+  const dimensions = shape.join(' × ');
+  return { template: '源网格：{shape}', values: { shape: pixel === undefined
+    ? dimensions : `${dimensions} · ${resultNumber(pixel)} arcsec / pixel` } };
+}
+
+/** Verified config.v5 forms. Real cards require the selected
  * attempt's reported config; another release needs verified model definitions. */
 export function modelConfigurationCards(stage: StageId, live = false, summary?: LiveResult, model?: LiveResult): ModelConfigurationCard[] {
   const cards: ModelConfigurationCard[] = [
@@ -31,7 +63,8 @@ export function modelConfigurationCards(stage: StageId, live = false, summary?: 
   ];
   if (!['a', 'm0', 'm1', 'm2', 'm3'].includes(stage)) return cards;
   const config = summary?.config;
-  if (live && (summary?.stage !== stage || config?.schema_version !== 'lens_pipeline_config.v5' || config.pipeline_release_id !== 'input-geometry.v1')) return cards;
+  if (live && (summary?.stage !== stage || config?.schema_version !== 'lens_pipeline_config.v5'
+    || !config.pipeline_release_id || !supportedReleases.has(config.pipeline_release_id))) return cards;
   const settings = live ? object(config?.settings) : { n_gaussians_lens: 10, n_gaussians_src: 10 };
   const epl = stage === 'm3', mass = epl ? 'EPL + Shear' : 'SIE + Shear';
   const declaredMass = object(summary?.result?.metrics)[`${stage}_mass_model`];
@@ -58,13 +91,10 @@ export function modelConfigurationCards(stage: StageId, live = false, summary?: 
       introduction: '用多尺度椭圆高斯叠加源光，经透镜映射形成弧像。便于联合拟合；同组共用中心与椭率，对不规则或分离结构的表达有限。',
       references: [papers.mge] };
   } else {
-    const grid = object(object(summary?.result?.metrics).source_grid_spec);
-    const boundModel = model?.stage === stage && model.path === summary?.path && model.sha256 === summary?.sha256 && model.attempt === summary?.attempt ? model : undefined;
-    const shape = summary?.parameter_contract ? summary.linear_parameters?.source_brightness?.shape : boundModel?.planes?.source?.shape;
-    const gridShape = shape?.length === 2 ? shape.join(' × ') : grid.schema_version === 'source_grid_spec.v1' && Number.isInteger(grid.nsrc) && Number(grid.nsrc) > 0 ? `${grid.nsrc} × ${grid.nsrc}` : undefined;
+    const gridDetail = sourceGridDetail(summary, model);
     cards[2] = { ...cards[2], model: 'Pixelized source',
       parameters: parameters(['source_brightness', 'log_lambda_reg', ...(['m2', 'm3'].includes(stage) ? ['adaptive_reg_rho'] : []), 'source_grid_shape', 'source_pixel_scale'], key => key === 'source_brightness' ? 'linear' : key.startsWith('source_') || stage === 'm3' ? 'fixed' : stage === 'm0' ? 'scan' : 'sampled'),
-      details: [stage === 'm0' || stage === 'm1' ? '一阶正则化' : '一阶自适应正则化', ...(gridShape ? [{template:'源网格：{shape}',values:{shape:gridShape}}] : []), ...(stage === 'm0' ? ['扫描正则化强度'] : stage === 'm3' ? ['正则化参数固定于 M2'] : [])],
+      details: [stage === 'm0' || stage === 'm1' ? '一阶正则化' : '一阶自适应正则化', ...(gridDetail ? [gridDetail] : []), ...(stage === 'm0' ? ['扫描正则化强度'] : stage === 'm3' ? ['正则化参数固定于 M2'] : [])],
       introduction: '在给定质量模型的网格上线性重建源亮度，以正则化抑制噪声。能表达不规则结构；依赖网格与平滑强度，过强的平滑会抹去细节。',
       references: [papers.inversion, papers.regularization] };
   }

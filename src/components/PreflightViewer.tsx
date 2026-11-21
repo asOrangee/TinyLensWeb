@@ -100,7 +100,7 @@ export default function PreflightViewer({ toolbarTarget, missingLayers, display,
             <span className="science-scale" style={{ width: `${plane.scale_bar_arcsec / (2 * (plane.half_extent_x_arcsec ?? extent)) * 100 * zoom}%` }}><span>{plane.scale_bar_arcsec}″</span></span></>}
             {showCrosshair && crosshair?.group === group && <div className="science-crosshair" aria-hidden="true"><i style={{ left: `${crosshair.x}%` }}/><b style={{ top: `${crosshair.y}%` }}/></div>}
           </div>
-          {image?.src?<ScienceColorbar min={image.vmin} max={image.vmax} {...stretch} constant={plane.constant} gradient={shown?.colormap_src} constantColor={image.constant_color} title={display ? `${headings[plane.id]} (${plane.unit}) · ${scaleLabels[scale]} · ${image.vmin} 至 ${image.vmax}` : undefined}/>:<div className="science-colorbar-unavailable" aria-label="暂无数值色阶">—</div>}</div>
+          {image?.src?<ScienceColorbar min={image.vmin} max={image.vmax} {...stretch} constant={plane.constant} gradient={shown?.colormap_src} constantColor={image.constant_color} unit={plane.id === 'snr' ? '1' : plane.unit} title={display ? `${headings[plane.id]} · ${scaleLabels[scale]} · ${image.vmin} 至 ${image.vmax}` : undefined}/>:<div className="science-colorbar-unavailable" aria-label="暂无数值色阶">—</div>}</div>
         </figure>;
       })}
     </div>

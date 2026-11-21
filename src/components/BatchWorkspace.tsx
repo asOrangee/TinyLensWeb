@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowUpRight, Layers, Pause, Play, X } from 'lucide-react';
+import { ArrowUpRight, Layers, Pause, Play, RotateCcw, X } from 'lucide-react';
 import { batchFetch, type Batch, type BatchJob, type BatchPlan, type BatchSummary } from '../lib/live-batches';
 import { useDemoI18n } from '../lib/demo-i18n';
+import { standaloneTaskGroup, type LiveTask } from '../lib/live-tasks';
 import './batch-workspace.css';
 
 const statusLabels: Record<BatchJob['status'], string> = {
@@ -31,20 +32,19 @@ export function BatchPlanCard({ plan, onProgress }: { plan: BatchPlan; onProgres
   </article>;
 }
 
-export default function BatchWorkspace({ initialId, onClose, onOpenTask }: {
-  initialId?: string; onClose: () => void; onOpenTask: (id: string) => Promise<void>;
+export default function BatchWorkspace({ activeId, batch, batchError, standaloneTasks, onSelectBatch, onBatchUpdate, onClose, onOpenTask }: {
+  activeId: string; batch?: Batch; batchError?: string; standaloneTasks: LiveTask[];
+  onSelectBatch: (id: string) => void; onBatchUpdate: (batch: Batch) => void;
+  onClose: () => void; onOpenTask: (id: string) => Promise<void>;
 }) {
   const { t } = useDemoI18n();
   const dialog = useRef<HTMLDialogElement>(null);
   const actionLock = useRef(false);
-  const [catalog, setCatalog] = useState<BatchSummary[]>([]);
-  const [activeId, setActiveId] = useState(initialId ?? '');
-  const [batch, setBatch] = useState<Batch>();
+  const [catalog, setCatalog] = useState<BatchSummary[]>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [loadError, setLoadError] = useState('');
-  const [loading, setLoading] = useState(true);
-  const revision = useRef(0);
+  const [catalogError, setCatalogError] = useState('');
+  const [requeued, setRequeued] = useState<number>();
 
   useEffect(() => {
     const current = dialog.current;
@@ -57,64 +57,86 @@ export default function BatchWorkspace({ initialId, onClose, onOpenTask }: {
     batchFetch<{ batches: BatchSummary[] }>('', { signal: controller.signal }).then(result => {
       if (controller.signal.aborted) return;
       setCatalog(result.batches);
-      setActiveId(previous => result.batches.find(item => item.id === previous)?.id ?? result.batches[0]?.id ?? '');
-    }).catch(reason => { if (!controller.signal.aborted) setLoadError(errorText(reason)); })
-      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    }).catch(reason => { if (!controller.signal.aborted) setCatalogError(errorText(reason)); });
     return () => controller.abort();
   }, []);
-
-  useEffect(() => {
-    if (!activeId) return;
-    const controller = new AbortController();
-    let next: number;
-    async function refresh() {
-      const pending = revision.current;
-      try {
-        const result = await batchFetch<{ batch: Batch }>(`/${activeId}`, { signal: controller.signal });
-        if (!controller.signal.aborted && pending === revision.current) { setBatch(result.batch); setLoadError(''); }
-      } catch (reason) { if (!controller.signal.aborted) setLoadError(errorText(reason)); }
-      if (!controller.signal.aborted) next = window.setTimeout(refresh, 2000);
-    }
-    void refresh();
-    return () => { controller.abort(); window.clearTimeout(next); };
-  }, [activeId]);
 
   function close() { if (!actionLock.current) onClose(); }
   async function perform<T>(operation: () => Promise<T>): Promise<T | undefined> {
     if (actionLock.current) return undefined;
-    actionLock.current = true; setBusy(true); setError('');
+    actionLock.current = true; setBusy(true); setError(''); setRequeued(undefined);
     try { return await operation(); }
     catch (reason) { setError(errorText(reason)); return undefined; }
     finally { actionLock.current = false; setBusy(false); }
   }
   async function pause(selected: Batch) {
     const result = await perform(() => batchFetch<{ batch: Batch }>(`/${selected.id}/dispatch`, { data: { paused: !selected.paused } }));
-    if (result) { revision.current += 1; setBatch(result.batch); }
+    if (result) onBatchUpdate(result.batch);
+  }
+  async function retryStart(selected: Batch) {
+    const result = await perform(async () => {
+      const response = await batchFetch<{ requeued: number; batch: Batch }>(`/${selected.id}/retry-start`, { data: {} });
+      if (response.batch?.id !== selected.id || !Number.isSafeInteger(response.requeued) || response.requeued < 0) {
+        throw Error(t('批次重试响应无效。'));
+      }
+      return response;
+    });
+    if (result) {
+      onBatchUpdate(result.batch);
+      setRequeued(result.requeued);
+    }
   }
 
-  const selected = batch?.id === activeId ? batch : undefined;
+  const standalone = activeId === standaloneTaskGroup;
+  const selectedSummary = catalog?.find(item => item.id === activeId) ?? batch;
+  const batchName = standalone ? t('单独建模') : selectedSummary?.name;
+  const options = catalog ?? (batch ? [batch] : []);
+  const loadError = catalogError || batchError;
   return <dialog ref={dialog} className="batch-dialog" aria-labelledby="batch-title" onCancel={event => { event.preventDefault(); close(); }}>
     <div className="batch-shell">
       <header className="batch-header">
         <h2 id="batch-title"><Layers size={21} aria-hidden="true"/>{t('建模批次')}</h2>
-        <button type="button" className="batch-close" aria-label={t('关闭')} title={t('关闭')} disabled={busy} onClick={close}><X size={20}/></button>
+        <button type="button" className="workspace-dialog-close" aria-label={t('关闭')} title={t('关闭')} disabled={busy} onClick={close}><X size={20} aria-hidden="true"/></button>
       </header>
       <div className="batch-body">
-        {catalog.length > 0 && <div className="batch-toolbar"><label><span>{t('批次')}</span>
-          <select value={activeId} disabled={busy} onChange={event => { setActiveId(event.target.value); setError(''); setLoadError(''); }}>
-            {catalog.map(item => <option key={item.id} value={item.id}>{item.name} · {new Date(item.createdAt).toLocaleString()} · {item.size} lens</option>)}
-          </select></label></div>}
-        {selected ? <BatchProgress batch={selected} busy={busy} onPause={() => void pause(selected)}
+        <div className="batch-toolbar">
+          <h3>{batchName ?? t('批次')}</h3>
+          <select aria-label={t('切换批次')} value={activeId} disabled={busy} onChange={event => { onSelectBatch(event.target.value); setError(''); setRequeued(undefined); }}>
+            <option value={standaloneTaskGroup}>{t('单独建模')} · {standaloneTasks.length} lens</option>
+            {!standalone && !options.some(item => item.id === activeId) && <option value={activeId}>{t('当前批次')}</option>}
+            {options.map(item => <option key={item.id} value={item.id}>{item.name} · {new Date(item.createdAt).toLocaleString()} · {item.size} lens</option>)}
+          </select>
+        </div>
+        {standalone ? <StandaloneBatch tasks={standaloneTasks} busy={busy} onOpen={id => void perform(() => onOpenTask(id))}/>
+          : batch ? <BatchProgress key={batch.id} batch={batch} busy={busy} requeued={requeued} onPause={() => void pause(batch)}
+          onRetryStart={() => void retryStart(batch)}
           onOpen={id => void perform(() => onOpenTask(id))}/>
-          : !loadError && <p className="batch-hint" role="status">{t(loading || activeId ? '正在读取批次…' : '还没有建模批次。可以在对话里向 Pipeline AI 描述批量任务。')}</p>}
+          : !batchError && <p className="batch-hint" role="status">{t('正在读取批次…')}</p>}
         {(error || loadError) && <p className="batch-error" role="alert">{error || loadError}</p>}
       </div>
     </div>
   </dialog>;
 }
 
-function BatchProgress({ batch, busy, onPause, onOpen }: {
-  batch: Batch; busy: boolean; onPause: () => void; onOpen: (id: string) => void;
+function StandaloneBatch({ tasks, busy, onOpen }: { tasks: LiveTask[]; busy: boolean; onOpen: (id: string) => void }) {
+  const { t } = useDemoI18n();
+  const [query, setQuery] = useState('');
+  const matches = tasks.filter(task => task.name.toLowerCase().includes(query.trim().toLowerCase()));
+  if (!tasks.length) return <p className="batch-hint" role="status">{t('暂无单独建模任务。')}</p>;
+  return <>
+    <input className="batch-search" type="search" aria-label={t('查找任务名称')} placeholder={t('查找任务名称')}
+      value={query} onChange={event => setQuery(event.target.value)}/>
+    <div className="batch-table-wrap"><table className="batch-table batch-table--standalone"><thead><tr>
+      <th scope="col">{t('任务名称')}</th><th scope="col">{t('任务')}</th>
+    </tr></thead><tbody>{matches.map(task => <tr key={task.id}>
+      <th scope="row">{task.name}</th><td><button type="button" className="batch-open-task" disabled={busy}
+        aria-label={t('打开任务：{name}', { name: task.name })} onClick={() => onOpen(task.id)}>{t('打开')}<ArrowUpRight size={14}/></button></td>
+    </tr>)}</tbody></table>{!matches.length && <p className="batch-hint">{t('未找到任务。')}</p>}</div>
+  </>;
+}
+
+function BatchProgress({ batch, busy, requeued, onPause, onRetryStart, onOpen }: {
+  batch: Batch; busy: boolean; requeued?: number; onPause: () => void; onRetryStart: () => void; onOpen: (id: string) => void;
 }) {
   const { t } = useDemoI18n();
   const [query, setQuery] = useState('');
@@ -122,13 +144,23 @@ function BatchProgress({ batch, busy, onPause, onOpen }: {
   const review = batch.jobs.filter(job => job.status === 'human_review').length;
   const queued = batch.jobs.filter(job => job.status === 'queued').length;
   const waiting = batch.jobs.filter(job => job.status === 'waiting_user').length;
+  const retryable = batch.retryableStartCount ?? 0;
+  const canRetryStart = batch.compatible && Number.isSafeInteger(retryable) && retryable > 0;
   const jobs = batch.jobs.filter(job => job.lensId.toLowerCase().includes(query.trim().toLowerCase()));
   return <section className="batch-progress" aria-label={t('逐目标进度')}>
     <div className="batch-overview">
-      <div><h3>{batch.name}</h3><div className="batch-output" title={batch.outputDir}>{batch.outputDir}</div></div>
-      {queued > 0 && batch.compatible && <button type="button" className="button secondary" disabled={busy} onClick={onPause}>
-        {batch.paused ? <Play size={14}/> : <Pause size={14}/>} {t(batch.paused ? '继续派发' : '暂停派发')}</button>}
+      <div className="batch-output" title={batch.outputDir}>{batch.outputDir}</div>
+      <div className="batch-actions">
+        {canRetryStart && <button type="button" className="button secondary" disabled={busy} onClick={onRetryStart}
+          title={t('可重试 {count} 个未启动任务', { count: retryable })}>
+          <RotateCcw size={14} aria-hidden="true"/>{t('重试未启动任务')}</button>}
+        {queued > 0 && batch.compatible && <button type="button" className="button secondary" disabled={busy} onClick={onPause}>
+          {batch.paused ? <Play size={14}/> : <Pause size={14}/>} {t(batch.paused ? '继续派发' : '暂停派发')}</button>}
+      </div>
     </div>
+    {requeued !== undefined && <p className="batch-hint" role="status">{requeued > 0
+      ? t('已将 {count} 个未启动任务移回队列。', { count: requeued })
+      : t('没有可重试的未启动任务。')}</p>}
     {!batch.compatible && <p className="batch-error" role="status">{t('此批次使用了另一份 GPU 服务器配置。')}</p>}
     {batch.paused && <p className="batch-hint" role="status">{t('队列已暂停，已派发的任务继续运行。')}</p>}
     <div className="batch-counts"><strong>{t('{done} / {total} 已到科学终态', { done: accepted + review, total: batch.size })}</strong>
@@ -138,14 +170,20 @@ function BatchProgress({ batch, busy, onPause, onOpen }: {
     <input className="batch-search" type="search" aria-label={t('查找 lens ID')} placeholder={t('查找 lens ID')} value={query} onChange={event => setQuery(event.target.value)}/>
     <div className="batch-table-wrap"><table className="batch-table"><thead><tr>
       <th scope="col">Lens ID</th><th scope="col">{t('当前阶段')}</th><th scope="col">{t('状态')}</th><th scope="col">{t('任务')}</th>
-    </tr></thead><tbody>{jobs.map(job => <tr key={job.taskId}>
-      <th scope="row">{job.lensId}</th><td>{job.stage === 'preflight' ? t('D · 预检') : job.stage?.toUpperCase() ?? '—'}</td>
-      <td><span className="batch-status" data-status={job.status} title={job.message}>{t(statusLabels[job.status])}</span>
-        {job.stageStatus && !['waiting_gpu', 'accepted', 'human_review'].includes(job.status) && reportLabels[job.stageStatus]
-          && <small className="batch-stage-status">{t(reportLabels[job.stageStatus])}</small>}
-        {job.message && ['attention', 'unconfirmed', 'incomplete'].includes(job.status) && <div className="batch-job-message">{job.message}</div>}</td>
-      <td>{job.canOpen && batch.compatible && <button type="button" className="batch-open-task" disabled={busy}
-        aria-label={t('打开任务：{name}', { name: job.lensId })} onClick={() => onOpen(job.taskId)}>{t('打开')}<ArrowUpRight size={14}/></button>}</td>
-    </tr>)}</tbody></table>{!jobs.length && <p className="batch-hint">{t('未找到该 lens。')}</p>}</div>
+    </tr></thead><tbody>{jobs.map(job => {
+      const needsFirstResult = job.status === 'incomplete' && !job.stage;
+      const delivered = needsFirstResult && job.delivered === true;
+      const statusLabel = delivered ? '已送达，尚无阶段结果' : needsFirstResult ? '尚无阶段结果' : statusLabels[job.status];
+      return <tr key={job.taskId}>
+        <th scope="row">{job.lensId}</th><td>{job.stage === 'preflight' ? t('D · 预检') : job.stage?.toUpperCase() ?? '—'}</td>
+        <td><span className="batch-status" data-status={job.status} title={job.message}>{t(statusLabel)}</span>
+          {job.stageStatus && !['waiting_gpu', 'accepted', 'human_review'].includes(job.status) && reportLabels[job.stageStatus]
+            && <small className="batch-stage-status">{t(reportLabels[job.stageStatus])}</small>}
+          {delivered && job.canOpen && batch.compatible && <div className="batch-job-message">{t('可打开原会话继续。')}</div>}
+          {job.message && ['attention', 'unconfirmed', 'incomplete'].includes(job.status) && <div className="batch-job-message">{job.message}</div>}</td>
+        <td>{job.canOpen && batch.compatible && <button type="button" className="batch-open-task" disabled={busy}
+          aria-label={t('打开任务：{name}', { name: job.lensId })} onClick={() => onOpen(job.taskId)}>{t('打开')}<ArrowUpRight size={14}/></button>}</td>
+      </tr>;
+    })}</tbody></table>{!jobs.length && <p className="batch-hint">{t('未找到该 lens。')}</p>}</div>
   </section>;
 }

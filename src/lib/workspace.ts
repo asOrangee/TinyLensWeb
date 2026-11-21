@@ -30,21 +30,6 @@ export function advanceDemoRun(run: Run): Run {
   const finishedStages = [...finished, next];
   return { ...run, finishedStages, progress: stageOrder.indexOf(next), status: finishedStages.length >= queue.length ? 'complete' : 'running' };
 }
-export function lensBranches(runs: Run[], lensId: string) {
-  const entries = runs.filter(run => run.lensId === lensId).map((run, index) => ({ run, version: index + 1 }));
-  const byId = new Map(entries.map(entry => [entry.run.id, entry]));
-  const result: { run: Run; version: number; depth: number; parentVersion?: number }[] = [];
-  const seen = new Set<string>();
-  function visit(entry: typeof entries[number], depth: number) {
-    if (seen.has(entry.run.id)) return;
-    seen.add(entry.run.id);
-    result.push({ ...entry, depth, parentVersion: entry.run.parentId ? byId.get(entry.run.parentId)?.version : undefined });
-    for (const child of entries) if (child.run.parentId === entry.run.id) visit(child, depth + 1);
-  }
-  for (const entry of entries) if (!entry.run.parentId || !byId.has(entry.run.parentId)) visit(entry, 0);
-  for (const entry of entries) visit(entry, 0);
-  return result;
-}
 export function initialRun(lensId: string, mask: number[]): Run {
   return {id: `${lensId}-r01`, lensId, from:'preflight', createdAt:'2026-10-26T02:30:00.000Z', comment:'初始合成样例，用于体验界面。未执行科学拟合。',systemComment:'initial',mask,models:{lens:'MGE',source:'MGE'},status:'complete',progress:6};
 }

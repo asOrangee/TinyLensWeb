@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyPositionDraft, mergePositionPrompt, pointFromImage, pointToImage, positionError, positionPrompt, positionRequest, validStoredPositionDraft, type PositionContext, type PositionDraft } from '../src/lib/position-likelihood.ts';
+import { draftFromPositionRequest, emptyPositionDraft, mergePositionPrompt, pointFromImage, pointToImage, positionError, positionPrompt, positionRequest, restorePositionDraft, validStoredPositionDraft, type PositionContext, type PositionDraft } from '../src/lib/position-likelihood.ts';
 const frame = { shape: [151, 151] as [number, number], pixelScale: .05, xDirection: 'increasing' as const, yDirection: 'decreasing' as const };
 const context: PositionContext = { target: 'test-lens', stage: 'preflight', synthetic: true, frame, image: '/demo/test.png' };
 const valid = (): PositionDraft => ({ ...emptyPositionDraft(), points: [{ id: 'a', x: '1.2', y: '-.7' }, { id: 'b', x: '-1.1', y: '.6' }] });
@@ -39,6 +39,16 @@ test('threshold is positive and penalty is finite and nonnegative, with the corr
   const request = positionRequest({ ...valid(), threshold: '.03', strength: '1e8' }, context);
   assert.deepEqual(request.position_likelihood, { positions: [[1.2, -.7], [-1.1, .6]], threshold_arcsec: .03, min_log_like: -1e8 });
   assert.equal(positionRequest({ ...valid(), strength: '0' }, context).position_likelihood.min_log_like, 0);
+});
+test('fresh constraints use 0.05 arcsec and saved constraints retain their tolerance', () => {
+  assert.equal(positionRequest(valid(), context).position_likelihood.threshold_arcsec, 0.05);
+  const oldEmptyDraft = { ...emptyPositionDraft(), threshold: '0.1' };
+  assert.equal(restorePositionDraft(oldEmptyDraft)?.threshold, '0.05');
+  const priorConstraint = { ...valid(), threshold: '0.1' };
+  assert.equal(restorePositionDraft(priorConstraint), priorConstraint);
+  assert.equal(draftFromPositionRequest(positionRequest(priorConstraint, context)).threshold, '0.1');
+  const customDraft = { ...oldEmptyDraft, strength: '50' };
+  assert.equal(restorePositionDraft(customDraft), customDraft);
 });
 test('requests preserve explicit units, direction, target and synthetic provenance', () => {
   const r = positionRequest(valid(), context);

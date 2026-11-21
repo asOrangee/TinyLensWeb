@@ -12,9 +12,14 @@ from uuid import uuid4
 from .adjudication import adjudicate_attempt
 from .attempts import prepare_attempt, promote_attempt
 from .configuration import (
+    ARC_SNR_THRESHOLD_MAX,
+    ARC_SNR_THRESHOLD_MIN,
+    STAGE_B_EXPANSION_POLICY,
     InputGeometry,
     PIPELINE_RELEASE_ID,
+    POSITION_THRESHOLD_ARCSEC,
     PipelineConfig,
+    require_writable_preflight,
     run_input_geometry,
     validate_run_manifest,
     validated_run_root,
@@ -24,6 +29,7 @@ from .inspection.euclid import find_euclid_dataset, load_euclid_contamination
 from .inspector_decision import validate_inspector_decision
 from .inspector_synthesis import record_inspector_votes, record_preflight_synthesis
 from .models import StageName
+from .modeling_comment import record_modeling_comment
 from .rerun import prepare_full_rerun
 from .result_paths import (
     is_archive_directory,
@@ -33,6 +39,7 @@ from .result_paths import (
     resolve_current_lens_result_path,
 )
 from .review_context import build_review_context
+from .stage_b_selection import is_superseded_stage_b_review, select_stage_b_candidate, stage_b_candidate_attempt
 from .stage_input import StageInputError
 from .stages import run_stage
 
@@ -72,6 +79,8 @@ def _cmd_preflight(args: argparse.Namespace) -> None:
     require_nonhistorical_lens_result(output_dir)
     run_manifest = output_dir / "run-manifest.json"
     previous = validate_run_manifest(output_dir) if run_manifest.exists() else None
+    if previous is not None:
+        require_writable_preflight(previous)
     base = run_input_geometry(output_dir) if previous is not None else InputGeometry()
     values = base.model_dump()
     for name in InputGeometry.model_fields:
@@ -106,6 +115,8 @@ def _cmd_preflight(args: argparse.Namespace) -> None:
             "lens_dir": str(lens_dir),
             "input_geometry": geometry.model_dump(mode="json"),
             "geometry_evidence": getattr(args, "geometry_evidence", None),
+            "position_threshold_arcsec": POSITION_THRESHOLD_ARCSEC,
+            "stage_b_expansion_policy": STAGE_B_EXPANSION_POLICY,
             "stage_b_defaults": PipelineConfig().model_dump(
                 include={"arc_snr_threshold", "arc_ignor_size"}
             ),
@@ -128,7 +139,9 @@ def _cmd_mask(args: argparse.Namespace) -> None:
     output_dir = validated_run_root(args.output_dir)
     preflight_dir = output_dir / "preflight"
     geometry = run_input_geometry(output_dir)
-    fixed_mask = validate_run_manifest(output_dir).get("euclid_contamination") is not None
+    manifest = validate_run_manifest(output_dir)
+    require_writable_preflight(manifest)
+    fixed_mask = manifest.get("euclid_contamination") is not None
     decision_path = args.inspection.resolve()
     saved_decision = preflight_dir / "inspector.json"
     try:
@@ -245,6 +258,25 @@ def _cmd_rerun_prepare(args: argparse.Namespace) -> None:
     print(prepare_full_rerun(args.output_dir))
 
 
+def _cmd_rerun_from_m0(args: argparse.Namespace) -> None:
+    from .inherited_ab import prepare_inherited_ab
+
+    print(prepare_inherited_ab(args.source_run, args.output_dir))
+
+
+def _cmd_stage_b_prescan(args: argparse.Namespace) -> None:
+    from .stage_b_candidates import generate_stage_b_candidates
+
+    attempt = stage_b_candidate_attempt(args.output_dir, restart=args.restart)
+    print(generate_stage_b_candidates(args.lens_dir, args.output_dir, attempt))
+
+
+def _cmd_stage_b_select(args: argparse.Namespace) -> None:
+    print(select_stage_b_candidate(
+        args.output_dir, args.attempt, args.threshold, args.reason, restart=args.restart
+    ))
+
+
 def _read_json(path: Path) -> dict[str, Any] | None:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -266,7 +298,8 @@ def _human_review_decision(lens_dir: Path) -> dict[str, Any] | None:
         if path.parent.parent.name == "subhalo":
             continue
         decision = _read_json(path)
-        if decision and decision.get("decision") == "human_review":
+        if (decision and decision.get("decision") == "human_review"
+                and not is_superseded_stage_b_review(lens_dir, path)):
             return decision
     return None
 
@@ -360,6 +393,11 @@ def _cmd_summary(args: argparse.Namespace) -> None:
         writer.writeheader()
         writer.writerows(rows)
     print(target)
+
+
+def _cmd_modeling_comment(args: argparse.Namespace) -> None:
+    path, attempt = record_modeling_comment(args.output_dir, args.comment_file)
+    print(json.dumps({"path": str(path), "stage": "m3", "attempt": attempt}))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -461,6 +499,26 @@ def build_parser() -> argparse.ArgumentParser:
     rerun_prepare = rerun_commands.add_parser("prepare")
     rerun_prepare.add_argument("--output-dir", type=Path, required=True)
     rerun_prepare.set_defaults(func=_cmd_rerun_prepare)
+    rerun_from_m0 = rerun_commands.add_parser("from-m0")
+    rerun_from_m0.add_argument("--source-run", type=Path, required=True)
+    rerun_from_m0.add_argument("--output-dir", type=Path, required=True)
+    rerun_from_m0.set_defaults(func=_cmd_rerun_from_m0)
+
+    stage_b = commands.add_parser("stage-b")
+    stage_b_commands = stage_b.add_subparsers(dest="stage_b_command", required=True)
+    prescan = stage_b_commands.add_parser("prescan")
+    prescan.add_argument("--output-dir", type=Path, required=True)
+    prescan.add_argument("--lens-dir", type=Path, required=True)
+    prescan.add_argument("--restart", action="store_true", help="Restart only the terminal Stage B, keeping its earlier attempts")
+    prescan.set_defaults(func=_cmd_stage_b_prescan)
+    select = stage_b_commands.add_parser("select")
+    select.add_argument("--output-dir", type=Path, required=True)
+    select.add_argument("--attempt", type=int, required=True)
+    select.add_argument("--threshold", type=int,
+                        choices=range(ARC_SNR_THRESHOLD_MIN, ARC_SNR_THRESHOLD_MAX + 1), required=True)
+    select.add_argument("--reason", required=True)
+    select.add_argument("--restart", action="store_true")
+    select.set_defaults(func=_cmd_stage_b_select)
 
     subhalo = commands.add_parser("subhalo")
     subhalo_commands = subhalo.add_subparsers(dest="subhalo_command", required=True)
@@ -475,6 +533,12 @@ def build_parser() -> argparse.ArgumentParser:
     summary = commands.add_parser("summary")
     summary.add_argument("--output-dir", type=Path, required=True)
     summary.set_defaults(func=_cmd_summary)
+
+    comment = commands.add_parser("modeling-comment")
+    comment.add_argument("--output-dir", type=Path, required=True)
+    comment.add_argument("--comment-file", type=Path, required=True,
+                         help="UTF-8 JSON object with one comment per stage (preflight, a, b, m0, m1, m2, m3)")
+    comment.set_defaults(func=_cmd_modeling_comment)
     return parser
 
 

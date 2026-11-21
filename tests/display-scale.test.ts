@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {colorbarTicks,nativeColorbarTicks,formatScaleNumber} from '../src/lib/display-scale.ts';
+import {colorbarTicks,nativeColorbarTicks,formatScaleNumber,formatColorbarTick,hasLongColorbarTick} from '../src/lib/display-scale.ts';
 
 test('all native axes render exactly five two-decimal labels inside their verified range',()=>{
  for(const count of [3,5,7,8,16]){
@@ -19,6 +19,20 @@ test('colorbar labels keep exactly two decimals without changing full-precision 
  const ticks=colorbarTicks(-.0172972972972973,5.906486486486487,'log',1000);
  assert.equal(ticks[0].value,-.0172972972972973);assert.equal(ticks[4].value,5.906486486486487);
  assert.ok(ticks.every(tick=>/^-?\d+\.\d{2}$/.test(formatScaleNumber(tick.value))));
+});
+
+test('long colorbar ticks use the rounded magnitude and keep labels within eight characters', () => {
+  for (const value of [0, -.003, 9999.994, -9999.994]) {
+    assert.equal(hasLongColorbarTick(value), false);
+    assert.equal(formatColorbarTick(value), formatScaleNumber(value));
+  }
+  for (const value of [9999.995, -9999.995, 10_000, -100_000, 1e21, -Number.MAX_VALUE]) {
+    assert.equal(hasLongColorbarTick(value), true);
+    const label = formatColorbarTick(value);
+    assert.match(label, /^-?\d\.\de\d+$/);
+    assert.ok(label.length <= 8);
+  }
+  assert.equal(hasLongColorbarTick(NaN), false);
 });
 
 test('linear residual colorbar retains zero and both signed endpoints',()=>{

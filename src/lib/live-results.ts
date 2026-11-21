@@ -1,16 +1,24 @@
 import type { AgentUpdate } from './agent-types';
 import {verifiedResultMapping,type LiveMapping} from './live-mapping.ts';
 import {hasNumericRaster} from './image-scale.ts';
-import { isPublishedDisplayReport } from './display-report.ts';
+import { isPublishedDisplayReport, publishedDisplayReport } from './display-report.ts';
 import { activeRun, resultIdentity, runKey, stageAttempts, type AttemptIdentity } from './stage-attempts.ts';
 import type { StageId } from '../data/stages.ts';
 
 export { resultIdentity } from './stage-attempts.ts';
 
-export type LivePlane = { src: string; shape: number[]; bounds_arcsec: number[]; half_extent_arcsec: number; vmin: number; vmax: number; data_min: number; data_max: number; stretch: string; asinh_a: number; colormap: string; colormap_src: string; sha256?: string; array_sha256?: string; input_fits_sha256?: string;values_base64?:string;values_sha256?:string;mask_base64?:string;array_y_direction?:'increasing'|'decreasing';color_lut_base64?:string;color_lut_sha256?:string;color_stops?:number[][];rendered_from?:'numeric-array' };
+export type LivePlane = { src: string; shape: number[]; bounds_arcsec: number[]; half_extent_arcsec: number; vmin: number; vmax: number; data_min: number; data_max: number; stretch: string; asinh_a: number; colormap: string; colormap_src: string; unit?: string; sha256?: string; array_sha256?: string; input_fits_sha256?: string;values_base64?:string;values_sha256?:string;mask_base64?:string;mask_sha256?:string;mask_scope?:'likelihood-fit';array_y_direction?:'increasing'|'decreasing';color_lut_base64?:string;color_lut_sha256?:string;color_stops?:number[][];rendered_from?:'numeric-array' };
 
 export type HistogramParameter = { name: string; q16: number; q50: number; q84: number; edges: number[]; density: number[]; shown_probability: number };
 export type LiveMask = { background_src: string; overlay_src: string; shape: number[]; pixel_scale_arcsec: number; included: number; domain_pixels: number; modeling_radius_arcsec?: number; sha256: string; path: string; input_fits_sha256: string };
+export type LegacyFitDomain = {
+  schema: 'tinylens.model-display-derivation.v1';
+  fit_support: 'actual_likelihood_mask';
+  fit_mask_base64: string;
+  fit_mask_sha256: string;
+  statistics: { pixel_count: number };
+};
+const livePlaneNames = ['observation', 'model', 'lens-light', 'source-lensed', 'source', 'residual', 'chi-square'] as const;
 export type LiveResult = {
   schema: 'tinylens.readonly-result.v1'; kind: 'summary' | 'weighted_posterior' | 'evidence_scan' | 'preflight';
   stage: string; attempt: number | null; path: string; sha256: string;
@@ -19,7 +27,7 @@ export type LiveResult = {
   result?: { lens_id: string; stage: string; attempt: number; status: string; metrics: Record<string, unknown>; runtime_seconds?: number; gate_failures?: string[]; display?: { schema: string; path: string } };
   config?: { schema_version?: string; pipeline_release_id?: string; settings?: Record<string, unknown> };
   parameters?: HistogramParameter[]; sample_count?: number; effective_sample_size?: number;
-  planes?: Partial<Record<'observation' | 'model' | 'source-lensed' | 'source' | 'residual' | 'chi-square', LivePlane>>;
+  planes?: Partial<Record<typeof livePlaneNames[number], LivePlane>>;
   mask?: LiveMask;
   fixed_parameters?: Record<string, number>;
   linear_parameters?: Record<string, { values?: number[]; fits?: string; shape?: number[] }>;
@@ -27,20 +35,16 @@ export type LiveResult = {
   parameter_source?: { path: string; sha256: string };
   display_mapping?:LiveMapping;
   display_mapping_from_parameters?: true;
+  display_derivation?: LegacyFitDomain;
   scan?: { coarse: EvidenceCurve; fine: EvidenceCurve; log_lambda_best: number };
 };
 
 type EvidenceCurve = { log_lambda: number[]; log_evidence: (number | null)[] };
 
-function displayReport(update: AgentUpdate): AgentUpdate | undefined {
-  if (update.display_manifest) return { ...update, kind: 'artifact', path: update.display_manifest };
-  return isPublishedDisplayReport(update) ? update : undefined;
-}
-
 export function isNumericalStageReport(update: AgentUpdate) {
   const identity = resultIdentity(update);
   if (!update.id || !identity) return false;
-  if (displayReport(update)) return true;
+  if (publishedDisplayReport(update)) return true;
   if (!identity.runId && update.kind === 'artifact' && !['preflight', 'b'].includes(identity.stage)
       && update.path?.endsWith('/decision.json')) return true;
   if (/\/artifacts\/stage_(a|m0|m1|m2|m3)\.pkl$/.test(update.path ?? '')) return update.kind === 'artifact';
@@ -57,7 +61,7 @@ function selection(reports: readonly AgentUpdate[], identity: AttemptIdentity | 
   return {
     identity,
     legacyReadable: !identity?.runId && !reports.some(update => update.run_id && update.run_path === identity?.runPath),
-    published: bound.map(displayReport).filter(Boolean).at(-1),
+    published: bound.map(publishedDisplayReport).filter(Boolean).at(-1),
     summary: bound.filter(update => update.id && (stage === 'preflight'
       ? /\/preflight\/(?:inspector|inspection)\.json$/ : /\/stage-result\.json$/).test(update.path ?? '')).at(-1)
       ?? bound.filter(update => update.path?.endsWith('/decision.json') && isNumericalStageReport(update)).at(-1),
@@ -105,6 +109,37 @@ export function selectStageResults(updates: AgentUpdate[], stage: StageId) {
   return stageDisplayCandidates(updates, stage)[0];
 }
 
+export function inheritedConfigurationAnchors(updates: readonly AgentUpdate[]) {
+  const anchors = new Map<string, AgentUpdate>();
+  for (const update of updates) {
+    const identity = resultIdentity(update);
+    if (!update.id || !identity?.runId || !/^m[0-3]$/.test(identity.stage)) continue;
+    const anchor = publishedDisplayReport(update) ?? (update.path?.endsWith('/stage-result.json') ? update : undefined);
+    if (anchor) anchors.set(runKey(identity), anchor);
+  }
+  return anchors;
+}
+
+export function inheritedConfigurationAnchor(updates: AgentUpdate[]) {
+  const active = activeRun(stageAttempts(updates));
+  return active?.runId ? inheritedConfigurationAnchors(updates).get(runKey(active)) : undefined;
+}
+
+export function stageHistoryAnchors(updates: readonly AgentUpdate[]) {
+  const anchors = new Map<string, AgentUpdate>();
+  for (const update of updates) {
+    const identity = resultIdentity(update);
+    if (!update.id || !identity?.runId || identity.stage === 'preflight') continue;
+    const published = publishedDisplayReport(update);
+    if (published) anchors.set(identity.key, published);
+    const existing = anchors.get(identity.key);
+    if (!published && update.path?.endsWith('/stage-result.json') && (!existing || !isPublishedDisplayReport(existing))) {
+      anchors.set(identity.key, update);
+    }
+  }
+  return anchors;
+}
+
 export function parseLiveResult(value: unknown, update: AgentUpdate): LiveResult {
   if (!value || typeof value !== 'object') throw new Error('无法读取真实结果。');
   const data = value as LiveResult, identity = resultIdentity(update);
@@ -121,7 +156,7 @@ export function parseLiveResult(value: unknown, update: AgentUpdate): LiveResult
       || !curve.log_evidence.some(Number.isFinite);
   }))) throw new Error('证据扫描格式无效。');
   if (data.planes) for (const [name, plane] of Object.entries(data.planes)) {
-    if (!['observation', 'model', 'source-lensed', 'source', 'residual', 'chi-square'].includes(name) || !hasNumericRaster(plane) || plane.src!=='' || plane.colormap_src!=='' || !Array.isArray(plane.shape) || plane.shape.length !== 2 || !plane.shape.every(n => Number.isInteger(n) && n > 0 && n <= 512) || !Array.isArray(plane.bounds_arcsec) || plane.bounds_arcsec.length !== 4 || ![...plane.bounds_arcsec, plane.vmin, plane.vmax, plane.half_extent_arcsec].every(Number.isFinite) || plane.vmin > plane.vmax || plane.half_extent_arcsec <= 0 || plane.bounds_arcsec[0] >= plane.bounds_arcsec[1] || Math.abs(plane.bounds_arcsec[3] - plane.bounds_arcsec[2] - 2 * plane.half_extent_arcsec) > 1e-10 || !['linear','asinh'].includes(plane.stretch) || plane.stretch==='asinh'&&(!Number.isFinite(plane.asinh_a)||plane.asinh_a<=0)) throw new Error('已保存图层的数值或几何无效。');
+    if (!livePlaneNames.some(role => role === name) || !hasNumericRaster(plane) || plane.src!=='' || plane.colormap_src!=='' || !Array.isArray(plane.shape) || plane.shape.length !== 2 || !plane.shape.every(n => Number.isInteger(n) && n > 0 && n <= 512) || !Array.isArray(plane.bounds_arcsec) || plane.bounds_arcsec.length !== 4 || ![...plane.bounds_arcsec, plane.vmin, plane.vmax, plane.half_extent_arcsec].every(Number.isFinite) || plane.vmin > plane.vmax || plane.half_extent_arcsec <= 0 || plane.bounds_arcsec[0] >= plane.bounds_arcsec[1] || Math.abs(plane.bounds_arcsec[3] - plane.bounds_arcsec[2] - 2 * plane.half_extent_arcsec) > 1e-10 || !['linear','asinh'].includes(plane.stretch) || plane.stretch==='asinh'&&(!Number.isFinite(plane.asinh_a)||plane.asinh_a<=0)) throw new Error('已保存图层的数值或几何无效。');
     if(plane.values_base64!==undefined){
       const count=plane.shape[0]*plane.shape[1];
       if(!/^[A-Za-z0-9+/]+=*$/.test(plane.values_base64)||!/^[a-f0-9]{64}$/.test(plane.values_sha256??'')||typeof plane.mask_base64!=='string'||!/^[A-Za-z0-9+/]+=*$/.test(plane.mask_base64)||atob(plane.values_base64).length!==count*8||atob(plane.mask_base64).length!==count||plane.array_y_direction!=='increasing')throw Error('图像数值与显示网格不一致。');

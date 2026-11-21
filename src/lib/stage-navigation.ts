@@ -1,9 +1,9 @@
 import type { StageId } from '../data/stages';
 
-export type StageTab = 'results' | 'parameters' | 'config' | 'positions';
+export type StageTab = 'results' | 'parameters' | 'config' | 'positions' | 'raw';
 
 export function supportsStageTab(stageId: StageId, tab: StageTab): boolean {
-  if (tab === 'results') return true;
+  if (tab === 'results' || tab === 'raw') return true;
   if (tab === 'positions') return stageId === 'preflight';
   return stageId !== 'preflight' && stageId !== 'b';
 }

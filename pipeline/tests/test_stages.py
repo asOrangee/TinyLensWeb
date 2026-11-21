@@ -13,6 +13,7 @@ from lens_agent.configuration import EffectiveConfig, PIPELINE_RELEASE_ID
 from lens_agent.models import StageName
 from lens_agent.modeling.source_grid import source_grid_spec
 from lens_agent.modeling.predicted_image_family import build_predicted_image_family
+from lens_agent.workbench_display import active_capture, record_prediction
 from lens_agent import stages
 from tests.helpers import make_lens_dir
 
@@ -130,24 +131,35 @@ def _write_decision_evidence(attempt_root: Path) -> None:
     )
 
 
+@pytest.mark.parametrize("saved_threshold,expected_threshold", [(None, 0.1), (0.05, 0.05), (0.08, 0.08)])
 def test_stage_writes_attempt_local_artifacts_and_manifest(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, saved_threshold, expected_threshold,
 ) -> None:
     lens_dir, output_dir = _prepared_output(tmp_path)
+    if saved_threshold is not None:
+        path = output_dir / "run-manifest.json"
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        manifest["position_threshold_arcsec"] = saved_threshold
+        path.write_text(json.dumps(manifest), encoding="utf-8")
     attempt_dir = _write_attempt_config(output_dir, StageName.A)
     pipeline = SimpleNamespace()
 
     def configure_runtime(
         *, config, artifact_dir, diagnostics_dir, upstream_dirs,
-        stage_attempt_reference,
+        stage_attempt_reference, position_threshold_arcsec,
     ):
         pipeline.OUT_DIR = artifact_dir
         pipeline.DIAGNOSTICS_DIR = diagnostics_dir
         assert config.stage_a_n_live == 200
         assert upstream_dirs == {}
         assert stage_attempt_reference == "attempts/a/0"
+        assert position_threshold_arcsec == expected_threshold
 
-    def run_stage_a(*_args, **_kwargs) -> None:
+    def run_stage_a(image, noise, _psf, *, circular_mask) -> None:
+        capture = active_capture()
+        capture.update(planes={"source": np.ones((2, 2))}, source_bounds=[-.1, .1, -.1, .1])
+        record_prediction(capture, image, noise, np.zeros_like(image), np.ones_like(image),
+                          valid=~circular_mask)
         payload = {
             "log_z": 3.0,
             "samples": np.zeros((1, 1)),
@@ -179,7 +191,7 @@ def test_stage_writes_attempt_local_artifacts_and_manifest(
                 "initial_range": 4.0, "n_x": 400, "n_y": 400, "k_keep": 30,
                 "num_iters": 20, "tolerance": 5.0e-4, "cluster_tol": 0.08,
             },
-            threshold_arcsec=0.1,
+            threshold_arcsec=expected_threshold,
             min_log_like=-1.0e10,
         )
         (pipeline.OUT_DIR / "stage_a_predicted_image_family.json").write_text(
@@ -217,8 +229,13 @@ def test_stage_writes_attempt_local_artifacts_and_manifest(
     assert (attempt_dir / "stage-result.json").is_file()
     display = json.loads((attempt_dir / "display-manifest.json").read_text())
     assert display["stage"] == "a" and display["attempt"] == 0 and display["upstream"] == []
-    assert set(display["planes"]) == {"observation"}
-    assert (attempt_dir / "display.fits").is_file()
+    assert set(display["planes"]) == {
+        "observation", "model", "lens-light", "source-lensed", "source", "residual", "chi-square", "domain",
+    }
+    for plane in display["planes"].values():
+        path = attempt_dir / plane["path"]
+        assert path.parent == attempt_dir / "display" and path.suffix == ".fits"
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == plane["sha256"]
     manifest = json.loads((attempt_dir / "manifest.json").read_text())
     assert manifest == {
         "schema_version": "attempt_artifact_manifest.v1",

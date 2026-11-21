@@ -34,6 +34,8 @@ the unresolved morphology without asserting that truncation is ruled out. Reserv
 exclusively for missing or unreadable essential linear diagnostics and identify the affected
 artifact and access or readability problem. Morphological uncertainty in a readable image is not
 unreadable evidence. Never review general residual, mass, sampling, source-sign, or source-
-plausibility quality. Never choose a grid size or propose a parameter value: adjudication owns the
-fixed `0.8 -> 1.0 -> 1.2 arcsec` enlargement policy.
+plausibility quality. Adjudication owns the fixed square grid policy. It starts at `100 × 100`
+pixels with `0.010 arcsec` pixels and adds 20 pixels to each side length after each confirmed
+truncation, preserving the centre and pixel scale. The maximum is `200 × 200` pixels over five
+enlargements. Never choose a grid size or propose a parameter value.
 """

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { agentTaskUrl, clearLiveTaskStorage, liveTaskPreferenceKey, liveTaskSelectionKey, parseLiveTasks } from '../src/lib/live-tasks.ts';
+import { agentTaskUrl, clearLiveTaskStorage, liveTaskPreferenceKey, liveTaskSelectionKey, parseLiveTasks, parseTaskDeletionPlan } from '../src/lib/live-tasks.ts';
 const id = 'task-12345678-1234-1234-1234-123456789abc';
 test('task scope applies to state, SSE and report requests while preserving legacy draft keys', () => {
   assert.equal(agentTaskUrl('/api/agent/events',id),`/api/agent/events?taskId=${id}`);
@@ -33,4 +33,13 @@ test('permanent deletion clears only the selected task and thread drafts, preser
   clearLiveTaskStorage(storage,'default');
   assert.equal(values.get(liveTaskSelectionKey),other);
   assert.equal(values.has(liveTaskPreferenceKey('default')),false);
+});
+test('permanent deletion preview requires a token and both explicit directory lists', () => {
+  const plan = { token: 'proof-token', runs: ['/fixture/owned run'], retained: ['/fixture/other run'] };
+  assert.deepEqual(parseTaskDeletionPlan(plan), plan);
+  assert.deepEqual(parseTaskDeletionPlan({ ...plan, runs: [], retained: [] }), { ...plan, runs: [], retained: [] });
+  for (const invalid of [null, { ...plan, token: '' }, { ...plan, runs: [''] },
+    { ...plan, retained: [3] }, { token: plan.token, runs: plan.runs }]) {
+    assert.throws(() => parseTaskDeletionPlan(invalid));
+  }
 });

@@ -1,7 +1,7 @@
 import { useDemoI18n } from '../lib/demo-i18n';
 import { useEffect,useMemo, useRef, useState, type PointerEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { Crosshair, RotateCcw, ZoomIn } from 'lucide-react';
+import { Crosshair, RotateCcw } from 'lucide-react';
 import displayManifest from '../data/science-demo.json';
 import mappingData from '../data/lens-mapping-demo.json';
 import { displayImageFamily, isInPlaneView, isInside, planeToScreen, screenToPlane, verifiedDemoMapping, type Point, type PlaneFrame, type PlaneView } from '../lib/lens-mapping';
@@ -11,26 +11,35 @@ import type {ImageScale} from '../lib/image-scale';
 import ImageScaleControls from './ImageScaleControls';
 import ScienceColorbar from './ScienceColorbar';
 import type { LiveResult } from '../lib/live-results';
+import { MaskLayerControl, useMaskOverlays } from './ResultMaskLayers';
+import type { MaskLayerName, MaskLayers } from '../lib/stage-artifacts';
 import './science-viewer.css';
 
 type CoordinateSpace = 'image' | 'source';
 type Hover = {from:CoordinateSpace;source:Point;images:Point[]};
-const files = ['observation', 'model', 'source-lensed', 'source', 'residual', 'chi-square'] as const;
-const planeTitles = {observation:'Data image',model:'Model image',residual:'Normalized residual','source-lensed':'Lensed source',source:'Unlensed source','chi-square':'Chi-square'};
+const files = ['observation', 'model', 'residual', 'lens-light', 'source-lensed', 'source'] as const;
+const planeTitles = {observation:'Data image',model:'Model image',residual:'Normalized residual','lens-light':'Lens light','source-lensed':'Lensed source',source:'Unlensed source'};
 const displayNumber=(value:number)=>value===0?'0':Math.abs(value)<.001?value.toExponential(2):Number(value.toPrecision(3)).toString();
 const fixedSource:PlaneView={zoom:1,pan:{x:0,y:0}};
+const noMaskLayers: readonly MaskLayerName[] = [];
 const mapping=verifiedDemoMapping(mappingData,displayManifest);
 function curvePath(points:Point[],closed:boolean,frame:PlaneFrame,view:PlaneView){
   return points.map((point,index)=>{const p=planeToScreen(point,frame,view);return `${index?'L':'M'}${(p.x*1000).toFixed(3)},${(p.y*1000).toFixed(3)}`;}).join(' ')+(closed?' Z':'');
 }
 const coordinateNumber=(value:number)=>value!==0&&Math.abs(value)<.001?value.toExponential(2):value.toFixed(3);
 
-export default function ScienceViewer({stageId,toolbarTarget,missingLayers,displayPlanes,modelResult,imageScale='linear',onScaleChange=()=>{}}:{stageId:string;toolbarTarget:HTMLDivElement|null;missingLayers?:string;displayPlanes?:LiveResult['planes'];modelResult?:LiveResult;imageScale?:ImageScale;onScaleChange?:(scale:ImageScale)=>void}){
+export default function ScienceViewer({stageId,toolbarTarget,missingLayers,displayPlanes,modelResult,imageScale='linear',onScaleChange=()=>{},maskLayers,selectedMasks=noMaskLayers,onMaskChange}:{stageId:string;toolbarTarget:HTMLDivElement|null;missingLayers?:string;displayPlanes?:LiveResult['planes'];modelResult?:LiveResult;imageScale?:ImageScale;onScaleChange?:(scale:ImageScale)=>void;maskLayers?:MaskLayers;selectedMasks?:readonly MaskLayerName[];onMaskChange?:(name:MaskLayerName,enabled:boolean)=>void}){
   const {t}=useDemoI18n();
   const live=missingLayers!==undefined;
   const activeMapping=useMemo(()=>live?verifiedResultMapping(modelResult,stageId):mapping,[live,modelResult,stageId]);
   const basePlanes=live?displayPlanes:Object.fromEntries(Object.entries(displayManifest.planes).map(([name,plane])=>[name,{...plane,bounds_arcsec:[-plane.half_extent_arcsec,plane.half_extent_arcsec,-plane.half_extent_arcsec,plane.half_extent_arcsec],colormap_src:''}])) as LiveResult['planes'];
-  const scaled=useScaledPlanes(basePlanes,imageScale,live);
+  const scaled=useScaledPlanes(basePlanes,imageScale,live,undefined,{
+    showFitExcluded:live,
+    fullObservationScale:live,
+    clipLensedSourceToFit:live,
+    legacyDomain:modelResult?.planes===basePlanes?modelResult?.display_derivation:undefined,
+  });
+  const masks = useMaskOverlays(maskLayers, selectedMasks);
   const [zoom,setZoom]=useState(1),[pan,setPan]=useState<Point>({x:0,y:0});
   const [showMapping,setShowMapping]=useState(true),[hover,setHover]=useState<Hover|null>(null);
   const [showCurves,setShowCurves]=useState(true);
@@ -78,8 +87,13 @@ export default function ScienceViewer({stageId,toolbarTarget,missingLayers,displ
     <button className="plane-link-toggle science-icon-button" type="button" aria-label={t('十字标线')} aria-pressed={showCrosshair} disabled={!hasPlanes} title={t('显示同一平面内联动的十字标线')} onClick={()=>{setShowCrosshair(value=>!value);setCursor(null);}}><Crosshair size={17}/></button>
     <button className="plane-link-toggle science-icon-button" type="button" aria-label={t('平面位置联动')} aria-pressed={showMapping&&!!activeMapping} disabled={!activeMapping} title={activeMapping?t('悬停查看 image/source plane 的对应位置'):t('当前结果缺少匹配的透镜映射')} onClick={()=>{setShowMapping(value=>!value);setHover(null);}}><svg width="19" height="19" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round"><path d="M2 5L9 2V15L2 18ZM15 9L22 6V19L15 22Z"/><path d="M5.5 10L18.5 14" strokeDasharray="2 2"/><circle cx="5.5" cy="10" r="1.2" fill="currentColor"/><circle cx="18.5" cy="14" r="1.2" fill="currentColor"/></svg></button>
     <button className="plane-link-toggle science-icon-button" type="button" aria-label={t('显示临界曲线与焦散线')} aria-pressed={showCurves&&curves.length>0} disabled={curves.length===0} title={curveTitle} onClick={()=>setShowCurves(value=>!value)}><svg width="18" height="18" viewBox="0 0 15 12" aria-hidden="true"><path d="M1 6Q7.5 6 7.5 1Q7.5 6 14 6Q7.5 6 7.5 11Q7.5 6 1 6Z" fill="none" stroke="currentColor" strokeWidth="1.2"/></svg></button>
+    {onMaskChange && <MaskLayerControl layers={maskLayers} selected={selectedMasks} onChange={onMaskChange}/>}
     <ImageScaleControls value={imageScale} onChange={onScaleChange} disabled={!scaled.available||!hasImagePlanes}/>
-    <div className="science-tools"><ZoomIn size={14} aria-hidden="true"/><input type="range" disabled={!hasImagePlanes} aria-label={t('图像缩放')} min="1" max="3" step=".25" value={zoom} onChange={event=>changeZoom(Number(event.target.value))}/><span className="science-zoom-label">{zoom.toFixed(2)}×</span><button type="button" onClick={reset} disabled={!hasPlanes} title={t('重置视图')} aria-label={t('重置视图')}><RotateCcw size={14}/></button></div>
+    <div className="science-tools science-model-zoom">
+      <input type="range" disabled={!hasImagePlanes} aria-label={t('图像缩放')} min="1" max="3" step=".25" value={zoom} onChange={event=>changeZoom(Number(event.target.value))}/>
+      <span className="science-zoom-label">{zoom.toFixed(2)}×</span>
+      <button type="button" onClick={reset} disabled={!hasPlanes} title={t('重置视图')} aria-label={t('重置视图')}><RotateCcw size={14}/></button>
+    </div>
   </div>;
   return <section className="science-viewer model-viewer" aria-label={t('科学图像查看器')} data-viewer="model" data-stage={stageId}>
     {toolbarTarget&&createPortal(toolbar,toolbarTarget)}
@@ -89,11 +103,15 @@ export default function ScienceViewer({stageId,toolbarTarget,missingLayers,displ
       const frame:PlaneFrame={half_extent_arcsec:plane.half_extent_arcsec,shape:plane.shape,bounds_arcsec:bounds};
       const points=!unavailable&&hover&&showMapping?(space==='source'?[hover.source]:family.points):[];
       const crosshair=showCrosshair&&cursor?.space===space&&!unavailable?planeToScreen(cursor.point,frame,view):null;
+      const alignedMasks = space === 'image' && maskLayers?.shape.every((value, i) => value === plane.shape[i])
+        && maskLayers.bounds_arcsec.every((value, i) => Math.abs(value - (bounds?.[i] ?? NaN)) < 1e-9) ? masks : [];
+      const unit = plane.file === 'residual' ? '1' : plane.unit;
       return <figure className="science-plane" key={plane.file} data-plane={plane.file} data-coordinate-space={space} data-source-format={plane.src?'numeric':undefined} data-render-origin={plane.src?'browser-array':undefined} data-numeric-sha256={plane.values_sha256}>
         <figcaption className="science-plane-heading"><strong>{plane.title}</strong></figcaption>
         <div className="science-plane-body">
           <div className={'science-image-area'+(unavailable?' is-unavailable':'')+(view.zoom>1?' is-zoomed':'')} onPointerDown={event=>down(event,space)} onPointerMove={event=>move(event,space,frame)} onPointerUp={stop} onPointerCancel={stop} onLostPointerCapture={stop} onPointerLeave={()=>{setHover(null);setCursor(null);}}>
             {!unavailable&&<img src={plane.src} alt={live?`${plane.title}，来自本次已保存结果`:`${plane.title}, synthetic demonstration image`} draggable={false} style={{transform:`translate(${view.pan.x}%, ${view.pan.y}%) scale(${view.zoom})`}}/>}
+            {!unavailable && alignedMasks.map(layer => <img key={layer.name} src={layer.src} className="result-mask-overlay" alt="" aria-hidden="true" draggable={false} style={{transform:`translate(${view.pan.x}%, ${view.pan.y}%) scale(${view.zoom})`}}/>)}
             {!unavailable&&activeMapping&&showCurves&&curves.length>0&&<svg className={`science-lens-curves ${space==='source'?'caustics':'critical-curves'}`} viewBox="0 0 1000 1000" preserveAspectRatio="none" role="img" aria-label={t(space==='source'?'焦散线':'临界曲线')}>
               {(space==='source'?causticPaths:criticalPaths).map((path,index)=><g key={index} data-curve={index}><path d={path} className="curve-halo" vectorEffect="non-scaling-stroke"/><path d={path} className="curve-line" vectorEffect="non-scaling-stroke"/></g>)}
             </svg>}
@@ -105,7 +123,7 @@ export default function ScienceViewer({stageId,toolbarTarget,missingLayers,displ
             </div>}
             {points.map((point,index)=>{const screen=planeToScreen(point,frame,view),weak='weak' in point&&!!point.weak;return screen.x>=0&&screen.x<=1&&screen.y>=0&&screen.y<=1?<span key={index} className={`science-mapped-marker${weak?' is-weak':''}`} data-map-x={point.x} data-map-y={point.y} data-magnification={'magnification' in point?point.magnification:undefined} style={{left:`${screen.x*100}%`,top:`${screen.y*100}%`}} aria-label={t('对应位置 ({x}, {y}) arcsec',{x:coordinateNumber(point.x),y:coordinateNumber(point.y)})}>{space==='image'&&points.length>1&&<small>{index+1}{weak?` · ${t('弱')}`:''}</small>}</span>:null;})}
           </div>
-          {unavailable?<div className="science-colorbar-unavailable" aria-label="暂无数值色阶">—</div>:<ScienceColorbar min={plane.vmin} max={plane.vmax} stretch={plane.stretch==='asinh'?'asinh':plane.stretch==='log'?'log':'linear'} parameter={plane.asinh_a??1} redBlue={plane.colormap==='blue-white-red'} gradient={plane.colormap_src} title={t('数组极值：{min} 至 {max}',{min:displayNumber(plane.data_min),max:displayNumber(plane.data_max)})}/>}
+          {unavailable?<div className="science-colorbar-unavailable" aria-label="暂无数值色阶">—</div>:<ScienceColorbar min={plane.vmin} max={plane.vmax} stretch={plane.stretch==='asinh'?'asinh':plane.stretch==='log'?'log':'linear'} parameter={plane.asinh_a??1} redBlue={plane.colormap==='blue-white-red'} gradient={plane.colormap_src} unit={unit} title={t('数组极值：{min} 至 {max}',{min:displayNumber(plane.data_min),max:displayNumber(plane.data_max)})}/>}
         </div>
       </figure>;
     })}</div>

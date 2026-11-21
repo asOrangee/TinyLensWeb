@@ -7,8 +7,11 @@ import jsonschema
 import pytest
 from astropy.io import fits
 
+from lens_agent.attempts import validate_retry_review
 from lens_agent.cli import main
-from lens_agent.configuration import EffectiveConfig, PIPELINE_RELEASE_ID, PipelineConfig
+from lens_agent.configuration import (
+    EffectiveConfig, PIPELINE_RELEASE_ID, PipelineConfig, STAGE_B_EXPANSION_POLICY, stage_b_threshold_ext_size,
+)
 from lens_agent.contracts import validate_reviewer_response
 from lens_agent.modeling.source_grid import source_grid_spec
 from lens_agent.modeling.predicted_image_family import build_predicted_image_family
@@ -16,7 +19,7 @@ from lens_agent.models import StageName
 
 
 def _stage_b_audit(
-    covered: tuple[bool, bool], family_sha256: str
+    covered: tuple[bool, bool], family_sha256: str, attempt: int, threshold: float
 ) -> dict[str, object]:
     images = []
     for index, is_covered in enumerate(covered, start=1):
@@ -40,12 +43,12 @@ def _stage_b_audit(
         )
     return {
         "schema_version": "stage_b_morphology_audit.v2",
-        "stage_attempt": "attempts/b/0",
+        "stage_attempt": f"attempts/b/{attempt}",
         "predicted_image_family": {
             "reference": "attempts/a/0/artifacts/stage_a_predicted_image_family.json",
             "sha256": family_sha256,
         },
-        "parameters": {"threshold": 2.0, "ignor_size": 5, "ext_size": 5, "close_size": 3},
+        "parameters": {"threshold": threshold, "ignor_size": 5, "ext_size": 5, "close_size": 3},
         "pixel_scale_arcsec": 0.1,
         "local_radius_arcsec": 0.3,
         "mask_convention": "selected_arc_region True includes pixels",
@@ -65,6 +68,8 @@ def _eligible_attempt(
     attempt: int = 0,
     *,
     stage_b_covered: tuple[bool, bool] = (True, True),
+    stage_b_threshold: float = 2.0,
+    stage_b_threshold_expansion: bool = False,
 ) -> tuple[Path, Path]:
     output_dir = tmp_path / "output" / "lens-001"
     output_dir.mkdir(parents=True)
@@ -73,6 +78,7 @@ def _eligible_attempt(
             {
                 "schema_version": "lens_run_manifest.v1",
                 "pipeline_release_id": PIPELINE_RELEASE_ID,
+                **({"stage_b_expansion_policy": STAGE_B_EXPANSION_POLICY} if stage_b_threshold_expansion else {}),
             }
         )
         + "\n",
@@ -82,7 +88,12 @@ def _eligible_attempt(
     artifact = root / "artifacts" / f"stage_{stage}.pkl"
     artifact.parent.mkdir(parents=True)
     artifact.write_bytes(b"test artifact")
-    config = EffectiveConfig(settings=PipelineConfig(arc_snr_threshold=2.0, arc_ignor_size=5))
+    config = EffectiveConfig(
+        settings=PipelineConfig(
+            arc_snr_threshold=stage_b_threshold, arc_ignor_size=5,
+            arc_ext_size=stage_b_threshold_ext_size(stage_b_threshold) if stage_b_threshold_expansion else 5,
+        )
+    )
     (root / "effective-config.json").write_text(
         json.dumps(config.model_dump(mode="json")) + "\n",
         encoding="utf-8",
@@ -132,6 +143,8 @@ def _eligible_attempt(
                 _stage_b_audit(
                     stage_b_covered,
                     hashlib.sha256(family_path.read_bytes()).hexdigest(),
+                    attempt,
+                    stage_b_threshold,
                 )
             ) + "\n",
             encoding="utf-8",
@@ -181,7 +194,7 @@ def _eligible_attempt(
                     ),
                     "connectivity": 8,
                     "parameters": {
-                        "threshold": 2.0, "ignor_size": 5,
+                        "threshold": stage_b_threshold, "ignor_size": 5,
                         "ext_size": 5, "close_size": 3,
                     },
                     "selection": {
@@ -376,6 +389,98 @@ def test_stage_b_uncovered_requires_lower_snr_threshold(
     assert not (root / "decision.json").exists()
 
 
+@pytest.mark.parametrize(("old_value", "new_value", "footprint"), [(5.0, 4.99, 1), (10.01, 10.0, 3), (12.0, 10.01, 5)])
+def test_stage_b_threshold_retry_updates_the_derived_expansion(tmp_path, old_value, new_value, footprint):
+    output_dir, _ = _eligible_attempt(
+        tmp_path, stage="b", stage_b_threshold=old_value, stage_b_threshold_expansion=True,
+    )
+    review = _stage_b_retry_review()
+    proposal = review["retry_repair"]["proposal"]
+    proposal.update(old_value=old_value, new_value=new_value)
+    settings, _, _ = validate_retry_review(output_dir, StageName.B, 0, review)
+    assert (settings.arc_snr_threshold, settings.arc_ext_size) == (new_value, footprint)
+    proposal.update(parameter="arc_ext_size", old_value=stage_b_threshold_ext_size(old_value), new_value=7)
+    with pytest.raises(ValueError, match="expansion is determined by arc_snr_threshold"):
+        validate_retry_review(output_dir, StageName.B, 0, review)
+
+
+@pytest.mark.parametrize(
+    ("old_value", "new_value", "valid"),
+    [(2.0, 3, True), (2.0, 2.5, False), (2.0, 1.0, False), (19.0, 20, True)],
+)
+def test_stage_b_covered_cleanup_requires_a_one_unit_snr_increase(
+    tmp_path: Path, old_value: float, new_value: float, valid: bool,
+) -> None:
+    output_dir, root = _eligible_attempt(tmp_path, stage="b", stage_b_threshold=old_value)
+    review = _stage_b_retry_review()
+    review["predicted_image_dispositions"][0]["disposition"] = "covered_consistent"
+    review["retry_repair"]["proposal"].update(old_value=old_value, new_value=new_value)
+    review["reason"] = "unrelated component 3 remains, with both arcs covered"
+    response = tmp_path / "response.json"
+    response.write_text(json.dumps(review))
+    command = [
+        "review", "adjudicate", "--output-dir", str(output_dir),
+        "--stage", "b", "--attempt", "0", "--response", str(response),
+    ]
+    if not valid:
+        with pytest.raises(ValueError, match="raising arc_snr_threshold by 1"):
+            main(command)
+        assert not (root / "decision.json").exists()
+        return
+    main(command)
+    assert _decision_without_evidence(root)["decision"] == "retry"
+    main([
+        "attempt", "prepare", "--output-dir", str(output_dir),
+        "--stage", "b", "--attempt", "1",
+    ])
+    candidate = output_dir / "attempts/b/1"
+    config = json.loads((candidate / "effective-config.json").read_text())
+    assert config["settings"]["arc_snr_threshold"] == new_value
+    assert not (candidate / "arc-component-selection.json").exists()
+
+
+def test_stage_b_can_report_blocked_cleanup_at_the_threshold_limit(tmp_path: Path) -> None:
+    output_dir, root = _eligible_attempt(tmp_path, stage="b", stage_b_threshold=20.0)
+    review = _stage_b_retry_review()
+    review.update(
+        refinement_kind="cleanup_blocked",
+        retry_repair=None,
+        reason="the threshold is at 20 and no remaining component can be safely removed",
+    )
+    review["predicted_image_dispositions"][0]["disposition"] = "covered_consistent"
+    response = tmp_path / "response.json"
+    response.write_text(json.dumps(review))
+    main([
+        "review", "adjudicate", "--output-dir", str(output_dir),
+        "--stage", "b", "--attempt", "0", "--response", str(response),
+    ])
+    decision = _decision_without_evidence(root)
+    assert decision["decision"] == "human_review"
+    assert decision["reason_kind"] == "scientific_blocker"
+
+
+def test_stage_b_does_not_revisit_mask_settings_after_losing_coverage(tmp_path: Path) -> None:
+    output_dir, _ = _eligible_attempt(
+        tmp_path, stage="b", attempt=1, stage_b_covered=(False, True), stage_b_threshold=3.0,
+    )
+    initial = output_dir / "attempts/b/0"
+    initial.mkdir()
+    (initial / "effective-config.json").write_text(
+        EffectiveConfig(settings=PipelineConfig(arc_snr_threshold=2.0, arc_ignor_size=5))
+        .model_dump_json()
+    )
+    (initial / "stage-result.json").write_text(json.dumps({"stage": "b", "attempt": 0}))
+    review = _stage_b_retry_review(attempt=1)
+    review["retry_repair"]["proposal"].update(old_value=3.0, new_value=2.0)
+    response = tmp_path / "response.json"
+    response.write_text(json.dumps(review))
+    with pytest.raises(ValueError, match="parameters already evaluated in attempt 0"):
+        main([
+            "review", "adjudicate", "--output-dir", str(output_dir),
+            "--stage", "b", "--attempt", "1", "--response", str(response),
+        ])
+
+
 def test_stage_b_rejects_arc_ignor_size_proposal(tmp_path: Path) -> None:
     from lens_agent.attempts import validate_retry_review
 
@@ -454,7 +559,7 @@ def _decision_without_evidence(
         ("parameters", "supported_partial", "covered_consistent", True),
         ("parameters", "supported_partial", "supported_uncovered", True),
         ("parameters", "supported_uncovered", "covered_consistent", True),
-        ("parameters", "covered_consistent", "covered_consistent", False),
+        ("parameters", "covered_consistent", "covered_consistent", True),
         ("parameters", "supported_partial", "indeterminate", False),
         ("parameters", "supported_partial", "unsupported_prediction", False),
         ("selection", "supported_partial", "covered_consistent", False),
@@ -470,6 +575,8 @@ def _decision_without_evidence(
         ("coverage_blocked", "covered_consistent", "covered_consistent", False),
         ("coverage_blocked", "supported_uncovered", "unsupported_prediction", False),
         ("coverage_blocked", "supported_partial", "indeterminate", False),
+        ("cleanup_blocked", "covered_consistent", "covered_consistent", True),
+        ("cleanup_blocked", "supported_partial", "covered_consistent", False),
     ],
 )
 def test_stage_b_coverage_order_agrees_between_schema_and_python(
@@ -621,9 +728,12 @@ def test_stage_b_partial_requires_covered_position_and_can_prepare_retry(
     assert not (candidate / "arc-component-selection.json").exists()
 
 
-def test_stage_b_partial_routes_to_human_review_when_budget_exhausted(tmp_path: Path) -> None:
+@pytest.mark.parametrize(("used", "decision_name"), [(19, "retry"), (20, "human_review")])
+def test_stage_b_partial_uses_twenty_independent_retries(
+    tmp_path: Path, used: int, decision_name: str,
+) -> None:
     output_dir, root = _eligible_attempt(tmp_path, stage="b")
-    _record_completed_retries(output_dir, "b", 10)
+    _record_completed_retries(output_dir, "b", used)
     review = _stage_b_retry_review()
     review["predicted_image_dispositions"][0]["disposition"] = "supported_partial"
     response = tmp_path / "response.json"
@@ -633,8 +743,10 @@ def test_stage_b_partial_routes_to_human_review_when_budget_exhausted(tmp_path: 
         "--stage", "b", "--attempt", "0", "--response", str(response),
     ])
     decision = json.loads((root / "decision.json").read_text())
-    assert decision["decision"] == "human_review"
-    assert "retry budget is exhausted" in decision["reason"]
+    assert decision["decision"] == decision_name
+    assert decision["retry_budget"] == {"stage_used": used, "stage_limit": 20}
+    if decision_name == "human_review":
+        assert "retry budget is exhausted" in decision["reason"]
 
 
 def test_stage_b_allows_component_selection_when_all_images_are_covered() -> None:
@@ -660,6 +772,42 @@ def test_stage_b_allows_component_selection_when_all_images_are_covered() -> Non
     }
 
     assert validate_reviewer_response(review, StageName.B) == review
+
+
+@pytest.mark.parametrize("already_dropped", [False, True])
+def test_stage_b_can_select_whole_components_at_the_current_threshold(
+    tmp_path: Path, already_dropped: bool,
+) -> None:
+    output_dir, root = _eligible_attempt(tmp_path, stage="b")
+    if already_dropped:
+        catalog_path = root / "artifacts/stage_b_components.json"
+        catalog = json.loads(catalog_path.read_text())
+        catalog["selection"] = {"effective_keep_component_ids": [1, 2], "drop_component_ids": [3]}
+        catalog["components"][2]["status"] = "dropped"
+        catalog_path.write_text(json.dumps(catalog))
+    review = _stage_b_retry_review()
+    review.update(
+        refinement_kind="selection",
+        retry_repair=None,
+        component_selection={
+            "component_catalog": "attempts/b/0/artifacts/stage_b_components.json",
+            "drop_component_ids": [3],
+        },
+    )
+    review["predicted_image_dispositions"][0]["disposition"] = "covered_consistent"
+    response = tmp_path / "response.json"
+    response.write_text(json.dumps(review))
+    command = [
+        "review", "adjudicate", "--output-dir", str(output_dir),
+        "--stage", "b", "--attempt", "0", "--response", str(response),
+    ]
+    if already_dropped:
+        with pytest.raises(ValueError, match="must change the dropped-component set"):
+            main(command)
+        assert not (root / "decision.json").exists()
+    else:
+        main(command)
+        assert _decision_without_evidence(root)["decision"] == "retry"
 
 
 def test_stage_b_rejects_selection_that_would_uncover_a_predicted_image(
@@ -1224,15 +1372,15 @@ def test_adjudicate_routes_indeterminate_m0_to_scientific_uncertainty(
 def test_adjudicate_routes_maximum_m0_truncation_to_scientific_blocker(
     tmp_path: Path,
 ) -> None:
-    output_dir, attempt_root = _eligible_attempt(tmp_path, stage="m0", attempt=2)
+    output_dir, attempt_root = _eligible_attempt(tmp_path, stage="m0", attempt=5)
     config = EffectiveConfig(
-        settings=EffectiveConfig().settings.model_copy(update={"source_grid_level": 2})
+        settings=EffectiveConfig().settings.model_copy(update={"source_grid_level": 5})
     )
     (attempt_root / "effective-config.json").write_text(
         json.dumps(config.model_dump(mode="json")) + "\n", encoding="utf-8"
     )
     (attempt_root / "artifacts" / "source_grid_spec.json").write_text(
-        json.dumps(source_grid_spec(center_x=0.0, center_y=0.0, level=2)) + "\n",
+        json.dumps(source_grid_spec(center_x=0.0, center_y=0.0, level=5)) + "\n",
         encoding="utf-8",
     )
     response = tmp_path / "m0-response.json"
@@ -1241,7 +1389,7 @@ def test_adjudicate_routes_maximum_m0_truncation_to_scientific_blocker(
             {
                 "stage": "m0",
                 "grid_judgment": "source_bbox_truncation",
-                "visual_findings": ["coherent emission remains clipped at level 2"],
+                "visual_findings": ["coherent emission remains clipped at level 5"],
                 "numerical_findings": ["edge flux supports the visible clipping"],
                 "reason": "the maximum source footprint remains insufficient",
             }
@@ -1253,7 +1401,7 @@ def test_adjudicate_routes_maximum_m0_truncation_to_scientific_blocker(
     main(
         [
             "review", "adjudicate", "--output-dir", str(output_dir),
-            "--stage", "m0", "--attempt", "2", "--response", str(response),
+            "--stage", "m0", "--attempt", "5", "--response", str(response),
         ]
     )
 

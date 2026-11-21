@@ -18,6 +18,21 @@
 .live-workbench code, .live-workbench pre { font-family: var(--mono); }
 .live-workbench .live-system-icon { display: grid; place-items: center; color: currentColor; background: color-mix(in srgb, currentColor 8%, transparent); }
 .app-shell.live-workbench[data-design] .live-title-detail { font-size: .65em; font-weight: 400; margin-left: 12px; color: var(--agent-muted); }
+.live-workbench .lens-rename-button { display: none; }
+.live-workbench .lens-sidebar[data-expanded="true"] .lens-rename-button { display: grid; }
+.live-workbench .lens-rename-button, .live-workbench .lens-rename-form > button { place-items: center;
+  width: 26px; height: 30px; flex: 0 0 26px; padding: 0; border: 0; border-radius: 5px;
+  background: transparent; color: var(--lens-nav-ink); }
+.live-workbench :is(.lens-rename-button, .lens-rename-form > button):hover:not(:disabled) {
+  background: color-mix(in srgb, var(--lens-nav-accent) 10%, transparent); color: var(--lens-nav-accent); }
+.live-workbench .lens-rename-form { display: grid; align-items: center; grid-template-columns: 36px minmax(0, 1fr) 26px 26px;
+  gap: 4px 5px; width: 100%; min-height: 46px; padding: 4px 5px 4px 2px; }
+.live-workbench .lens-rename-form > input { width: 100%; min-width: 0; height: 30px; padding: 3px 5px;
+  border: 1px solid var(--lens-nav-line); border-radius: 5px; background: var(--panel); color: var(--ink); font-size: 12px; }
+.live-workbench .lens-rename-form > button { display: grid; }
+.live-workbench :is(.lens-rename-button, .lens-rename-form > input, .lens-rename-form > button):focus-visible {
+  outline: 2px solid var(--lens-nav-accent); outline-offset: -1px; }
+.live-workbench .lens-rename-error { grid-column: 2 / -1; margin: 0; color: var(--ink); font-size: 11px; overflow-wrap: anywhere; }
 .live-workbench .live-mode-pill { color: var(--agent-accent); }
 .live-workbench .agent-prototype-link { font-size: 10px; }
 .app-shell.live-workbench[data-design] .agent-error { margin: 0 0 15px; }

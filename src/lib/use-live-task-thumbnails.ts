@@ -10,7 +10,8 @@ type Thumbnail = { reportId: string; path: string; src: string };
 async function readThumbnail(taskId: string, previous: Thumbnail | undefined, signal: AbortSignal) {
   const response = await fetch(agentTaskUrl('/api/agent/state', taskId), { signal, cache: 'no-store' });
   if (!response.ok) throw new Error('Task state unavailable');
-  const report = selectInputReport(parseAgentState(await response.json()).updates);
+  const { updates, threadId } = parseAgentState(await response.json());
+  const report = selectInputReport(updates.filter(update => !update.threadId || update.threadId === threadId));
   if (!report?.id || !report.path) return undefined;
   if (previous?.reportId === report.id && previous.path === report.path) return previous;
 
@@ -36,6 +37,11 @@ export function useLiveTaskThumbnails(tasks: readonly LiveTask[], enabled: boole
   useEffect(() => {
     if (!enabled) return;
     const requests = pending.current;
+    const currentIds = new Set(tasks.map(task => task.id));
+    for (const [id, request] of requests) if (!currentIds.has(id)) {
+      request.abort();
+      requests.delete(id);
+    }
     for (const task of tasks) {
       if (requests.has(task.id)) continue;
       const controller = new AbortController();

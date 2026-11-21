@@ -1,0 +1,152 @@
+.stage-history-chart {
+  --stage-history-label-width: 48px;
+  --stage-history-card-width: clamp(10.5rem, 20vw, 12.5rem);
+  --stage-history-card-height: 46px;
+  --stage-history-column-gap: 16px;
+  --stage-history-row-gap: 24px;
+  --stage-history-junction-gap: calc(var(--stage-history-row-gap) / 2);
+  --stage-history-row-step: calc(var(--stage-history-card-height) + var(--stage-history-row-gap));
+  --stage-history-lane-step: calc(var(--stage-history-card-width) + var(--stage-history-column-gap));
+  --stage-history-side-gutter: calc(var(--stage-history-label-width) + var(--stage-history-column-gap));
+  --stage-history-first-center: calc(var(--stage-history-side-gutter) + var(--stage-history-card-width) / 2);
+  --stage-history-link: color-mix(in srgb, var(--line) 45%, var(--muted) 55%);
+  --stage-history-passed: #34835d;
+  --stage-history-passed-tint: 15%;
+  min-inline-size: 0;
+  overflow-x: auto;
+  padding: 4px;
+  scroll-padding-inline-start: calc(var(--stage-history-label-width) + var(--stage-history-column-gap));
+}
+
+.app-shell[data-design="observatory"] .stage-history-chart {
+  --stage-history-passed-tint: 40%;
+}
+
+.stage-history-chart__surface {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  row-gap: var(--stage-history-row-gap);
+  grid-auto-rows: var(--stage-history-card-height);
+  inline-size: calc(var(--stage-history-side-gutter) * 2 + var(--stage-history-card-width) + var(--stage-history-last-lane) * var(--stage-history-lane-step));
+  margin-inline: auto;
+}
+
+.stage-history-chart__row {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--stage-history-label-width) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.stage-history-chart__label {
+  position: sticky;
+  z-index: 2;
+  inset-inline-start: 0;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.stage-history-chart__node {
+  position: absolute;
+  z-index: 1;
+  display: grid;
+  inset-block: 0;
+  inline-size: var(--stage-history-card-width);
+  min-inline-size: 0;
+  min-block-size: 0;
+}
+
+.stage-history-chart__links {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.stage-history-chart__branch span {
+  position: absolute;
+  background: var(--stage-history-link);
+}
+
+.stage-history-chart__stem,
+.stage-history-chart__drop {
+  inline-size: 1px;
+}
+
+.stage-history-chart__stem {
+  block-size: var(--stage-history-junction-gap);
+}
+
+.stage-history-chart__crossbar {
+  block-size: 1px;
+}
+
+.stage-history-chart .stage-history-attempt {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-content: center;
+  align-items: center;
+  gap: 2px 6px;
+  min-inline-size: 0;
+  min-block-size: 0;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--ink);
+  text-align: start;
+}
+
+.stage-history-chart .stage-history-attempt[data-status="accepted"] {
+  border-color: var(--stage-history-passed);
+  background: color-mix(in srgb, var(--stage-history-passed) var(--stage-history-passed-tint), var(--panel));
+}
+
+.stage-history-chart .stage-history-attempt:hover {
+  box-shadow: inset 0 0 0 1px var(--muted);
+}
+
+.stage-history-chart .stage-history-attempt[aria-current="true"] {
+  outline: 1px solid var(--muted);
+  outline-offset: 1px;
+}
+
+.stage-history-chart .stage-history-attempt:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+.stage-history-attempt__title,
+.stage-history-attempt__meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stage-history-attempt__title {
+  grid-area: 1 / 1;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.stage-history-attempt__meta {
+  grid-area: 2 / 1 / 3 / -1;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.stage-history-attempt__status {
+  grid-area: 1 / 2;
+  padding: 2px 4px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
