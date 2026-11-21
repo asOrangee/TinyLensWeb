@@ -73,7 +73,9 @@ test('ambiguous, old-turn and unscoped accepted-stage requests never guess the s
 test('scope parsing preserves display metadata without accepting malformed scope or changing approval params', () => {
   const params = { threadId: 'child', turnId: 'child-turn', command: 'original command', availableDecisions: ['accept', 'decline'] };
   const scope = { rootThreadId: 'root', rootTurnId: 'turn', threadId: 'child', turnId: 'child-turn' };
-  const parsed = parseAgentState(state({ requests: [request({ params, scope })] }));
+  const replyId = 'a-bridge-issued-reply-id';
+  const parsed = parseAgentState(state({ requests: [request({ params, scope, replyId })] }));
+  assert.equal(parsed.requests[0].replyId, replyId);
   assert.deepEqual(parsed.requests[0].scope, scope);
   assert.deepEqual(parsed.requests[0].params, params);
   assert.equal(parseAgentState(state({ requests: [request({ params, scope: { rootThreadId: 'root' } as typeof scope })] })).requests[0].scope, undefined);

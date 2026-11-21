@@ -8,6 +8,7 @@ import { archiveForReport, stageReportSchema } from './stage-reports.mjs';
 export const maxBatchSize = 500;
 export const maxBatchParallelism = 16;
 export const validBatchId = id => typeof id === 'string' && /^batch-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id);
+const validMessageId = id => typeof id === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id);
 const validLensId = id => typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(id);
 const validRunId = id => typeof id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(id);
 const absolute = path => typeof path === 'string' && path.length <= 3900 && posix.isAbsolute(path) && !/[\x00-\x1f\x7f]/.test(path);
@@ -123,6 +124,7 @@ export function restoreBatches(value, tasks) {
     const lenses = new Set();
     for (const job of batch.jobs) {
       if (!validTarget(job) || lenses.has(job.lensId) || !['queued', 'starting', 'submitted', 'start_failed', 'removed'].includes(job.dispatch)
+          || (job.startMessageId !== undefined && !validMessageId(job.startMessageId))
           || typeof job.taskId !== 'string' || usedTasks.has(job.taskId)
           || (job.dispatch === 'removed' ? known.has(job.taskId) : known.get(job.taskId) !== batch.id)) throw Error('Invalid saved batch task');
       usedTasks.add(job.taskId);
@@ -159,6 +161,14 @@ export function openBatchQuestion(state) {
   return state.questions.some(question => question.threadId === state.threadId && ['pending', 'sending', 'delivery_unknown'].includes(question.status));
 }
 
+export function batchStartDelivery(job, state) {
+  const userMessages = state.messages.filter(message => message?.role === 'user');
+  if (userMessages.some(message => message.delivery !== 'rejected' && message.delivery !== 'delivered')) return 'unknown';
+  if (userMessages.some(message => message.delivery === 'delivered')) return 'delivered';
+  // A newly authorized retry can have rejected entries from earlier attempts.
+  return userMessages.some(message => !job.startMessageId || message.id === job.startMessageId) ? 'rejected' : 'unsent';
+}
+
 export function batchJobProgress(batch, job, state) {
   const base = { taskId: job.taskId, lensId: job.lensId, runPath: resultPath(batch, job),
     existing: job.runId !== null, canOpen: !['queued', 'starting', 'removed'].includes(job.dispatch) };
@@ -169,9 +179,19 @@ export function batchJobProgress(batch, job, state) {
     && report.run_path === base.runPath && report.lens_id === job.lensId);
   const archives = new Set(reports.filter(archiveForReport).map(report => report.run_id));
   const current = reports.filter(report => report.kind === 'stage' && !archives.has(report.run_id));
-  const latest = current.at(-1);
-  const terminal = latest && current.findLast(report => report.run_id === latest.run_id
-    && (report.status === 'human_review' || (report.stage === 'm3' && report.status === 'accepted')));
+  const runId = current.at(-1)?.run_id;
+  const currentRun = current.filter(report => report.run_id === runId);
+  const stages = new Map();
+  for (const report of currentRun) {
+    const previous = stages.get(report.stage);
+    if (!previous || report.attempt > previous.attempt
+        || (report.attempt === previous.attempt && !['accepted', 'human_review'].includes(previous.status))) {
+      stages.set(report.stage, report);
+    }
+  }
+  const latest = currentRun.findLast(report => stages.get(report.stage) === report);
+  const terminal = currentRun.findLast(report => report.stage === 'm3' && report.status === 'accepted')
+    ?? currentRun.findLast(report => report.status === 'human_review' && stages.get(report.stage) === report);
   const waiting = state.status === 'waiting' || state.requests.length > 0 || openBatchQuestion(state);
   const active = state.remoteActive || !!state.turnId;
   const uncertain = state.needsReconcile || state.messages.some(message => message.role === 'user' && message.delivery === 'unknown');

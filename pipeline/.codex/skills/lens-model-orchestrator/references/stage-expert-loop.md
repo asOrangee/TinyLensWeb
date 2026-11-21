@@ -104,9 +104,10 @@ to a registered restart remains historical evidence.
    For optional subhalo, first complete candidate registration and confirmed preview as specified
    in `stage-subhalo.md`; its two additional mutation commands are permitted.
 7. A prepared attempt with neither `stage-execution.json` nor `stage-result.json` may run once. An
-   execution marker seals the physical run even if the process dies before writing a result. On
-   resume, register such an interrupted run with `review adjudicate --failure
-   incomplete_stage_execution`; never execute it again.
+   execution marker seals the physical run. If there is a marker and no result on resume, run
+   `review adjudicate --failure incomplete_stage_execution`. On exit 75 with `busy`, wait for the
+   running command, then reread the attempt. If a result lands, follow its normal review path.
+   Never execute the sealed attempt again.
 
 ## Execute and adjudicate
 

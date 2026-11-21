@@ -480,8 +480,8 @@ def prepare_attempt(
     stage: StageName,
     attempt: int,
 ) -> Path:
-    with attempt_lock(output_dir, stage, attempt):
-        return _prepare_attempt(output_dir, stage, attempt)
+    with attempt_lock(output_dir, stage, attempt) as root:
+        return _prepare_attempt(root, stage, attempt)
 
 
 def _prepare_attempt(output_dir: Path, stage: StageName, attempt: int) -> Path:
@@ -632,7 +632,11 @@ def manifest_paths(attempt_root: Path) -> set[str]:
 
 def promote_attempt(output_dir: Path, stage: StageName, attempt: int) -> Path:
     """Validate and atomically advance one Accepted Stage Head."""
-    output_dir = validated_run_root(output_dir)
+    with attempt_lock(output_dir, stage, attempt) as root:
+        return _promote_locked_attempt(root, stage, attempt)
+
+
+def _promote_locked_attempt(output_dir: Path, stage: StageName, attempt: int) -> Path:
     candidate = attempt_dir(output_dir, stage, attempt)
     validate_stage_execution(candidate, stage, attempt)
     config = _load_config(candidate / "effective-config.json")

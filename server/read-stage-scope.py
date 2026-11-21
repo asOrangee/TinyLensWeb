@@ -259,11 +259,20 @@ def scope(request):
             if (inspector.get("lens_id"), inspector.get("disposition")) != (request["lens_id"], "human_review"):
                 raise ValueError("Preflight Human Review record did not match")
         else:
-            decision, _ = document(run / f"attempts/{stage}/{attempt}/decision.json", root)
+            decision_path = f"attempts/{stage}/{attempt}/decision.json"
+            decision, decision_hash = document(run / decision_path, root)
             if (decision.get("schema_version"), decision.get("stage"), decision.get("attempt"), decision.get("decision")) != (
                 "stage_decision.v1", stage, attempt, "human_review"
             ):
                 raise ValueError("Human Review decision did not match the reported attempt")
+            if stage == "b":
+                selection_path = run / "stage-b-candidates" / str(attempt + 1) / "selection.json"
+                if selection_path.exists():
+                    selection, _ = document(selection_path, root)
+                    if (selection.get("schema_version"), selection.get("stage"), selection.get("attempt"), selection.get("restart_of")) == (
+                        "stage_b_candidate_selection.v1", "b", attempt + 1, {"path": decision_path, "sha256": decision_hash},
+                    ):
+                        raise ValueError("The Stage B Human Review was superseded by a restart")
     if (request["accepted"] or request.get("human_review")) and document(manifest_path, root)[1] != run_hash:
         raise ValueError("The run changed while verifying the scientific decision")
     return {"run_id": manifest.get("run_id"), "attempt": attempt,

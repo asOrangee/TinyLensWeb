@@ -7,7 +7,7 @@ import { archiveForReport, stageReportSchema, validateStageReport } from './stag
 const reader = await readFile(new URL('./remove-task-runs.py', import.meta.url), 'utf8');
 const workspacePath = (path, workspace) => typeof path === 'string' && path.length <= 4000
   && !/[\0\r\n]/.test(path) && posix.normalize(path) === path && path.startsWith(workspace + '/output/');
-const overlap = (a, b) => a === b || a.startsWith(b + '/') || b.startsWith(a + '/');
+export const resultPathsOverlap = (a, b) => a === b || a.startsWith(b + '/') || b.startsWith(a + '/');
 const fingerprint = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 
 function reportScope(report, workspace) {
@@ -54,7 +54,7 @@ export function deletionCandidates(state, workspace, batchJob) {
 export function isolateTaskRuns(candidates, otherPaths, batchJob) {
   const retained = [], eligible = [];
   for (const item of candidates) {
-    if (otherPaths.some(path => overlap(path, item.path))
+    if (otherPaths.some(path => resultPathsOverlap(path, item.path))
       || (batchJob && (item.runPath !== batchJob.path || batchJob.runId))) retained.push(item.path);
     else eligible.push(item);
   }

@@ -1,4 +1,5 @@
 import csv
+import fcntl
 import hashlib
 import json
 import sys
@@ -21,6 +22,8 @@ from lens_agent.configuration import (
 from lens_agent.models import StageName
 from lens_agent.modeling.source_grid import source_grid_spec
 from lens_agent.modeling.predicted_image_family import build_predicted_image_family
+from lens_agent.operations import StageBusy, attempt_lock
+from lens_agent.rerun import prepare_full_rerun
 from tests.helpers import make_lens_dir, model_inspector_decision
 
 
@@ -1188,6 +1191,69 @@ def test_rerun_prepare_rejects_a_missing_current_lens_run(tmp_path: Path) -> Non
 
     assert not output_dir.exists()
     assert not (output_dir.parent / "_archive" / "lens-001_old_0").exists()
+
+
+def test_rerun_and_stage_operations_exclude_each_other(tmp_path: Path, capsys, monkeypatch) -> None:
+    output_dir = tmp_path / "output" / "lens-001"
+    output_dir.mkdir(parents=True)
+    manifest = output_dir / "run-manifest.json"
+    manifest.write_text(json.dumps({"schema_version": "lens_run_manifest.v1",
+                                    "pipeline_release_id": PIPELINE_RELEASE_ID}))
+    command = ["rerun", "prepare", "--output-dir", str(output_dir)]
+    archive = output_dir.parent / "_archive" / "lens-001_old_0"
+
+    with attempt_lock(output_dir, StageName.A, 0):
+        with attempt_lock(output_dir, StageName.B, 0):
+            with pytest.raises(SystemExit) as error:
+                main(command)
+            assert error.value.code == 75
+            assert json.loads(capsys.readouterr().err)["status"] == "busy"
+            assert manifest.is_file()
+            assert not archive.parent.exists()
+
+    with (output_dir / ".operations" / "a-0.lock").open("rb+") as legacy_lock:
+        fcntl.flock(legacy_lock, fcntl.LOCK_EX)
+        with pytest.raises(SystemExit) as error:
+            main(command)
+        assert error.value.code == 75
+        assert json.loads(capsys.readouterr().err)["status"] == "busy"
+        assert manifest.is_file()
+
+    rename = Path.rename
+
+    def rename_while_stage_tries_to_start(path, target):
+        with pytest.raises(StageBusy):
+            with attempt_lock(output_dir, StageName.B, 0):
+                pytest.fail("New stage entered a run being archived")
+        return rename(path, target)
+
+    monkeypatch.setattr(Path, "rename", rename_while_stage_tries_to_start)
+    main(command)
+    assert (archive / manifest.name).is_file()
+    assert not output_dir.exists()
+
+
+def test_stage_rejects_run_replaced_during_lock_acquisition(tmp_path: Path, monkeypatch) -> None:
+    output_dir = tmp_path / "output" / "lens-001"
+    output_dir.mkdir(parents=True)
+    manifest = output_dir / "run-manifest.json"
+    identity = {"schema_version": "lens_run_manifest.v1", "pipeline_release_id": PIPELINE_RELEASE_ID}
+    manifest.write_text(json.dumps({**identity, "run_id": "first"}))
+    flock = fcntl.flock
+
+    def replace_before_shared_lock(descriptor, operation):
+        if operation == fcntl.LOCK_SH | fcntl.LOCK_NB:
+            prepare_full_rerun(output_dir)
+            output_dir.mkdir()
+            manifest.write_text(json.dumps({**identity, "run_id": "replacement"}))
+        flock(descriptor, operation)
+
+    monkeypatch.setattr(fcntl, "flock", replace_before_shared_lock)
+    with pytest.raises(StageBusy, match="changed while acquiring its lock"):
+        with attempt_lock(output_dir, StageName.A, 0):
+            pytest.fail("Stale stage entered a replacement run")
+    assert json.loads(manifest.read_text())["run_id"] == "replacement"
+    assert not (output_dir / ".operations").exists()
 
 
 def test_rerun_prepare_archives_a_different_pipeline_release(tmp_path: Path) -> None:

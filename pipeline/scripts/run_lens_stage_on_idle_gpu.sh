@@ -5,6 +5,7 @@ set -Eeuo pipefail
 MAX_MEMORY_USED_MB="${MAX_MEMORY_USED_MB:-2000}"
 MAX_GPU_UTILIZATION="${MAX_GPU_UTILIZATION:-10}"
 GPU_POLL_INTERVAL_SECONDS="${GPU_POLL_INTERVAL_SECONDS:-5}"
+GPU_QUERY_TIMEOUT_SECONDS="${GPU_QUERY_TIMEOUT_SECONDS:-10}"
 GPU_QUERY_LD_LIBRARY_PATH="${GPU_QUERY_LD_LIBRARY_PATH-}"
 GPU_LOCK_ROOT="${GPU_LOCK_ROOT:-${TMPDIR:-/tmp}/agentic-lens-gpu-locks-$UID}"
 
@@ -52,6 +53,7 @@ done
 [[ $MAX_MEMORY_USED_MB =~ ^[0-9]+$ ]] || die "MAX_MEMORY_USED_MB must be a non-negative integer"
 [[ $MAX_GPU_UTILIZATION =~ ^[0-9]+$ ]] || die "MAX_GPU_UTILIZATION must be a non-negative integer"
 [[ $GPU_POLL_INTERVAL_SECONDS =~ ^[1-9][0-9]*$ ]] || die "GPU_POLL_INTERVAL_SECONDS must be a positive integer"
+[[ $GPU_QUERY_TIMEOUT_SECONDS =~ ^[1-9][0-9]*$ ]] || die "GPU_QUERY_TIMEOUT_SECONDS must be a positive integer"
 if [[ -n $timeout_seconds && ! $timeout_seconds =~ ^[1-9][0-9]*$ ]]; then
     die "--timeout-seconds must be a positive integer"
 fi
@@ -103,12 +105,19 @@ for argument in "$@"; do
 done
 
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
-export LENS_AGENT_GPU_LEASE=1
 
 interrupted=0
 stage_process_group=''
+query_process_group=''
+stop_query() {
+    # GNU timeout puts the query in its own group. Before it has started, only its PID exists.
+    kill -KILL -- "-$query_process_group" 2>/dev/null || kill -KILL -- "$query_process_group" 2>/dev/null || true
+}
 handle_signal() {
     interrupted=1
+    if [[ -n $query_process_group ]]; then
+        stop_query
+    fi
     if [[ -n $stage_process_group ]]; then
         kill -TERM -- "-$stage_process_group" 2>/dev/null || true
     fi
@@ -116,6 +125,7 @@ handle_signal() {
 trap handle_signal INT TERM
 
 run_stage() {
+    export LENS_AGENT_GPU_LEASE=1
     printf '[%s] Assigned GPU %s to stage %s.\n' "$(date -Is)" "$CUDA_VISIBLE_DEVICES" "$stage" >&2
     if [[ -n $timeout_seconds ]]; then
         setsid --wait timeout --signal=TERM --kill-after=10s \
@@ -138,16 +148,67 @@ run_stage() {
     exec "$python_path" -m lens_agent.cli stage "$@"
 }
 
+wait_for_gpu() {
+    printf '[%s] No idle unlocked GPU is available; checking again in %s seconds.\n' \
+        "$(date -Is)" "$GPU_POLL_INTERVAL_SECONDS" >&2
+    local poll_ticks=$((GPU_POLL_INTERVAL_SECONDS * 10)) tick
+    for ((tick = 0; tick < poll_ticks && !interrupted; tick++)); do
+        sleep 0.1 || true
+    done
+}
+
+canonical_gpu_index() {
+    local digits=${1#"${1%%[!0]*}"}
+    printf '%s\n' "${digits:-0}"
+}
+
+if [[ ${CUDA_VISIBLE_DEVICES+x} && ! $CUDA_VISIBLE_DEVICES =~ ^[0-9]+$ ]]; then
+    die "existing CUDA_VISIBLE_DEVICES must identify exactly one GPU by numeric index"
+fi
+command -v flock >/dev/null 2>&1 || die "flock is required for GPU allocation"
+mkdir -p -- "$GPU_LOCK_ROOT"
+
 if [[ ${CUDA_VISIBLE_DEVICES+x} ]]; then
-    [[ $CUDA_VISIBLE_DEVICES =~ ^[0-9]+$ ]] || \
-        die "existing CUDA_VISIBLE_DEVICES must identify exactly one GPU by numeric index"
-    run_stage "$@"
-    exit $?
+    export CUDA_VISIBLE_DEVICES=$(canonical_gpu_index "$CUDA_VISIBLE_DEVICES")
+    exec 8>"$GPU_LOCK_ROOT/gpu-${CUDA_VISIBLE_DEVICES}.lock"
+    while ((!interrupted)); do
+        if flock -n 8; then
+            ((interrupted)) && exit 130
+            run_stage "$@" || exit "$?"
+            exit 0
+        fi
+        wait_for_gpu
+    done
+    exit 130
 fi
 
 command -v nvidia-smi >/dev/null 2>&1 || die "nvidia-smi is required for GPU allocation"
-command -v flock >/dev/null 2>&1 || die "flock is required for GPU allocation"
-mkdir -p -- "$GPU_LOCK_ROOT"
+command -v timeout >/dev/null 2>&1 || die "timeout is required for GPU inventory queries"
+
+query_environment=()
+if [[ -n $GPU_QUERY_LD_LIBRARY_PATH && -d $GPU_QUERY_LD_LIBRARY_PATH ]]; then
+    query_environment=(env "LD_LIBRARY_PATH=$GPU_QUERY_LD_LIBRARY_PATH${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}")
+fi
+
+query_gpus() {
+    local query_directory status=0
+    query_directory=$(mktemp -d "${TMPDIR:-/tmp}/tinylens-gpu-query.XXXXXXXX") || return 1
+    # Leave the allocation lock in this shell. Capture to files so even a stuck child holding
+    # stdout or stderr cannot keep the caller waiting for the query's output pipe to close.
+    timeout --signal=KILL "${GPU_QUERY_TIMEOUT_SECONDS}s" "${query_environment[@]}" nvidia-smi \
+        --query-gpu=index,name,memory.used,utilization.gpu --format=csv,noheader,nounits \
+        9>&- >"$query_directory/inventory" 2>"$query_directory/errors" &
+    query_process_group=$!
+    if ((interrupted)); then stop_query; fi
+    wait "$query_process_group" 2>/dev/null || status=$?
+    if ((interrupted)); then wait "$query_process_group" 2>/dev/null || true; fi
+    query_process_group=''
+    query_result=$(<"$query_directory/inventory")
+    cat -- "$query_directory/errors" >&2
+    rm -f -- "$query_directory/inventory" "$query_directory/errors"
+    rmdir -- "$query_directory"
+    return "$status"
+}
 
 while ((!interrupted)); do
     exec 9>"$GPU_LOCK_ROOT/allocation.lock"
@@ -161,19 +222,18 @@ while ((!interrupted)); do
         break
     fi
 
-    query_environment=()
-    if [[ -n $GPU_QUERY_LD_LIBRARY_PATH && -d $GPU_QUERY_LD_LIBRARY_PATH ]]; then
-        query_environment=(env "LD_LIBRARY_PATH=$GPU_QUERY_LD_LIBRARY_PATH${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}")
-    fi
-    if ! query_result=$("${query_environment[@]}" nvidia-smi \
-        --query-gpu=index,name,memory.used,utilization.gpu \
-        --format=csv,noheader,nounits); then
-        flock -u 9
-        die "nvidia-smi failed while querying GPUs"
-    fi
+    query_status=0
+    query_gpus || query_status=$?
     if ((interrupted)); then
         flock -u 9
         break
+    fi
+    if ((query_status != 0)); then
+        flock -u 9
+        if ((query_status == 124 || query_status == 137)); then
+            die "nvidia-smi timed out after ${GPU_QUERY_TIMEOUT_SECONDS} seconds"
+        fi
+        die "nvidia-smi failed while querying GPUs"
     fi
 
     if ! parsed_gpus=$(awk -F',' '
@@ -212,6 +272,7 @@ while ((!interrupted)); do
     selected_name=''
     for candidate in "${candidates[@]}"; do
         IFS=$'\t' read -r gpu_id memory_used utilization gpu_name <<<"$candidate"
+        gpu_id=$(canonical_gpu_index "$gpu_id")
         exec 8>"$GPU_LOCK_ROOT/gpu-${gpu_id}.lock"
         if flock -n 8; then
             selected_gpu=$gpu_id
@@ -237,15 +298,7 @@ while ((!interrupted)); do
         exit "$stage_status"
     fi
 
-    printf '[%s] No idle unlocked GPU is available; checking again in %s seconds.\n' \
-        "$(date -Is)" "$GPU_POLL_INTERVAL_SECONDS" >&2
-    if ((interrupted)); then
-        break
-    fi
-    poll_ticks=$((GPU_POLL_INTERVAL_SECONDS * 10))
-    for ((tick = 0; tick < poll_ticks && !interrupted; tick++)); do
-        sleep 0.1 || true
-    done
+    wait_for_gpu
 done
 
 exit 130

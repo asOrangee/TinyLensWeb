@@ -16,6 +16,7 @@ from lens_agent.contracts import validate_reviewer_response
 from lens_agent.modeling.source_grid import source_grid_spec
 from lens_agent.modeling.predicted_image_family import build_predicted_image_family
 from lens_agent.models import StageName
+from lens_agent.operations import attempt_lock
 
 
 def _stage_b_audit(
@@ -2003,6 +2004,30 @@ def test_adjudicate_registers_a_closed_operational_failure_code(tmp_path: Path) 
         "failure_code": "stage_a_timeout",
         "reason": "Stage A exceeded 1800 seconds",
     }
+
+
+@pytest.mark.parametrize("failure", ["incomplete_stage_execution", "stage_a_timeout"])
+def test_operational_adjudication_cannot_seal_a_live_or_completed_attempt(
+    tmp_path: Path, capsys, failure: str,
+) -> None:
+    output_dir, attempt_root = _eligible_attempt(tmp_path)
+    result = attempt_root / "stage-result.json"
+    completed = result.read_bytes()
+    result.unlink()
+    command = ["review", "adjudicate", "--output-dir", str(output_dir),
+               "--stage", "a", "--attempt", "0", "--failure", failure]
+
+    with attempt_lock(output_dir, StageName.A, 0):
+        with pytest.raises(SystemExit) as error:
+            main(command)
+        assert error.value.code == 75
+        assert json.loads(capsys.readouterr().err)["status"] == "busy"
+        assert not (attempt_root / "decision.json").exists()
+        result.write_bytes(completed)
+
+    with pytest.raises(ValueError, match="conflicts with a completed stage result"):
+        main(command)
+    assert not (attempt_root / "decision.json").exists()
 
 
 def test_response_contract_failure_requires_and_uses_an_eligible_result(

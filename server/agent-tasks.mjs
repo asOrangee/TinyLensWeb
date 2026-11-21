@@ -6,25 +6,35 @@ import { resolve } from 'node:path';
 import { createAgentServer } from './agent-server.mjs';
 import { readTaskName, taskNameFile, writeTaskName } from './agent-task-names.mjs';
 import { connectionConfig } from './connection-config.mjs';
-import { batchJobProgress, batchPlanView, batchRequest, isBatchConfirmation, prepareBatchTool, publicBatch, readBatchPlan,
+import { batchJobProgress, batchMessage, batchPlanView, batchRequest, batchStartDelivery, isBatchConfirmation, prepareBatchTool, publicBatch, readBatchPlan,
   resultPath, restoreBatches, sameRuntime, validBatchId, validatedBatchPlan } from './agent-batches.mjs';
 import { createBatchQueue } from './batch-queue.mjs';
 import { readDisplayPublications, withDisplayPublications } from './display-publications.mjs';
-import { deletionCandidates, isolateTaskRuns, remoteTaskRuns } from './agent-task-deletion.mjs';
+import { deletionCandidates, isolateTaskRuns, remoteTaskRuns, resultPathsOverlap } from './agent-task-deletion.mjs';
 import { initialState } from './agent-state.mjs';
 
 const defaultDirectory = fileURLToPath(new URL('../.local/', import.meta.url));
 const cleanupFile = 'remote-task-cleanup.json';
 const invalidDeletionPlan = () => Object.assign(Error('删除清单已失效，请重新核对。'), { statusCode: 409 });
+const deletionInProgress = () => Object.assign(Error('任务正在彻底删除。'), { statusCode: 409 });
 export const DEFAULT_TASK_ID = 'default';
 const validId = id => id === DEFAULT_TASK_ID || /^task-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id);
 const mayAutoName = task => !!task && task.nameSource === 'default' && !task.batchId && task.id !== DEFAULT_TASK_ID;
-function unusedBatchStart(state) {
-  return state?.status === 'idle' && ['error', 'disconnected'].includes(state.connection)
-    && state.threadId === null && state.turnId === null && state.lastTurnId === null
-    && state.remoteActive === false && state.needsReconcile === false
-    && [state.messages, state.updates, state.activities, state.questions, state.requests, state.finishedTurnIds]
-      .every(items => Array.isArray(items) && items.length === 0);
+const legacyBatchSubmission = job => job.dispatch === 'submitted' && !job.startMessageId;
+const mayRetryBatchStart = job => job.dispatch === 'start_failed' || legacyBatchSubmission(job);
+function canRetryBatchStart(batch, job, state) {
+  if (state?.status !== 'idle' || state.turnId !== null || state.lastTurnId !== null
+      || state.remoteActive !== false || state.needsReconcile !== false || !Array.isArray(state.messages)
+      || [state.updates, state.activities, state.questions, state.requests, state.finishedTurnIds]
+        .some(items => !Array.isArray(items) || items.length !== 0)) return false;
+  if (state.messages.length === 0) {
+    return job.dispatch === 'start_failed' && ['error', 'disconnected'].includes(state.connection)
+      && (state.threadId === null || (job.startMessageId && typeof state.threadId === 'string' && !!state.threadId));
+  }
+  if (!['error', 'disconnected', 'connected'].includes(state.connection) || typeof state.threadId !== 'string' || !state.threadId) return false;
+  const text = batchMessage(batch, job);
+  // Earlier rejections remain in the journal if a later explicit retry fails before sending.
+  return state.messages.every(message => message?.role === 'user' && message.delivery === 'rejected' && message.text === text);
 }
 const json = (response, code, value) => {
   response.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -79,7 +89,9 @@ export async function createAgentTaskServer({ stateDirectory = defaultDirectory,
     nextProxyOffset = 1;
   }
   const sessions = new Map();
-  const deleting = new Set();
+  const deleting = new Map();
+  const deletionPreviews = new Map();
+  const deletionClaims = new Map();
   const deletionPlans = new Map();
   const batchStartGuards = new Set();
   let mutations = Promise.resolve(), closed = false;
@@ -132,8 +144,11 @@ export async function createAgentTaskServer({ stateDirectory = defaultDirectory,
   }
   const legacyTask = tasks.find(task => task.id === DEFAULT_TASK_ID);
   const legacy = legacyTask ? await session(legacyTask) : undefined;
-  function mutate(operation) {
-    const result = mutations.catch(() => {}).then(() => { if (closed) throw new Error('Task service is closed'); return operation(); });
+  function mutate(operation, { finishDeletion = false } = {}) {
+    const result = mutations.catch(() => {}).then(() => {
+      if (closed && !finishDeletion) throw new Error('Task service is closed');
+      return operation();
+    });
     mutations = result;
     return result;
   }
@@ -154,20 +169,31 @@ export async function createAgentTaskServer({ stateDirectory = defaultDirectory,
     return mutate(async () => {
       const batch = getBatch(id);
       const stored = batch?.jobs.find(item => item.taskId === job.taskId);
-      if (!stored || stored.dispatch === 'removed' || (dispatch === 'starting' && (stored.dispatch !== 'queued' || batch.paused))) return false;
+      if (!stored || stored !== job || stored.dispatch === 'removed') return;
+      if (dispatch === 'starting') {
+        const ready = stored.dispatch === 'queued' && !batch.paused;
+        const needsStartId = stored.dispatch === 'starting' && !stored.startMessageId;
+        if (deleting.has(job.taskId) || (!ready && !needsStartId)) return;
+      }
       const updated = { ...stored, dispatch, error };
+      if (dispatch === 'starting') updated.startMessageId = randomUUID();
       await writeBatch({ ...batch, jobs: batch.jobs.map(item => item === stored ? updated : item) });
-      return true;
+      return updated;
     });
   }
   const queue = createBatchQueue({ batches: () => batches, setDispatch, config: batchConfig, logger: options.logger,
-    intervalMs: batchPollMs, session: id => session(tasks.find(task => task.id === id)) });
+    intervalMs: batchPollMs, session: id => session(tasks.find(task => task.id === id)),
+    existingSession: id => sessions.get(id), canSchedule: id => !deleting.has(id) });
+
+  function deletionClaimPaths(exceptId) {
+    return [...deletionClaims].flatMap(([taskId, paths]) => taskId === exceptId ? [] : paths);
+  }
 
   function previousClaim(plan) {
     const paths = plan.targets.map(job => resultPath(plan, job));
     const occupied = batches.filter(batch => sameRuntime(batch, batchConfig)).flatMap(batch =>
       batch.jobs.filter(job => job.dispatch !== 'removed').map(job => resultPath(batch, job)));
-    return paths.find(path => occupied.some(other => path === other || path.startsWith(other + '/') || other.startsWith(path + '/')));
+    return paths.find(path => occupied.some(other => resultPathsOverlap(path, other)));
   }
   async function handleBatchTool(taskId, params, state, assertCurrent) {
     const { threadId, turnId, callId, tool, arguments: args } = params;
@@ -214,6 +240,10 @@ export async function createAgentTaskServer({ stateDirectory = defaultDirectory,
     return { id: batch.id, count: batch.jobs.length, status: 'queued' };
   }
   function assertUnclaimed(plan) {
+    const deletingPaths = deletionClaimPaths();
+    if (plan.targets.some(job => deletingPaths.some(path => resultPathsOverlap(path, resultPath(plan, job))))) {
+      throw Error('结果目录正在清理，请等删除完成后重新核对名单。');
+    }
     const conflict = previousClaim(plan);
     if (conflict) throw Error(`该结果目录已属于一个网页批次：${conflict}`);
   }
@@ -252,7 +282,7 @@ export async function createAgentTaskServer({ stateDirectory = defaultDirectory,
       const state = live ?? (Array.isArray(saved?.messages) ? initialState(saved) : undefined);
       // Restoration clears transient fields such as requests and remoteActive.
       // Verify the untouched journal too, and require a completed journal write.
-      const verified = unusedBatchStart(saved) && (!live || unusedBatchStart(live))
+      const verified = canRetryBatchStart(batch, job, saved) && (!live || canRetryBatchStart(batch, job, live))
         && saved.workspace === batch.workspace && saved.datasetPath === job.inputPath
         && await lstat(`${path}.tmp`).then(() => false, error => error.code === 'ENOENT');
       return { state, verified };
@@ -262,9 +292,11 @@ export async function createAgentTaskServer({ stateDirectory = defaultDirectory,
     const compatible = sameRuntime(batch, batchConfig);
     const details = await Promise.all(batch.jobs.map(async job => {
       const task = tasks.find(task => task.id === job.taskId && task.batchId === batch.id);
-      const failed = task && job.dispatch === 'start_failed' ? await failedBatchStart(batch, job, task) : undefined;
-      const state = task && job.dispatch === 'submitted'
-        ? await session(task).then(bridge => bridge.state, () => undefined) : failed?.state;
+      const submitted = task && job.dispatch === 'submitted'
+        ? await session(task).then(bridge => bridge.state, () => undefined) : undefined;
+      const failed = task && (job.dispatch === 'start_failed' || (submitted && legacyBatchSubmission(job)
+        && batchStartDelivery(job, submitted) === 'rejected')) ? await failedBatchStart(batch, job, task) : undefined;
+      const state = submitted ?? failed?.state;
       const delivered = state?.threadId && state.messages.some(message => message.role === 'user' && message.delivery === 'delivered'
         && (message.threadId === undefined || message.threadId === state.threadId));
       return { job: { ...batchJobProgress(batch, job, state), ...(delivered && { delivered: true }) },
@@ -281,7 +313,7 @@ export async function createAgentTaskServer({ stateDirectory = defaultDirectory,
       }
       const candidates = [];
       for (const job of batch.jobs) {
-        if (job.dispatch !== 'start_failed' || deleting.has(job.taskId) || queue.isStarting(job.taskId)
+        if (!mayRetryBatchStart(job) || deleting.has(job.taskId) || queue.isStarting(job.taskId)
             || batchStartGuards.has(job.taskId)) continue;
         const task = tasks.find(task => task.id === job.taskId && task.batchId === id);
         if (!task) continue;
@@ -355,7 +387,7 @@ export async function createAgentTaskServer({ stateDirectory = defaultDirectory,
     const reserved = batches.filter(batch => sameRuntime(batch, batchConfig)).flatMap(batch => batch.jobs
       .filter(job => job.dispatch !== 'removed' && job.taskId !== task.id).map(job => resultPath(batch, job)));
     if (batch && !sameRuntime(batch, batchConfig)) return { eligible: [], retained: candidates.map(item => item.path) };
-    return isolateTaskRuns(candidates, [...others.flat(), ...reserved], jobScope);
+    return isolateTaskRuns(candidates, [...others.flat(), ...reserved, ...deletionClaimPaths(task.id)], jobScope);
   }
   async function performRemoteCleanup(mode, candidates) {
     try { return await removeRemoteRuns(mode, candidates, batchConfig); }
@@ -364,83 +396,118 @@ export async function createAgentTaskServer({ stateDirectory = defaultDirectory,
       throw Object.assign(Error('暂时无法连接 GPU 服务器清理结果，请重试。'), { statusCode: 502 });
     }
   }
+  async function verifyDeletionScope(id, bridge, threadId, expectedScope) {
+    const task = tasks.find(item => item.id === id);
+    if (!task || bridge.state.threadId !== threadId) throw invalidDeletionPlan();
+    const scope = await taskRunScope(task, bridge);
+    if (bridge.state.threadId !== threadId || JSON.stringify(scope) !== expectedScope) throw invalidDeletionPlan();
+    return task;
+  }
   async function prepareDeletion(id) {
-    return mutate(async () => {
-      const task = tasks.find(item => item.id === id);
-      if (!task) throw Object.assign(Error('Task not found'), { statusCode: 404 });
-      const bridge = await session(task);
-      const { eligible, retained } = await taskRunScope(task, bridge);
-      const journal = await persistedJson(resolve(directory(task), cleanupFile));
-      if (journal && (journal.schema !== 'tinylens.remote-task-cleanup.v1' || journal.threadId !== bridge.state.threadId
-          || journal.workspace !== batchConfig.workspace || journal.sshHost !== batchConfig.sshHost || !Array.isArray(journal.runs))) {
-        throw Object.assign(Error('待清理的任务结果与当前 GPU 配置不一致。'), { statusCode: 409 });
-      }
-      const previous = new Map(journal?.runs.map(run => [run.path, run.fingerprint]));
-      const requested = eligible.map(item => previous.has(item.path) ? { ...item, fingerprint: previous.get(item.path) } : item);
+    const token = randomUUID();
+    try {
+      const { bridge, threadId, scope, requested, retained } = await mutate(async () => {
+        const task = tasks.find(item => item.id === id);
+        if (!task) throw Object.assign(Error('Task not found'), { statusCode: 404 });
+        if (deleting.has(id)) throw deletionInProgress();
+        deletionPlans.delete(id);
+        deletionPreviews.set(id, token);
+        const bridge = await session(task);
+        const threadId = bridge.state.threadId;
+        const { eligible, retained } = await taskRunScope(task, bridge);
+        const journal = await persistedJson(resolve(directory(task), cleanupFile));
+        if (journal && (journal.schema !== 'tinylens.remote-task-cleanup.v1' || journal.threadId !== threadId
+            || journal.workspace !== batchConfig.workspace || journal.sshHost !== batchConfig.sshHost || !Array.isArray(journal.runs))) {
+          throw Object.assign(Error('待清理的任务结果与当前 GPU 配置不一致。'), { statusCode: 409 });
+        }
+        const previous = new Map(journal?.runs.map(run => [run.path, run.fingerprint]));
+        const requested = eligible.map(item => previous.has(item.path) ? { ...item, fingerprint: previous.get(item.path) } : item);
+        return { bridge, threadId, requested, retained, scope: JSON.stringify({ eligible, retained }) };
+      });
       const result = await performRemoteCleanup('preview', requested);
       const verified = new Map(result.runs.map(run => [run.path, run.fingerprint]));
-      const token = randomUUID();
       const runs = requested.filter(item => verified.has(item.path)).map(item => ({ ...item, fingerprint: verified.get(item.path) }));
-      deletionPlans.set(id, { token, threadId: bridge.state.threadId, runs, scope: JSON.stringify({ eligible, retained }) });
-      return { token, runs: runs.map(run => run.path),
-        retained: [...new Set([...retained, ...result.retained.filter(item => item.reason !== 'missing').map(item => item.path)])] };
-    });
+      return await mutate(async () => {
+        if (deleting.has(id) || deletionPreviews.get(id) !== token) throw invalidDeletionPlan();
+        await verifyDeletionScope(id, bridge, threadId, scope);
+        deletionPlans.set(id, { token, threadId, runs, scope });
+        return { token, runs: runs.map(run => run.path),
+          retained: [...new Set([...retained, ...result.retained.filter(item => item.reason !== 'missing').map(item => item.path)])] };
+      });
+    } finally {
+      if (deletionPreviews.get(id) === token) deletionPreviews.delete(id);
+    }
   }
-  async function deleteTask(id, token) {
-    return mutate(async () => {
-      const task = tasks.find(task => task.id === id);
+  function deleteTask(id, token) {
+    if (deleting.has(id)) throw deletionInProgress();
+    const operation = finishTaskDeletion(id, token).finally(() => {
+      deletionClaims.delete(id);
+      deleting.delete(id);
+      queue.wake();
+    });
+    deleting.set(id, operation);
+    return operation;
+  }
+  async function finishTaskDeletion(id, token) {
+    const { task, plan } = await mutate(() => {
+      const task = tasks.find(item => item.id === id);
       if (!task && !pendingDeletions.includes(id)) {
         throw Object.assign(new Error('Task not found'), { statusCode: 404 });
       }
-      deleting.add(id);
-      let threadId;
-      let taskClosed = false;
-      try {
-        if (task) {
-          const plan = deletionPlans.get(id);
-          if (!plan || token !== plan.token) throw invalidDeletionPlan();
-          const batch = getBatch(task.batchId);
-          const job = batch?.jobs.find(item => item.taskId === id);
-          if (job && (job.dispatch === 'starting' || queue.isStarting(id))) {
-            throw Object.assign(Error('批次正在派发该任务，请等当前发送结束。'), { statusCode: 409 });
+      const plan = deletionPlans.get(id);
+      if (task && plan?.token !== token) throw invalidDeletionPlan();
+      const job = getBatch(task?.batchId)?.jobs.find(item => item.taskId === id);
+      if (job && (job.dispatch === 'starting' || queue.isStarting(id))) {
+        throw Object.assign(Error('批次正在派发该任务，请等当前发送结束。'), { statusCode: 409 });
+      }
+      return { task, plan };
+    });
+    let taskClosed = false;
+    try {
+      if (task) {
+        const bridge = await session(task);
+        if (bridge.state.threadId !== plan.threadId) throw invalidDeletionPlan();
+        await bridge.close({ onlyIfIdle: true });
+        taskClosed = true;
+        await mutate(async () => {
+          await verifyDeletionScope(id, bridge, plan.threadId, plan.scope);
+          deletionClaims.set(id, plan.runs.map(run => run.path));
+        }, { finishDeletion: true });
+        if (plan.runs.length) {
+          const path = resolve(directory(task), cleanupFile);
+          const record = { schema: 'tinylens.remote-task-cleanup.v1', threadId: plan.threadId,
+            workspace: batchConfig.workspace, sshHost: batchConfig.sshHost, runs: plan.runs };
+          await writeFile(`${path}.tmp`, JSON.stringify(record), { mode: 0o600 });
+          await rename(`${path}.tmp`, path);
+          const result = await performRemoteCleanup('delete', plan.runs);
+          if (result.retained.length || result.runs.length !== plan.runs.length) {
+            throw Object.assign(Error('服务器结果已变化或暂时无法清理，请重新核对删除清单。'), { statusCode: 409 });
           }
-          const bridge = await session(task);
-          if (bridge.state.threadId !== plan.threadId) throw invalidDeletionPlan();
-          await bridge.close({ onlyIfIdle: true });
-          taskClosed = true;
-          threadId = bridge.state.threadId;
-          if (JSON.stringify(await taskRunScope(task, bridge)) !== plan.scope) throw invalidDeletionPlan();
-          if (plan.runs.length) {
-            const path = resolve(directory(task), cleanupFile);
-            const record = { schema: 'tinylens.remote-task-cleanup.v1', threadId,
-              workspace: batchConfig.workspace, sshHost: batchConfig.sshHost, runs: plan.runs };
-            await writeFile(`${path}.tmp`, JSON.stringify(record), { mode: 0o600 });
-            await rename(`${path}.tmp`, path);
-            const result = await performRemoteCleanup('delete', plan.runs);
-            if (result.retained.length || result.runs.length !== plan.runs.length) {
-              throw Object.assign(Error('服务器结果已变化或暂时无法清理，请重新核对删除清单。'), { statusCode: 409 });
-            }
-          }
+        }
+        await mutate(async () => {
+          const current = await verifyDeletionScope(id, bridge, plan.threadId, plan.scope);
+          const batch = getBatch(current.batchId);
           const remaining = tasks.filter(item => item.id !== id);
           const pending = [...pendingDeletions, id];
           const nextBatches = batch ? batches.map(item => item === batch ? { ...batch, jobs: batch.jobs.map(candidate =>
-            candidate === job ? { ...job, dispatch: 'removed' } : candidate) } : item) : batches;
+            candidate.taskId === id ? { ...candidate, dispatch: 'removed' } : candidate) } : item) : batches;
           await persist(remaining, pending, nextProxyOffset, nextBatches);
           tasks = remaining;
           batches = nextBatches;
           pendingDeletions = pending;
-        }
-        await removeTaskFiles(id);
+        }, { finishDeletion: true });
+      }
+      await removeTaskFiles(id);
+      await mutate(async () => {
         const pending = pendingDeletions.filter(item => item !== id);
         await persist(tasks, pending);
         pendingDeletions = pending;
         deletionPlans.delete(id);
-        return { deleted: id, threadId };
-      } finally {
-        if (taskClosed) sessions.delete(id);
-        deleting.delete(id);
-      }
-    });
+      }, { finishDeletion: true });
+      return { deleted: id, threadId: task ? plan.threadId : undefined };
+    } finally {
+      if (taskClosed) sessions.delete(id);
+    }
   }
   async function catalog() {
     return Promise.all(tasks.map(async task => {
@@ -512,7 +579,7 @@ export async function createAgentTaskServer({ stateDirectory = defaultDirectory,
       const id = url.searchParams.get('taskId') ?? DEFAULT_TASK_ID;
       const task = validId(id) && tasks.find(item => item.id === id);
       if (!task) return json(response, 404, { error: 'Task not found' });
-      if (deleting.has(id)) return json(response, 409, { error: '任务正在彻底删除。' });
+      if (deleting.has(id)) throw deletionInProgress();
       const batch = getBatch(task.batchId);
       if (batch && !sameRuntime(batch, batchConfig)) return json(response, 409, { error: '批次与当前 GPU 服务器配置不一致。' });
       const job = batch?.jobs.find(item => item.taskId === id);
@@ -520,7 +587,7 @@ export async function createAgentTaskServer({ stateDirectory = defaultDirectory,
         return json(response, 409, { error: '该任务由批次队列派发。' });
       }
       // A manual command on a failed task must not overlap a bulk retry check.
-      const guarded = request.method === 'POST' && job?.dispatch === 'start_failed';
+      const guarded = request.method === 'POST' && job && mayRetryBatchStart(job);
       if (guarded) batchStartGuards.add(id);
       // Task scope belongs to this router. Existing readers deliberately reject
       // any query fields besides their own report identifier and refresh flag.
@@ -540,6 +607,7 @@ export async function createAgentTaskServer({ stateDirectory = defaultDirectory,
   async function close() {
     queue.stop();
     closed = true;
+    await Promise.allSettled(deleting.values());
     await mutations.catch(() => {});
     await Promise.all([...sessions.values()].map(async pending => {
       const bridge = await pending.catch(() => undefined);

@@ -99,14 +99,16 @@ the physical model and are not recorded in stage evidence.
 The runner sets `CUDA_DEVICE_ORDER=PCI_BUS_ID` and `CUDA_VISIBLE_DEVICES` before Python imports JAX.
 It does not modify JAX's memory-preallocation configuration. If the caller already supplied one
 numeric `CUDA_VISIBLE_DEVICES` value, that upstream assignment is used without scanning the host;
-multi-device or nonnumeric assignments are rejected.
+the runner waits for the same per-device lock used by automatic selection. Multi-device or
+nonnumeric assignments are rejected.
 
 Locks under `${TMPDIR:-/tmp}/agentic-lens-gpu-locks-$UID` prevent this Unix user's cooperating
 runner processes from selecting the same device. `nvidia-smi` also avoids GPUs already visibly
 busy, but these locks cannot provide atomic exclusion against another user or a program that does
 not use this runner. Use Slurm or another system scheduler when cross-user allocation must be
-authoritative. A failed GPU query stops before Python starts and does not consume a scientific
-retry.
+authoritative. `GPU_QUERY_TIMEOUT_SECONDS` sets the whole-inventory query limit and defaults to
+10 seconds. A timed-out or failed query releases the allocation lock, stops before physical
+execution, and does not consume a scientific retry.
 
 ## 3. Inspect results and logs
 

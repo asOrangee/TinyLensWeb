@@ -3,7 +3,9 @@ import { ArrowLeft, ArrowUpRight, BookOpen, Check, ChevronDown, CircleHelp, File
 import { DesignPicker } from './DesignPicker';
 import { designs, isDesign, readDesign, type DesignId } from '../lib/designs';
 import { stages, type StageId, type Parameter } from '../data/stages';
-import { EMPTY_AGENT_STATE, parseAgentState, type AgentActivity, type AgentQuestion, type AgentQuestionAnswer, type AgentRequest, type AgentState, type AgentUpdate } from '../lib/agent-types';
+import { EMPTY_AGENT_STATE, parseAgentState, type AgentActivity, type AgentQuestion, type AgentRequest, type AgentState, type AgentUpdate } from '../lib/agent-types';
+import { postMessageSubmission, restoreMessageSubmissions, type MessageDelivery, type MessageSubmission } from '../lib/message-delivery';
+import { questionAnswerControls, restoreQuestionDraft, type QuestionDraft, type QuestionSubmission } from '../lib/question-answer';
 import PositionLikelihoodEditor from './PositionLikelihoodEditor';
 import ConversationRail from './ConversationRail';
 import ConnectionStatusBar from './ConnectionStatusBar';
@@ -107,14 +109,24 @@ export default function AgentWorkspace({ task, tasks, deletedTasks, taskError, t
   const [viewerToolbarTarget, setViewerToolbarTarget] = useState<HTMLDivElement | null>(null);
   const [parameterKey, setParameterKey] = useState('');
   const [savedPreferences] = useState(() => readPreferences(taskId));
-  const [draft, setDraft] = useState(savedPreferences.draft ?? '');
-  const answerLocks = useRef(new Set<string>());
-  const questionKey = (id: string) => `${state.threadId ?? ''}:${id}`;
+  const submissionKey = taskId && `tinylens-message-submissions-v1:${taskId}`;
+  const [submissions] = useState(() => {
+    try { return restoreMessageSubmissions(submissionKey ? sessionStorage.getItem(submissionKey) : null); }
+    catch { return restoreMessageSubmissions(null); }
+  });
+  const recoveredDraft = [...submissions.keys()].at(-1);
+  const [draft, setDraft] = useState(savedPreferences.draft ?? recoveredDraft ?? '');
+  const draftValue = useRef(draft);
+  draftValue.current = draft;
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const stateSequence = useRef(0);
+  const answerInFlight = useRef(false);
   const messageSending = useRef(false);
   const [position, setPosition] = useState<PositionDraft>(savedPreferences.position ?? emptyPositionDraft());
   const [generatedPositionPrompt, setGeneratedPositionPrompt] = useState(savedPreferences.positionPrompt ?? '');
   const [generatedMaskPrompt,setGeneratedMaskPrompt]=useState(savedPreferences.maskPrompt??'');
-  const draftTouched = useRef(savedPreferences.draft !== undefined);
+  const draftTouched = useRef(savedPreferences.draft !== undefined || recoveredDraft !== undefined);
   const initialStateLoaded = useRef(false);
   const [stageId, setStageId] = useState<StageId>(savedPreferences.stageId);
   const [showComment, setShowComment] = useState(false);
@@ -183,6 +195,7 @@ export default function AgentWorkspace({ task, tasks, deletedTasks, taskError, t
   const blankWorkspace = !taskId || showTaskWelcome;
   const canInitialize = !!taskId && stateReady && taskId !== defaultLiveTaskId && !state.threadId && state.messages.length === 0;
   const messages = state.messages.filter(message => !hiddenReasoning(message.phase));
+  const deliveryLabels = { pending: '等待送达确认', unknown: '送达待确认', rejected: '未送达', delivered: undefined };
   const activities = state.activities.filter(activity => !hiddenReasoning(activity.type));
   const visibleActivities = showAllActivities ? activities : activities.slice(-8);
   const stageUpdates = state.updates.filter(update => update.kind === 'stage');
@@ -193,8 +206,45 @@ export default function AgentWorkspace({ task, tasks, deletedTasks, taskError, t
   const stageRunning = selectedStageUpdate?.status === 'running';
   const openQuestions = state.questions.filter(question => question.status !== 'answered' && question.status !== 'superseded');
   const archivedQuestions = state.questions.filter(question => question.status === 'answered' || question.status === 'superseded');
+  const messageReceipts = new Map(messages.filter(item => item.role === 'user').map(item => [item.id, item.delivery]));
+
+  function storeSubmissions() {
+    if (!submissionKey) return;
+    try {
+      if (submissions.size) sessionStorage.setItem(submissionKey, JSON.stringify([...submissions.values()]));
+      else sessionStorage.removeItem(submissionKey);
+    } catch { /* The current page retains the submission when storage is unavailable. */ }
+  }
+
+  function settleSubmission(submission: MessageSubmission, delivery: MessageDelivery) {
+    if (delivery !== 'delivered' && delivery !== 'rejected') return;
+    if (submissions.get(submission.text)?.clientMessageId !== submission.clientMessageId) return;
+    submissions.delete(submission.text);
+    storeSubmissions();
+    if (delivery === 'rejected') return;
+    draftTouched.current = true;
+    try {
+      if (preferenceKey) {
+        const saved = JSON.parse(localStorage.getItem(preferenceKey) ?? 'null');
+        if (saved?.draft === submission.text) localStorage.setItem(preferenceKey, JSON.stringify({ ...saved, draft: '', positionPrompt: '' }));
+      }
+    } catch { /* The in-memory draft also follows the receipt. */ }
+    setDraft(previous => previous === submission.text ? '' : previous);
+    if (draftValue.current === submission.text) { setGeneratedPositionPrompt(''); setLocalError(null); }
+    onTaskActivity();
+  }
 
   function receiveState(next: AgentState) {
+    stateSequence.current += 1;
+    for (const submission of submissions.values()) {
+      const message = next.messages.find(item => item.id === submission.clientMessageId && item.role === 'user');
+      if (message?.delivery) settleSubmission(submission, message.delivery);
+    }
+    try {
+      for (const question of next.questions) if (question.status === 'answered' || question.status === 'superseded') {
+        sessionStorage.removeItem(questionDraftKey(question));
+      }
+    } catch { /* Archived questions stay read-only when storage is unavailable. */ }
     // Restore an existing conversation without inserting a second full-run request.
     // Never replace a draft the user has already started editing.
     if (!draftTouched.current) {
@@ -245,9 +295,10 @@ export default function AgentWorkspace({ task, tasks, deletedTasks, taskError, t
     setFocusReports(false);
   }, [tab, focusReports]);
 
-  async function perform(name: string, body: Record<string, unknown> = {}) {
+  async function perform(name: string, body: Record<string, unknown> = {}, onState?: (next: AgentState) => void) {
     if (!taskId || action) return false;
     setAction(name); setLocalError(null);
+    const sequence = stateSequence.current;
     try {
       const response = await fetch(api(`/api/agent/${name}`), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const payload: unknown = await response.json().catch(() => null);
@@ -256,7 +307,11 @@ export default function AgentWorkspace({ task, tasks, deletedTasks, taskError, t
         throw new Error(typeof failure === 'string' ? failure : `AI 会话请求未完成（${response.status}）。`);
       }
       // Actions may return the state directly, or only acknowledge the request.
-      if (payload && typeof payload === 'object' && 'connection' in payload) receiveState(parseAgentState(payload));
+      if (payload && typeof payload === 'object' && 'connection' in payload) {
+        const next = parseAgentState(payload);
+        if (sequence === stateSequence.current) receiveState(next);
+        onState?.(next);
+      }
       return true;
     } catch (error) {
       setLocalError(error instanceof Error ? error.message : 'AI 会话请求失败。');
@@ -271,49 +326,40 @@ export default function AgentWorkspace({ task, tasks, deletedTasks, taskError, t
     pinConversation.current = true;
     messageSending.current = true;
     try {
-      if (state.connection !== 'connected' && !await perform('connect')) return;
-      const sent = await perform('message', { text, ...(steerTurnId && { expectedTurnId: steerTurnId }),
-        ...(state.batchPlan?.status === 'preview' && { seenBatchPlanId: state.batchPlan.id }) });
-      if (sent) {
-        // Delivery can finish after navigating away, so clear only the matching saved draft.
-        try {
-          const saved = JSON.parse(localStorage.getItem(preferenceKey) ?? 'null');
-          if (saved?.draft === text) localStorage.setItem(preferenceKey, JSON.stringify({ ...saved, draft: '', positionPrompt: '' }));
-        } catch { /* The in-memory draft still follows the delivery receipt. */ }
-        draftTouched.current = true;
-        setDraft(previous => previous === text ? '' : previous);
-        setGeneratedPositionPrompt('');
-        onTaskActivity();
+      let threadId = state.threadId;
+      if (state.connection !== 'connected' && !await perform('connect', {}, next => { threadId = next.threadId; })) return;
+      if (!threadId || !mounted.current) return;
+      const submission = submissions.get(text) ?? { clientMessageId: crypto.randomUUID(), text, expectedThreadId: threadId,
+        expectedTurnId: steerTurnId, seenBatchPlanId: state.batchPlan?.status === 'preview' ? state.batchPlan.id : undefined };
+      submissions.set(text, submission);
+      storeSubmissions();
+      setAction('message'); setLocalError(null);
+      const sequence = stateSequence.current;
+      const receipt = await postMessageSubmission(api('/api/agent/message'), submission);
+      if (!mounted.current) return;
+      if (submissions.get(text)?.clientMessageId === submission.clientMessageId) {
+        settleSubmission(submission, receipt.delivery);
+        if (receipt.delivery !== 'delivered') setLocalError(receipt.error || '消息正在等待送达确认。');
       }
-    } finally { messageSending.current = false; }
+      if (receipt.state && sequence === stateSequence.current) receiveState(parseAgentState(receipt.state));
+    } catch (error) {
+      if (mounted.current) setLocalError(error instanceof Error ? error.message : 'AI 消息提交未完成。');
+    } finally { messageSending.current = false; if (mounted.current) setAction(null); }
   }
 
-  async function answerQuestion(questionId: string, answer: AgentQuestionAnswer): Promise<QuestionSubmission> {
-    if (action || answerLocks.current.has(questionKey(questionId))) return { status: 'rejected', error: '该答复正在提交或等待送达确认，请勿重复提交。' };
-    answerLocks.current.add(questionKey(questionId));
+  async function answerQuestion(submission: QuestionSubmission): Promise<AnswerReceipt> {
+    if (action || answerInFlight.current) return { delivery: 'unknown', error: '已有提交正在处理，请稍后重试原答复。' };
+    answerInFlight.current = true;
     setAction('answer');
-    let result: QuestionSubmission;
+    const sequence = stateSequence.current;
     try {
-      const response = await fetch(api('/api/agent/answer'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ questionId, ...answer }) });
-      const payload: unknown = await response.json().catch(() => null);
-      if (payload && typeof payload === 'object' && 'connection' in payload) receiveState(parseAgentState(payload));
-      if (response.ok) result = { status: 'accepted' };
-      else {
-        const error = payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string' ? payload.error : `答复请求未完成（${response.status}）。`;
-        result = { status: response.status >= 500 ? 'unknown' : 'rejected', error };
+      const receipt = await postMessageSubmission(api('/api/agent/answer'), submission);
+      if (mounted.current && receipt.state && sequence === stateSequence.current) {
+        try { receiveState(parseAgentState(receipt.state)); }
+        catch { /* A matching receipt still applies if the state snapshot cannot be read. */ }
       }
-    } catch {
-      result = { status: 'unknown', error: '连接中断，暂时无法确认答复是否送达。请等待会话状态恢复；不要重复提交。' };
-    }
-    // A transport acknowledgement is not proof that the AI received the answer.
-    // Refresh only the server state, and never retry a submission automatically.
-    try {
-      const response = await fetch(api('/api/agent/state'));
-      if (response.ok) receiveState(parseAgentState(await response.json()));
-    } catch { /* SSE will restore the authoritative delivery status when available. */ }
-    if (result.status === 'rejected') answerLocks.current.delete(questionKey(questionId));
-    setAction(null);
-    return result;
+      return receipt;
+    } finally { answerInFlight.current = false; if (mounted.current) setAction(null); }
   }
 
   function chooseDesign(id: DesignId) {
@@ -346,17 +392,21 @@ export default function AgentWorkspace({ task, tasks, deletedTasks, taskError, t
       disabled={state.connection === 'connecting' || action !== null} onClick={() => void perform('connect')}>
       {state.connection === 'connecting' ? '连接中' : '连接 AI'}
     </button>}
-    messages={messages} finalResult={completion.value && <FinalParameterCard {...completion}/>}
+    messages={messages.map(message => message.role === 'user' && message.delivery ? { ...message, note: deliveryLabels[message.delivery] } : message)}
+    finalResult={completion.value && <FinalParameterCard {...completion}/>}
     value={draft} onChange={text => { draftTouched.current = true; setDraft(text); }}
     onSubmit={() => void sendMessage()} textareaId="pipeline-message" inputRef={composer}
     disabled={!stateReady || state.connection !== 'connected' && !canInitialize || action !== null} busy={isBusy} steerAvailable={!!steerTurnId}
     error={localError ?? state.error ?? (taskId ? taskError || null : null) ?? (storageUnavailable ? '草稿暂存在页面内' : '')}
-    interruptAvailable={!!state.turnId} onInterrupt={() => perform('interrupt')} attentionCount={openQuestions.length + state.requests.length + (batchPlan ? 1 : 0)}
+    interruptAvailable={!!state.turnId} onInterrupt={() => perform('interrupt', { expectedThreadId: state.threadId, expectedTurnId: state.turnId })}
+    attentionCount={openQuestions.length + state.requests.length + (batchPlan ? 1 : 0)}
     attention={(batchPlan || openQuestions.length > 0 || state.requests.length > 0) && <>
       {batchPlan && <BatchPlanCard plan={batchPlan} onProgress={() => onBatches(batchPlan.id)}/>}
       {(openQuestions.length > 0 || state.requests.length > 0) && <section id="agent-pending-questions" className="agent-question-deck live-attention-deck" aria-label="等待你的决定">
-      {openQuestions.map(question => <QuestionCard key={`${question.threadId}:${question.id}`} question={question} connected={state.connection === 'connected'} busy={action !== null || answerLocks.current.has(questionKey(question.id))} onAnswer={answer => answerQuestion(question.id, answer)}/>)}
-      {state.requests.map(request => <RequestCard key={`${state.threadId}:${typeof request.id}:${request.id}`} request={request} busy={action !== null || state.connection !== 'connected'} reply={result => perform('reply', { requestId: request.id, result })}/>)}
+      {openQuestions.map(question => <QuestionCard key={`${question.threadId}:${question.id}`} question={question}
+        connected={state.connection === 'connected'} busy={action !== null} messageReceipts={messageReceipts} onAnswer={answerQuestion}/>)}
+      {state.requests.map(request => <RequestCard key={request.replyId ?? `${state.threadId}:${typeof request.id}:${request.id}`}
+        request={request} busy={action !== null || state.connection !== 'connected'} reply={result => perform('reply', { replyId: request.replyId, result })}/>)}
       </section>}
     </>}/>;
   return <div className="app-shell demo-workspace live-workbench live-prototype-workbench" data-design={designId} data-demo-language={language} data-task-welcome={showTaskWelcome || undefined}>
@@ -406,33 +456,31 @@ export default function AgentWorkspace({ task, tasks, deletedTasks, taskError, t
   </div>;
 }
 
-type QuestionSubmission = { status: 'accepted' | 'rejected' | 'unknown'; error?: string };
-type QuestionDraft = { optionId: string; text: string; delivery: 'idle' | 'sending' | 'awaiting' | 'unknown' };
+type AnswerReceipt = { delivery: MessageDelivery; error?: string };
 const questionDraftKey = (question: AgentQuestion) => `tinylens-question-draft-v1:${encodeURIComponent(question.threadId)}:${encodeURIComponent(question.id)}`;
 
-function readQuestionDraft(question: AgentQuestion): QuestionDraft {
-  try {
-    const value: unknown = JSON.parse(sessionStorage.getItem(questionDraftKey(question)) ?? 'null');
-    if (value && typeof value === 'object') {
-      const stored = value as Record<string, unknown>;
-      return { optionId: typeof stored.optionId === 'string' ? stored.optionId : '', text: typeof stored.text === 'string' ? stored.text : '', delivery: ['sending', 'awaiting', 'unknown'].includes(String(stored.delivery)) ? 'unknown' : 'idle' };
-    }
-  } catch { /* Session storage is optional; keep an editable in-memory draft. */ }
-  return { optionId: '', text: '', delivery: 'idle' };
-}
-
-function QuestionCard({ question, connected, busy, onAnswer }: { question: AgentQuestion; connected: boolean; busy: boolean; onAnswer: (answer: AgentQuestionAnswer) => Promise<QuestionSubmission> }) {
-  const [draft, setDraft] = useState<QuestionDraft>(() => readQuestionDraft(question));
+function QuestionCard({ question, connected, busy, messageReceipts, onAnswer }: { question: AgentQuestion; connected: boolean; busy: boolean;
+  messageReceipts: ReadonlyMap<string, MessageDelivery | undefined>; onAnswer: (answer: QuestionSubmission) => Promise<AnswerReceipt> }) {
+  const storageKey = questionDraftKey(question);
+  const [draft, setDraft] = useState(() => {
+    try { return restoreQuestionDraft(sessionStorage.getItem(storageKey)); }
+    catch { return restoreQuestionDraft(null); }
+  });
   const [localError, setLocalError] = useState('');
   const [storageUnavailable, setStorageUnavailable] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [localReceipt, setLocalReceipt] = useState<{ id: string; delivery: MessageDelivery }>();
   const submitting = useRef(false);
-  const storageKey = questionDraftKey(question);
   const answered = question.status === 'answered';
   const superseded = question.status === 'superseded';
   const archived = answered || superseded;
-  const locked = question.status !== 'pending' || draft.delivery !== 'idle';
+  const delivery = draft.clientMessageId ? messageReceipts.get(draft.clientMessageId) ??
+    (localReceipt?.id === draft.clientMessageId ? localReceipt.delivery : undefined) : undefined;
+  const controls = questionAnswerControls(question.status, draft, delivery);
+  const waiting = sending || question.status === 'sending';
+  const locked = sending || controls.fieldsLocked;
   const selectedOption = question.options.find(option => option.id === draft.optionId);
-  const canSubmit = connected && !busy && !locked && (!!selectedOption || !!draft.text.trim());
+  const canSubmit = connected && !busy && !waiting && controls.maySubmit && (!!selectedOption || !!draft.text.trim());
   const answerOption = question.options.find(option => option.id === question.answer?.optionId);
 
   useEffect(() => {
@@ -443,30 +491,45 @@ function QuestionCard({ question, connected, busy, onAnswer }: { question: Agent
     } catch { setStorageUnavailable(true); }
   }, [draft, archived, storageKey]);
 
+  function editDraft(patch: Partial<Pick<QuestionDraft, 'optionId' | 'text'>>) {
+    setDraft(previous => ({ ...previous, ...patch, clientMessageId: undefined }));
+    setLocalError('');
+  }
+
   async function submit() {
     if (!canSubmit || submitting.current) return;
     submitting.current = true;
-    setLocalError('');
-    setDraft(previous => ({ ...previous, delivery: 'sending' }));
-    const result = await onAnswer({ ...(selectedOption ? { optionId: selectedOption.id } : {}), ...(draft.text.trim() ? { text: draft.text } : {}) });
-    setDraft(previous => ({ ...previous, delivery: result.status === 'accepted' ? 'awaiting' : result.status === 'unknown' ? 'unknown' : 'idle' }));
-    setLocalError(result.error ?? '');
-    if (result.status === 'rejected') submitting.current = false;
+    setSending(true); setLocalError('');
+    try {
+      const clientMessageId = controls.clientMessageId ?? crypto.randomUUID();
+      const nextDraft = { ...draft, clientMessageId };
+      setDraft(nextDraft);
+      // Save the identity before POST so reopening the page can reuse it.
+      try { sessionStorage.setItem(storageKey, JSON.stringify(nextDraft)); }
+      catch { setStorageUnavailable(true); }
+      const result = await onAnswer({ clientMessageId, questionId: question.id, expectedThreadId: question.threadId,
+        ...(selectedOption ? { optionId: selectedOption.id } : {}), ...(draft.text.trim() ? { text: draft.text } : {}) });
+      setLocalReceipt({ id: clientMessageId, delivery: result.delivery });
+      if (result.delivery === 'rejected') setDraft(previous => ({ ...previous, clientMessageId: undefined }));
+      if (result.delivery === 'rejected') setLocalError(result.error ?? '答复未送达。');
+    } catch (error) {
+      setLocalError(error instanceof Error ? error.message : '答复请求未完成。');
+    } finally { submitting.current = false; setSending(false); }
   }
 
-  const deliveryUnknown = question.status === 'delivery_unknown' || draft.delivery === 'unknown';
-  const sending = question.status === 'sending' || draft.delivery === 'sending' || draft.delivery === 'awaiting';
+  const deliveryUnknown = question.status === 'delivery_unknown' || (!!controls.clientMessageId && !waiting && delivery !== 'delivered');
   return <article className={`agent-question-card ${archived ? 'archived' : ''}`} aria-label={question.title}>
-    <div className="agent-question-heading"><span><Sparkles size={14}/>Pipeline AI 的问题{question.stage && <small>{question.stage}</small>}</span><span>{superseded ? '已由新版本替代' : answered ? <><Check size={13}/>已答复</> : deliveryUnknown ? '送达待确认' : sending ? <><LoaderCircle size={13} className="agent-spin"/>正在确认答复</> : '等待你的决定'}</span></div>
+    <div className="agent-question-heading"><span><Sparkles size={14}/>Pipeline AI 的问题{question.stage && <small>{question.stage}</small>}</span><span>{superseded ? '已由新版本替代' : answered || delivery === 'delivered' ? <><Check size={13}/>已答复</> : deliveryUnknown ? '送达待确认' : waiting ? <><LoaderCircle size={13} className="agent-spin"/>正在确认答复</> : '等待你的决定'}</span></div>
     <h2>{question.title}</h2>
     <MessageBody text={question.question}/>
     {question.context && <details className="agent-question-context"><summary>AI 提供的背景<ChevronDown size={13}/></summary><MessageBody text={question.context}/></details>}
     {superseded ? <div className="agent-question-superseded"><p>此问题已由新版本替代，原文保留供回看。它没有被提交为用户答复。</p>{question.options.length > 0 && <details><summary>查看原问题的选项</summary><ul>{question.options.map(option => <li key={option.id}><strong>{option.label}</strong>{option.description && <p>{option.description}</p>}</li>)}</ul></details>}</div> : answered ? <div className="agent-question-answer"><strong><Check size={14}/>你的答复</strong>{question.answer?.optionId && <p>{answerOption?.label ?? question.answer.optionId}</p>}{question.answer?.text && <p>{question.answer.text}</p>}{!question.answer?.optionId && !question.answer?.text && <p>AI 会话已确认收到答复。</p>}</div> : <>
-      {question.options.length > 0 && <fieldset className="agent-question-options" disabled={locked}><legend>请选择，也可以直接填写其他意见</legend>{question.options.map(option => <label key={option.id} className={selectedOption?.id === option.id ? 'selected' : ''}><input type="radio" name={`question-${question.threadId}-${question.id}`} value={option.id} checked={selectedOption?.id === option.id} onChange={() => setDraft(previous => ({ ...previous, optionId: option.id }))}/><span><strong>{option.label}</strong>{option.description && <span>{option.description}</span>}</span></label>)}</fieldset>}
-      <label className="agent-question-free"><span>补充说明或直接填写答复{selectedOption && <button type="button" disabled={locked} onClick={() => setDraft(previous => ({ ...previous, optionId: '' }))}>取消所选项</button>}</span><textarea rows={3} value={draft.text} maxLength={20000} disabled={locked} onChange={event => setDraft(previous => ({ ...previous, text: event.target.value }))} placeholder="写下你的决定或补充意见；填写不会自动发送。"/></label>
+      {question.options.length > 0 && <fieldset className="agent-question-options" disabled={locked}><legend>请选择，也可以直接填写其他意见</legend>{question.options.map(option => <label key={option.id} className={selectedOption?.id === option.id ? 'selected' : ''}><input type="radio" name={`question-${question.threadId}-${question.id}`} value={option.id} checked={selectedOption?.id === option.id} onChange={() => editDraft({ optionId: option.id })}/><span><strong>{option.label}</strong>{option.description && <span>{option.description}</span>}</span></label>)}</fieldset>}
+      <label className="agent-question-free"><span>补充说明或直接填写答复{selectedOption && <button type="button" disabled={locked} onClick={() => editDraft({ optionId: '' })}>取消所选项</button>}</span><textarea rows={3} value={draft.text} maxLength={20000} disabled={locked} onChange={event => editDraft({ text: event.target.value })} placeholder="写下你的决定或补充意见；填写不会自动发送。"/></label>
       {(question.error || localError) && <p className="agent-question-error" role="alert">{question.error || localError}</p>}
-      {deliveryUnknown && <p className="agent-question-delivery" role="status">答复可能已经发送，送达状态尚未确认。暂时禁止重复提交；此问题不会因 AI 回合结束而自动解决。</p>}
-      <div className="agent-question-footer"><span>{!connected ? '连接 Pipeline AI 后可以提交；当前草稿仍会保留。' : storageUnavailable ? '浏览器未允许保存草稿，请暂时保留此页面。' : '选择和草稿保留在本标签页；只有点击提交才会发送。'}</span><button className="agent-button primary" type="button" disabled={!canSubmit} onClick={() => void submit()}>{sending ? <LoaderCircle size={14} className="agent-spin"/> : <Send size={14}/>}提交给 Pipeline AI</button></div>
+      {deliveryUnknown && <p className="agent-question-delivery" role="status">{question.status === 'delivery_unknown'
+        ? '桥接尚未确认答复是否送达。请重连并核对原会话。' : '可以重试原答复。桥接会按原提交标识核对送达。'}</p>}
+      <div className="agent-question-footer"><span>{!connected ? '连接 Pipeline AI 后可以提交；当前草稿仍会保留。' : storageUnavailable ? '浏览器未允许保存草稿，请暂时保留此页面。' : '选择和草稿保留在本标签页；只有点击提交才会发送。'}</span><button className="agent-button primary" type="button" disabled={!canSubmit} onClick={() => void submit()}>{waiting ? <LoaderCircle size={14} className="agent-spin"/> : <Send size={14}/>} {controls.clientMessageId ? '重试原答复' : '提交给 Pipeline AI'}</button></div>
     </>}
   </article>;
 }
@@ -608,7 +671,7 @@ function RequestCard({ request, busy, reply }: { request: AgentRequest; busy: bo
   // authoritative; do not add choices or expose session/policy amendments.
   const approvalDecisions = offeredDecisions == null ? [...oneTimeDecisions]
     : Array.isArray(offeredDecisions) ? oneTimeDecisions.filter(decision => offeredDecisions.includes(decision)) : [];
-  const disabled = busy || submitted;
+  const disabled = busy || submitted || !request.replyId;
   async function respond(result: Record<string, unknown>) {
     if (disabled || responding.current) return;
     responding.current = true;
@@ -616,6 +679,7 @@ function RequestCard({ request, busy, reply }: { request: AgentRequest; busy: bo
     else responding.current = false;
   }
   return <section className="agent-request"><div className="agent-request-heading"><CircleHelp size={17}/><h3>{approval ? 'AI 请求你的批准' : userInput ? 'AI 需要你的判断' : '待支持的 AI 请求'}</h3>{submitted && <span>答复已发送</span>}</div>
+    {!request.replyId && <p className="agent-approval-unavailable">当前桥接服务未提供该请求的唯一标识。请更新桥接服务后重新查看请求。</p>}
     {approval ? <><p>请检查本次操作。批准仅适用于这一次请求。</p><ApprovalSummary request={request}/><div className="agent-request-actions">{approvalDecisions.map(decision => <button key={decision} className={`agent-button ${{ accept: 'primary', decline: 'secondary', cancel: 'quiet' }[decision]}`} disabled={disabled} onClick={() => respond({ decision })}>{{ accept: '批准这一次', decline: '拒绝', cancel: '取消请求' }[decision]}</button>)}</div>{!approvalDecisions.length && <p className="agent-approval-unavailable">当前请求没有可用的单次决定选项；不会自动批准。</p>}</> : userInput && questions.length ? <form onSubmit={event => { event.preventDefault(); const result = Object.fromEntries(questions.map(question => [question.id, { answers: [answers[question.id].trim()] }])); void respond({ answers: result }); }}>{questions.map(question => <fieldset key={question.id}><legend>{question.header && <small>{question.header} · </small>}{question.question}</legend>{question.options.map(option => <label className="agent-answer-option" key={option.label}><input type="radio" name={`${request.id}-${question.id}`} value={option.label} checked={answers[question.id] === option.label} onChange={() => setAnswers(previous => ({ ...previous, [question.id]: option.label }))} disabled={disabled}/><span><strong>{option.label}</strong>{option.description && <small>{option.description}</small>}</span></label>)}<label className="agent-answer-free"><span>你的答复</span><input value={answers[question.id] ?? ''} onChange={event => setAnswers(previous => ({ ...previous, [question.id]: event.target.value }))} disabled={disabled} placeholder="选择上面的选项，或直接填写" required/></label></fieldset>)}<button className="agent-button primary" type="submit" disabled={disabled || questions.some(question => !answers[question.id]?.trim())}>提交答复</button></form> : <><p>前端尚不支持处理这个请求；不会自动批准或代填答复。</p><code>{request.method}</code><details><summary>查看原始请求</summary><pre>{jsonText(request.params)}</pre></details></>}
   </section>;
 }

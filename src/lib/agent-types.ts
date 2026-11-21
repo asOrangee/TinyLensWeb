@@ -1,10 +1,11 @@
 import { parseBatchPlan, type BatchPlan } from './live-batches.ts';
+import { messageDelivery, type MessageDelivery } from './message-delivery.ts';
 
 export type AgentConnection = 'disconnected' | 'connecting' | 'connected' | 'error';
 export type AgentTurnStatus = 'idle' | 'running' | 'waiting' | 'completed' | 'failed' | 'interrupted';
-export type AgentMessage = { id: string; role: 'user' | 'assistant'; text: string; phase?: string; complete?: boolean };
+export type AgentMessage = { id: string; role: 'user' | 'assistant'; text: string; phase?: string; complete?: boolean; delivery?: MessageDelivery };
 export type AgentActivity = { id: string; type: string; title: string; status: string; detail?: string; output?: string };
-export type AgentRequest = { id: string | number; method: string; params: Record<string, unknown>;
+export type AgentRequest = { id: string | number; replyId?: string; method: string; params: Record<string, unknown>;
   scope?: { rootThreadId: string; rootTurnId: string; threadId: string; turnId: string } };
 export type AgentUpdate = { id?: string; at?: string; threadId?: string; turnId?: string; kind: 'stage' | 'artifact' | 'note'; stage?: string; status?: string; title?: string; message?: string; path?: string;
   schema?: string; run_id?: string; run_path?: string; lens_id?: string; attempt?: number | null; display_manifest?: string; verified_attempt?: number; display_source_report_id?: string };
@@ -75,9 +76,12 @@ export function parseAgentState(value: unknown): AgentState {
     datasetPath: optionalText(value.datasetPath) ?? '',
     workspace: optionalText(value.workspace) ?? '',
     batchPlan: parseBatchPlan(value.batchPlan),
-    messages: (value.messages as unknown[]).filter(record).filter(item => typeof item.id === 'string' && ['user', 'assistant'].includes(String(item.role)) && typeof item.text === 'string').map(item => ({ id: item.id as string, role: item.role as 'user' | 'assistant', text: item.text as string, phase: optionalText(item.phase), complete: typeof item.complete === 'boolean' ? item.complete : undefined })),
+    messages: (value.messages as unknown[]).filter(record).filter(item => typeof item.id === 'string' && ['user', 'assistant'].includes(String(item.role)) && typeof item.text === 'string').map(item => ({ id: item.id as string, role: item.role as 'user' | 'assistant', text: item.text as string, phase: optionalText(item.phase), complete: typeof item.complete === 'boolean' ? item.complete : undefined, delivery: messageDelivery(item.delivery) })),
     activities: (value.activities as unknown[]).filter(record).filter(item => ['id', 'type', 'title', 'status'].every(key => typeof item[key] === 'string')).map(item => ({ id: item.id as string, type: item.type as string, title: item.title as string, status: item.status as string, detail: optionalText(item.detail), output: optionalText(item.output) })),
-    requests: (value.requests as unknown[]).filter(record).filter(item => (typeof item.id === 'string' || typeof item.id === 'number') && typeof item.method === 'string' && record(item.params)).map(item => ({ id: item.id as string | number, method: item.method as string, params: item.params as Record<string, unknown>, scope: requestScope(item.scope) })),
+    requests: (value.requests as unknown[]).filter(record).filter(item => (typeof item.id === 'string' || typeof item.id === 'number') && typeof item.method === 'string' && record(item.params)).map(item => ({
+      id: item.id as string | number, replyId: optionalText(item.replyId), method: item.method as string,
+      params: item.params as Record<string, unknown>, scope: requestScope(item.scope),
+    })),
     updates: (value.updates as unknown[]).filter(record).filter(item => ['stage', 'artifact', 'note'].includes(String(item.kind))).map(item => ({
       id: optionalText(item.id), at: optionalText(item.at), threadId: optionalText(item.threadId), turnId: optionalText(item.turnId), kind: item.kind as AgentUpdate['kind'],
       stage: optionalText(item.stage), status: optionalText(item.status), title: optionalText(item.title), message: optionalText(item.message), path: optionalText(item.path),

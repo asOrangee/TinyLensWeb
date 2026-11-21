@@ -15,11 +15,11 @@ from .attempts import (
     validate_retry_review,
     validate_stage_execution,
 )
-from .configuration import validated_run_root
 from .contracts import validate_reviewer_response
 from .models import StageName
 from .modeling.morphology_audit import validate_stage_b_morphology_audit
 from .modeling.predicted_image_family import validate_predicted_image_family
+from .operations import attempt_lock
 from .review_context import unresolved_warnings
 
 
@@ -335,7 +335,13 @@ def adjudicate_attempt(
     response: Path | None,
     failure: str | None = None,
 ) -> Path:
-    output_dir = validated_run_root(output_dir)
+    with attempt_lock(output_dir, stage, attempt) as root:
+        return _adjudicate_locked_attempt(root, stage, attempt, response=response, failure=failure)
+
+
+def _adjudicate_locked_attempt(
+    output_dir: Path, stage: StageName, attempt: int, *, response: Path | None, failure: str | None,
+) -> Path:
     root = attempt_dir(output_dir, stage, attempt)
     if failure is not None:
         if response is not None:

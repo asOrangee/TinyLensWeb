@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { EventEmitter, once } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
 import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
@@ -184,10 +185,58 @@ test('POST answer validates and returns durable question state through the real 
   const post = body => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const invalid = await post({ questionId: 'input-decision' }); assert.equal(invalid.status, 400); await invalid.json();
   assert.equal(processes[0].sent.some(message => message.method === 'turn/start'), false);
-  const response = await post({ questionId: 'input-decision', text: 'Local fixture answer only.' });
+  const submission = { questionId: 'input-decision', expectedThreadId: 'thread-1', clientMessageId: randomUUID(), text: '本地测试答复。' };
+  const response = await post(submission);
   assert.equal(response.status, 200);
   const state = await response.json(); assert.equal(state.questions[0].status, 'answered');
-  assert.equal(state.questions[0].answer.text, 'Local fixture answer only.');
+  assert.equal(state.questions[0].answer.text, submission.text);
+  // The original response can be lost after delivery. The same browser identity only reads its receipt.
+  const retry = await post(submission);
+  assert.equal(retry.status, 200);
+  assert.deepEqual((await retry.json()).messageReceipt, { id: submission.clientMessageId, delivery: 'delivered' });
+  const conflict = await post({ ...submission, text: '不同的答复' });
+  assert.equal(conflict.status, 400); await conflict.json();
+  const wrongThread = await post({ ...submission, expectedThreadId: 'another-thread' });
+  assert.equal(wrongThread.status, 400); await wrongThread.json();
+  assert.equal(processes[0].sent.filter(message => message.method === 'turn/start').length, 1);
+});
+
+test('repeating a pending answer with the same identity never starts another turn', async t => {
+  let held;
+  const { bridge, processes } = await fixture(t, (message, proc) => {
+    if (message.method === 'turn/start') { held = { message, proc }; return true; }
+  });
+  await bridge.connect(); await publishQuestion(bridge, processes[0]);
+  const submission = { questionId: 'input-decision', expectedThreadId: 'thread-1', clientMessageId: randomUUID(), optionId: 'first' };
+  const initial = bridge.answerQuestion(submission);
+  await assert.rejects(bridge.answerQuestion(submission), { messageId: submission.clientMessageId, messageDelivery: 'pending' });
+  await waitFor(() => held);
+  assert.equal(held.message.params.clientUserMessageId, submission.clientMessageId);
+  held.proc.emitMessage({ id: held.message.id, result: { turn: { id: 'answer-turn', status: 'inProgress' } } });
+  assert.equal((await initial).delivery, 'delivered');
+  assert.equal((await bridge.answerQuestion(submission)).delivery, 'delivered');
+  assert.equal(processes[0].sent.filter(message => message.method === 'turn/start').length, 1);
+});
+
+test('an unconfirmed answer stays locked until the original remote message is verified', async t => {
+  let sent;
+  const { bridge, processes } = await fixture(t, (message, proc) => {
+    if (message.method === 'turn/start') { sent = message; return true; }
+    if (message.method === 'thread/resume') {
+      const item = { id: 'remote-item', type: 'userMessage', clientId: sent.params.clientUserMessageId, content: sent.params.input };
+      proc.emitMessage({ id: message.id, result: { thread: { id: 'thread-1', status: { type: 'idle' } },
+        initialTurnsPage: { data: [{ id: 'answer-turn', status: 'completed', items: [item] }] } } });
+      return true;
+    }
+  });
+  await bridge.connect(); await publishQuestion(bridge, processes[0]);
+  const submission = { questionId: 'input-decision', expectedThreadId: 'thread-1', clientMessageId: randomUUID(), text: 'Original reply' };
+  await assert.rejects(bridge.answerQuestion(submission), { messageDelivery: 'unknown' });
+  await assert.rejects(bridge.answerQuestion(submission), { messageDelivery: 'unknown' });
+  await assert.rejects(bridge.answerQuestion({ ...submission, clientMessageId: randomUUID() }), /delivery is unknown/);
+  await bridge.connect();
+  assert.equal(bridge.state.questions[0].status, 'answered');
+  assert.equal((await bridge.answerQuestion(submission)).delivery, 'delivered');
   assert.equal(processes[0].sent.filter(message => message.method === 'turn/start').length, 1);
 });
 

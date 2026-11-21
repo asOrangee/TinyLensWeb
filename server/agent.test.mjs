@@ -215,16 +215,46 @@ test('resume failures preserve established or uncertain thread bindings', async 
 test('server never auto-approves and rejects duplicate/stale replies and unsupported requests', async t => {
   const { bridge, processes } = await fixture(t); await bridge.connect();
   const proc = processes[0]; proc.emitMessage({ method: 'turn/started', params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'inProgress' } } }); proc.emitMessage(approval()); await tick();
+  const reply = { replyId: bridge.state.requests[0].replyId, result: { decision: 'accept' } };
   assert.equal(proc.sent.some(message => message.id === 51), false);
   await assert.rejects(bridge.submitMessage({ text: 'Do more.' }), /pending AI request/);
-  await bridge.reply({ requestId: 51, result: { decision: 'accept' } });
+  await bridge.reply(reply);
   assert.deepEqual(proc.sent.find(message => message.id === 51).result, { decision: 'accept' });
-  await assert.rejects(bridge.reply({ requestId: 51, result: { decision: 'accept' } }), /no longer/);
+  await assert.rejects(bridge.reply(reply), /no longer/);
   proc.emitMessage({ method: 'serverRequest/resolved', params: { threadId: 'thread-1', requestId: 51 } }); await tick(); assert.deepEqual(bridge.state.requests, []);
   proc.emitMessage({ id: 55, method: 'account/login', params: {} }); await tick();
   assert.equal(proc.sent.find(message => message.id === 55).error.code, -32602); assert.equal(bridge.state.status, 'running');
-  proc.emitMessage(approval(56)); await tick(); proc.emitMessage({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed' } } }); await tick();
-  await assert.rejects(bridge.reply({ requestId: 56, result: { decision: 'accept' } }), /no longer/);
+  proc.emitMessage(approval(56)); await tick();
+  const terminalReplyId = bridge.state.requests[0].replyId;
+  proc.emitMessage({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed' } } }); await tick();
+  await assert.rejects(bridge.reply({ ...reply, replyId: terminalReplyId }), /no longer/);
+});
+
+test('a stale approval card cannot reply to a new request reusing a protocol ID after reconnect', async t => {
+  const { bridge, processes } = await fixture(t);
+  await bridge.connect();
+  const old = processes[0];
+  startRoot(old);
+  old.emitMessage(approval());
+  await waitFor(() => bridge.state.requests.length === 1);
+  const staleReply = { replyId: bridge.state.requests[0].replyId, result: { decision: 'accept' } };
+  old.kill();
+  await bridge.connect();
+  const current = processes[1];
+  const newRequest = approval();
+  newRequest.params = { ...newRequest.params, itemId: 'new-command', turnId: 'turn-2' };
+  current.emitMessage({ method: 'turn/started', params: { threadId: 'thread-1', turn: { id: 'turn-2', status: 'inProgress' } } });
+  current.emitMessage(newRequest);
+  await waitFor(() => bridge.state.requests.length === 1);
+  const fresh = bridge.state.requests[0];
+  assert.equal(fresh.id, 51);
+  assert.notEqual(fresh.replyId, staleReply.replyId);
+  await assert.rejects(bridge.reply(staleReply), /no longer/);
+  await assert.rejects(bridge.reply({ requestId: fresh.id, result: staleReply.result }), /no longer/);
+  assert.equal(current.sent.some(packet => packet.id === fresh.id), false);
+  assert.equal(fresh.responded, undefined);
+  await bridge.reply({ replyId: fresh.replyId, result: { decision: 'decline' } });
+  assert.deepEqual(current.sent.find(packet => packet.id === fresh.id), { id: 51, result: { decision: 'decline' } });
 });
 
 test('unknown message delivery is persisted and never automatically resent on reconnect', async t => {
@@ -437,9 +467,12 @@ test('HTTP connect/reply ignore extra configuration instead of forwarding it; me
   assert.equal(proc.sent.some(message => message.method === 'turn/start'), false);
   proc.emitMessage({ method: 'turn/started', params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'inProgress' } } });
   proc.emitMessage(approval()); await tick();
-  const badReply = await post('reply', { requestId: 51, result: { decision: 'accept', config: extra.config } });
+  const state = await (await fetch(base + 'state')).json();
+  const { replyId } = state.requests[0];
+  assert.equal(typeof replyId, 'string');
+  const badReply = await post('reply', { replyId, result: { decision: 'accept', config: extra.config } });
   assert.equal(badReply.status, 400); await badReply.json(); assert.equal(proc.sent.some(message => message.id === 51), false);
-  const reply = await post('reply', { requestId: 51, result: { decision: 'decline' }, ...extra });
+  const reply = await post('reply', { replyId, result: { decision: 'decline' }, ...extra });
   assert.equal(reply.status, 200); await reply.json();
   assert.deepEqual(proc.sent.find(message => message.id === 51), { id: 51, result: { decision: 'decline' } });
   assert.equal(proc.sent.some(message => /^(config\/|thread\/settings\/|turn\/settings\/)/.test(message.method || '')), false);
@@ -479,12 +512,13 @@ test('verified direct and nested child approvals reach UI and require one-time e
     proc.emitMessage({ method: 'serverRequest/resolved', params: { threadId: 'unrelated', requestId: 201 } }); await tick();
     assert.equal(bridge.state.requests.length, 1);
     const readsBefore = proc.sent.filter(message => message.method === 'thread/read').length;
-    await bridge.reply({ requestId: 201, result: { decision: 'accept' } });
+    const reply = { replyId: bridge.state.requests[0].replyId, result: { decision: 'accept' } };
+    await bridge.reply(reply);
     assert.equal(proc.sent.filter(message => message.method === 'thread/read').length, readsBefore * 2);
     assert.equal(proc.sent.filter(message => message.method === 'thread/turns/list').length, 2);
     assert.deepEqual(proc.sent.find(message => message.id === 201), { id: 201, result: { decision: 'accept' } });
     assert.equal(proc.sent.some(message => /^(config\/|thread\/settings\/|turn\/settings\/)/.test(message.method || '')), false);
-    await assert.rejects(bridge.reply({ requestId: 201, result: { decision: 'accept' } }), /no longer/);
+    await assert.rejects(bridge.reply(reply), /no longer/);
     proc.emitMessage({ method: 'serverRequest/resolved', params: { threadId: 'unrelated', requestId: 201 } }); await tick();
     assert.equal(bridge.state.requests.length, 1);
     proc.emitMessage({ method: 'serverRequest/resolved', params: { threadId: 'child-1', requestId: 201 } }); await tick();
@@ -527,7 +561,9 @@ test('child reply freshly rejects changed ancestry or changed active turn withou
     await waitFor(() => bridge.state.requests.length === 1);
     if (mutation === 'ancestry') protocol.metadata.get('child-1').parentThreadId = 'other-root';
     else protocol.turns.set('child-1', { id: 'new-child-turn', status: 'inProgress' });
-    await assert.rejects(bridge.reply({ requestId: 201, result: { decision: 'accept' } }));
+    await assert.rejects(bridge.reply({ replyId: bridge.state.requests[0].replyId, result: { decision: 'accept' } }), {
+      routingCode: mutation === 'ancestry' ? 'unrelated_thread' : 'inactive_child_turn',
+    });
     assert.equal(proc.sent.some(message => message.id === 201), false);
     assert.equal(bridge.state.requests[0].responded, undefined);
   }
@@ -544,8 +580,9 @@ test('child and root lifecycle events remove only their pending approval scopes'
     await waitFor(() => bridge.state.requests.length === 1);
     proc.emitMessage({ method: 'turn/completed', params: { threadId: 'child-1', turn: { id: 'another-turn', status: 'completed' } } }); await tick();
     assert.equal(bridge.state.requests.length, 1);
+    const reply = { replyId: bridge.state.requests[0].replyId, result: { decision: 'accept' } };
     proc.emitMessage(terminalEvent); await tick(); assert.deepEqual(bridge.state.requests, []);
-    await assert.rejects(bridge.reply({ requestId: 201, result: { decision: 'accept' } }), /no longer/);
+    await assert.rejects(bridge.reply(reply), /no longer/);
     assert.equal(proc.sent.some(message => message.id === 201), false);
     if (terminalEvent.params.threadId !== 'thread-1') { assert.equal(bridge.state.turnId, 'turn-1'); assert.equal(bridge.state.status, 'running'); }
   }
@@ -577,9 +614,10 @@ test('concurrent child reply attempts verify once and send only one decision', a
   const { bridge, processes } = await fixture(t, protocol.handler);
   await bridge.connect(); const proc = processes[0]; startRoot(proc); proc.emitMessage(childApproval());
   await waitFor(() => bridge.state.requests.length === 1); holdReads = true;
-  const first = bridge.reply({ requestId: 201, result: { decision: 'accept' } });
+  const reply = { replyId: bridge.state.requests[0].replyId, result: { decision: 'accept' } };
+  const first = bridge.reply(reply);
   await waitFor(() => held);
-  await assert.rejects(bridge.reply({ requestId: 201, result: { decision: 'accept' } }), /no longer/);
+  await assert.rejects(bridge.reply(reply), /no longer/);
   holdReads = false;
   held.proc.emitMessage({ id: held.message.id, result: { thread: protocol.metadata.get('child-1') } });
   await first;
@@ -590,6 +628,9 @@ test('concurrent child reply attempts verify once and send only one decision', a
 test('one request id cannot replace the command that was displayed for approval', () => {
   const state = live(); const original = approval(); original.params.command = 'command-that-was-reviewed';
   receiveRequest(state, original);
+  const displayed = state.requests[0];
+  receiveRequest(state, structuredClone(original));
+  assert.deepEqual(state.requests, [displayed]);
   const replacement = structuredClone(original); replacement.params.command = 'different-command';
   assert.throws(() => receiveRequest(state, replacement), /Conflicting/);
   assert.equal(state.requests[0].params.command, 'command-that-was-reviewed');

@@ -91,12 +91,17 @@ export function restoreQuestions(saved, messages = []) {
   return questions;
 }
 export function prepareQuestionAnswer(state, data) {
-  if (!record(data) || !onlyKeys(data, ['questionId', 'optionId', 'text']) || !text(data.questionId, 200)) throw new Error('Invalid question answer');
+  if (!record(data) || !onlyKeys(data, ['questionId', 'optionId', 'text', 'clientMessageId', 'expectedThreadId'])
+      || !text(data.questionId, 200)) throw new Error('Invalid question answer');
   const question = state.questions.find(item => item.id === data.questionId);
-  if (!question || question.threadId !== state.threadId) throw new Error('Question does not belong to the connected thread');
+  if (!question || question.threadId !== state.threadId
+      || (data.expectedThreadId !== undefined && question.threadId !== data.expectedThreadId)) throw new Error('Question does not belong to the connected thread');
   if (question.status === 'superseded') throw new Error('This question was superseded; answer its replacement in the webpage');
-  if (question.status === 'delivery_unknown') throw new Error('Answer delivery is unknown; automatic or repeated submission is disabled');
-  if (question.status !== 'pending') throw new Error('This question is already answered or being submitted');
+  const previous = data.clientMessageId && state.messages.find(message => message.role === 'user' && message.id === data.clientMessageId);
+  if (!previous) {
+    if (question.status === 'delivery_unknown') throw new Error('Answer delivery is unknown; automatic or repeated submission is disabled');
+    if (question.status !== 'pending') throw new Error('This question is already answered or being submitted');
+  }
   if (own(data, 'optionId') && !text(data.optionId, 200)) throw new Error('Invalid answer option');
   if (own(data, 'text') && (typeof data.text !== 'string' || data.text.length > 20000)) throw new Error('Answer text must contain at most 20000 characters');
   const option = data.optionId === undefined ? undefined : question.options.find(item => item.id === data.optionId);
@@ -110,5 +115,8 @@ export function prepareQuestionAnswer(state, data) {
     ...(option ? { selectedOption: option } : {}), ...(hasText ? { userText: data.text } : {}) };
   const message = `[User answer submitted in the TinyLens webpage to the pipeline AI's question]\n${JSON.stringify(payload, null, 2)}`;
   if (message.length > 30000) throw new Error('The answer and its question context are too long; shorten the answer');
-  return { question, answer, message };
+  if (previous && (previous.questionId !== question.id || previous.threadId !== question.threadId || previous.text !== message)) {
+    throw Error('该答复标识已用于另一条提交。');
+  }
+  return { question, answer, message, previous };
 }

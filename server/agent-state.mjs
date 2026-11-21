@@ -17,6 +17,22 @@ export function activeRetryError(state) {
 function clearRetryOnResponse(state, turnId, text) {
   if (turnId === state.turnId && typeof text === 'string' && text.trim()) retryErrors.delete(state);
 }
+function confirmUserMessage(state, item, turnId) {
+  if (typeof item.clientId !== 'string') return false;
+  const message = state.messages.find(entry => entry.id === item.clientId && entry.role === 'user'
+    && (entry.threadId === undefined || entry.threadId === state.threadId)
+    && (entry.expectedTurnId == null || entry.expectedTurnId === turnId));
+  if (!message || !['pending', 'unknown'].includes(message.delivery)) return false;
+  message.delivery = 'delivered';
+  const question = message.questionId && state.questions.find(entry => entry.threadId === state.threadId
+    && entry.id === message.questionId && entry.answerMessageId === message.id);
+  if (question && ['sending', 'delivery_unknown'].includes(question.status)) {
+    question.status = 'answered';
+    question.answeredAt ||= new Date().toISOString();
+    delete question.error;
+  }
+  return true;
+}
 export function initialState(saved = {}) {
   if (!record(saved)) saved = {};
   const messages = list(saved.messages).filter(record);
@@ -92,7 +108,9 @@ export function receiveNotification(state, method, params = {}) {
     message.text += params.delta;
     clearRetryOnResponse(state, params.turnId, params.delta);
   } else if ((method === 'item/started' || method === 'item/completed') && record(item) && typeof item.id === 'string') {
-    if (item.type === 'agentMessage') {
+    if (item.type === 'userMessage') {
+      return confirmUserMessage(state, item, params.turnId);
+    } else if (item.type === 'agentMessage') {
       let message = state.messages.find(m => m.id === item.id);
       if (!message) { message = { id: item.id, role: 'assistant', text: '' }; state.messages.push(message); }
       if (message.complete && method === 'item/started') return false;
@@ -145,6 +163,7 @@ export function restoreThread(state, thread, turns = thread?.turns || []) {
   const orderedTurns = Array.isArray(turns) ? turns : [];
   for (const turn of orderedTurns) {
     for (const item of turn.items || []) {
+      if (item.type === 'userMessage') { confirmUserMessage(state, item, turn.id); continue; }
       if (item.type !== 'agentMessage') continue;
       receiveNotification(state, turn.status === 'inProgress' ? 'item/started' : 'item/completed', { threadId: state.threadId, turnId: turn.id, item });
     }
@@ -234,7 +253,8 @@ export function receiveRequest(state, message, verifiedScope) {
   if (existing && (existing.method !== message.method || existing.params.threadId !== message.params.threadId
     || existing.params.turnId !== message.params.turnId || existing.params.itemId !== message.params.itemId
     || JSON.stringify(existing.params) !== JSON.stringify(message.params))) throw new Error('Conflicting server request identity');
-  if (!existing) state.requests.push({ id: message.id, method: message.method, params: message.params,
+  // Protocol request IDs can be reused after the app-server reconnects.
+  if (!existing) state.requests.push({ id: message.id, replyId: randomUUID(), method: message.method, params: message.params,
     ...(verifiedScope ? { scope: verifiedScope } : {}) });
   refreshStatus(state);
 }

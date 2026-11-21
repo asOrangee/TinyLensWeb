@@ -3,10 +3,13 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import select
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+import pytest
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -18,7 +21,10 @@ def _make_fake_nvidia_smi(path: Path, output: str) -> None:
     path.write_text(
         f"#!{sys.executable}\n"
         "import os\n"
+        "import signal\n"
         "from pathlib import Path\n"
+        "if os.environ.get('FAKE_NVIDIA_IGNORE_TERM'):\n"
+        "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
         "record = os.environ.get('FAKE_NVIDIA_RECORD')\n"
         "if record:\n"
         "    Path(record).write_text('called\\n', encoding='utf-8')\n"
@@ -54,6 +60,13 @@ def _make_fake_python(path: Path) -> None:
         "    'preallocate': os.environ.get('XLA_PYTHON_CLIENT_PREALLOCATE'),\n"
         "}) + '\\n', encoding='utf-8')\n"
         "import time\n"
+        "release = os.environ.get('FAKE_STAGE_RELEASE')\n"
+        "if release:\n"
+        "    deadline = time.monotonic() + 6\n"
+        "    while not Path(release).exists():\n"
+        "        if time.monotonic() >= deadline:\n"
+        "            raise SystemExit('mock stage was not released')\n"
+        "        time.sleep(0.02)\n"
         "time.sleep(float(os.environ.get('FAKE_STAGE_SLEEP', '0')))\n"
         "raise SystemExit(int(os.environ.get('FAKE_STAGE_STATUS', '0')))\n",
         encoding="utf-8",
@@ -70,6 +83,7 @@ def _runner_environment(
 ) -> dict[str, str]:
     environment = os.environ.copy()
     environment.pop("CUDA_VISIBLE_DEVICES", None)
+    environment.pop("GPU_QUERY_TIMEOUT_SECONDS", None)
     environment.pop("XLA_PYTHON_CLIENT_PREALLOCATE", None)
     environment.update(
         GPU_LOCK_ROOT=str(tmp_path / "locks"),
@@ -239,6 +253,7 @@ def test_respects_an_existing_single_gpu_assignment_without_querying(
         "cuda_visible_devices"
     ] == "4"
     assert not nvidia_record.exists()
+    assert (tmp_path / "locks" / "gpu-4.lock").is_file()
 
 
 def test_rejects_an_existing_multi_gpu_assignment(tmp_path: Path) -> None:
@@ -460,47 +475,68 @@ def test_waiting_for_the_allocation_lock_stops_on_termination(tmp_path: Path) ->
     assert not (tmp_path / "stage.json").exists()
 
 
-def test_one_gpu_lease_serializes_two_stage_processes(tmp_path: Path) -> None:
+@pytest.mark.parametrize("first_pin, second_pin", [(_UNSET, _UNSET), ("00", "0"), ("0", _UNSET)])
+def test_one_gpu_lease_serializes_two_stage_processes(
+    tmp_path: Path, first_pin: str | object, second_pin: str | object,
+) -> None:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     _make_fake_nvidia_smi(bin_dir / "nvidia-smi", "0, NVIDIA A, 0, 0\n")
     fake_python = tmp_path / "fake-python"
     _make_fake_python(fake_python)
-    base_environment = _runner_environment(
-        tmp_path,
-        bin_dir=bin_dir,
-        GPU_POLL_INTERVAL_SECONDS="1",
-    )
     first_record = tmp_path / "first.json"
-    first_environment = base_environment | {
-        "FAKE_STAGE_RECORD": str(first_record),
-        "FAKE_STAGE_SLEEP": "0.8",
-    }
+    release = tmp_path / "release-first-stage"
+    first_environment = _runner_environment(
+        tmp_path, bin_dir=bin_dir, cuda_visible_devices=first_pin,
+        GPU_POLL_INTERVAL_SECONDS="1", FAKE_STAGE_RECORD=str(first_record), FAKE_STAGE_RELEASE=str(release),
+    )
     second_record = tmp_path / "second.json"
-    second_environment = base_environment | {"FAKE_STAGE_RECORD": str(second_record)}
+    second_environment = _runner_environment(
+        tmp_path, bin_dir=bin_dir, cuda_visible_devices=second_pin,
+        GPU_POLL_INTERVAL_SECONDS="1", FAKE_STAGE_RECORD=str(second_record),
+    )
     command = _stage_command(fake_python, "m1")
 
-    first = subprocess.Popen(
-        command,
-        env=first_environment,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    _wait_for_path(first_record)
-    second = subprocess.Popen(
-        command,
-        env=second_environment,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    time.sleep(0.2)
-    assert not second_record.exists()
+    with subprocess.Popen(command, env=first_environment) as first:
+        _wait_for_path(first_record)
+        with subprocess.Popen(command, env=second_environment, text=True, stderr=subprocess.PIPE) as second:
+            try:
+                assert second.stderr is not None
+                assert select.select([second.stderr], [], [], 2)[0]
+                assert "No idle unlocked GPU" in second.stderr.readline()
+                assert not second_record.exists()
+            finally:
+                release.touch()
+            assert first.wait(timeout=3) == 0
+            assert second.wait(timeout=4) == 0
+    assert json.loads(first_record.read_text())["cuda_visible_devices"] == "0"
+    assert json.loads(second_record.read_text())["cuda_visible_devices"] == "0"
 
-    assert first.wait(timeout=3) == 0
-    assert second.wait(timeout=4) == 0
-    assert second_record.exists()
+
+def test_a_hung_gpu_query_times_out_and_allows_the_next_stage_to_allocate(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    query_started = tmp_path / "query-started"
+    _make_fake_nvidia_smi(bin_dir / "nvidia-smi", "0, NVIDIA A, 0, 0\n")
+    fake_python = tmp_path / "fake-python"
+    _make_fake_python(fake_python)
+    environment = _runner_environment(tmp_path, bin_dir=bin_dir)
+    command = _stage_command(fake_python, "m2")
+    with subprocess.Popen(
+        command,
+        env=environment | {"GPU_QUERY_TIMEOUT_SECONDS": "1", "FAKE_NVIDIA_RECORD": str(query_started),
+                           "FAKE_NVIDIA_SLEEP": "30", "FAKE_NVIDIA_IGNORE_TERM": "1"},
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    ) as first:
+        _wait_for_path(query_started)
+        succeeded = subprocess.run(command, env=environment | {"FAKE_STAGE_RECORD": str(tmp_path / "second-stage.json")},
+                                   text=True, capture_output=True, check=False, timeout=4)
+        _, errors = first.communicate(timeout=2)
+        assert first.returncode == 2
+    assert "nvidia-smi timed out after 1 seconds" in errors
+    assert not (tmp_path / "stage.json").exists()
+    assert succeeded.returncode == 0, succeeded.stderr
+    assert (tmp_path / "second-stage.json").is_file()
 
 
 def test_stage_exit_status_is_propagated_and_the_lock_is_reusable(
@@ -570,7 +606,9 @@ def test_termination_during_gpu_query_never_starts_the_stage(tmp_path: Path) -> 
         tmp_path,
         bin_dir=bin_dir,
         FAKE_NVIDIA_RECORD=str(query_started),
-        FAKE_NVIDIA_SLEEP="0.5",
+        FAKE_NVIDIA_SLEEP="30",
+        FAKE_NVIDIA_IGNORE_TERM="1",
+        GPU_QUERY_TIMEOUT_SECONDS="30",
     )
     process = subprocess.Popen(
         _stage_command(fake_python, "m2"),
@@ -582,6 +620,12 @@ def test_termination_during_gpu_query_never_starts_the_stage(tmp_path: Path) -> 
 
     assert process.wait(timeout=2) == 130
     assert not (tmp_path / "stage.json").exists()
+    next_stage = subprocess.run(
+        _stage_command(fake_python, "m2"), env=_runner_environment(tmp_path, bin_dir=bin_dir),
+        text=True, capture_output=True, check=False, timeout=2,
+    )
+    assert next_stage.returncode == 0, next_stage.stderr
+    assert (tmp_path / "stage.json").is_file()
 
 
 def test_two_idle_gpus_allow_two_distinct_stage_leases(tmp_path: Path) -> None:

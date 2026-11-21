@@ -21,9 +21,12 @@ import { connectionConfig, appServerCommand } from './connection-config.mjs';
 import { isModelingCommentReport, readStageScope, stageReportSchema } from './stage-reports.mjs';
 import { dispatchBatchTool, prepareBatchTool, validBatchId } from './agent-batches.mjs';
 const defaultDirectory = fileURLToPath(new URL('../.local/', import.meta.url));
+const validClientMessageId = value => typeof value === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(value);
+const scopeId = value => typeof value === 'string' && value.length > 0 && value.length <= 200;
 function unusedThread(state) {
   return state.status === 'idle' && !state.turnId && !state.lastTurnId && !state.remoteActive && !state.needsReconcile
-    && [state.messages, state.updates, state.activities, state.questions, state.requests, state.finishedTurnIds].every(items => items.length === 0);
+    && state.messages.every(message => message.role === 'user' && message.delivery === 'rejected')
+    && [state.updates, state.activities, state.questions, state.requests, state.finishedTurnIds].every(items => items.length === 0);
 }
 
 async function allocatedProxyPort(stderr, localPort, timeoutMs) {
@@ -58,6 +61,7 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
   }
   if (batchRunPath && saved !== undefined && !Array.isArray(saved?.messages)) throw Error('批次任务的消息记录无效。');
   const state = initialState(saved), clients = new Set(), pending = new Map();
+  if (batchRunPath && saved?.idleReleased === true) state.idleReleased = true;
   if (batchToolAccess && saved?.batchDraft?.threadId === state.threadId) state.batchDraft = saved.batchDraft;
   const displayPublications = await readDisplayPublications(stateDirectory, logger);
   function publicState() {
@@ -76,6 +80,7 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
     approvalsReviewer,
   };
   let transport, sequence = 0, connecting, changing = false, publishTimer, saveTimer, closed = false;
+  let interactiveUntil = 0;
   let saveChain = Promise.resolve();
   let reportChain = Promise.resolve();
   let pendingMessageRpc;
@@ -301,19 +306,21 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
     const current = { proc, networkProxy, initialized: false, bootstrapping: true, buffer: [], closedTurns: new Set(), resolvedRequests: new Set(), inactiveThreadEpochs: new Map() };
     transport = current;
     const lines = createInterface({ input: proc.stdout });
+    current.lines = lines;
     lines.on('line', line => {
       if (transport !== current) return;
       let message;
       try { message = JSON.parse(line); } catch { state.error = 'AI returned invalid protocol JSON'; publish(); return; }
       void onProtocol(message, current).catch(error => { if (transport === current) { state.error = `AI protocol: ${error.message}`; publish(); } });
     });
-    const lost = error => {
+    const lost = (error, terminate = false) => {
       if (transport !== current) return;
       transport = null; current.buffer = []; lines.close();
-      void networkProxy?.close();
+      if (terminate) proc.kill();
+      void networkProxy?.close().catch(failure => logger.error('Could not close the AI proxy:', failure.message));
       disconnected(state, error); rejectPending(error); publish();
     };
-    proc.stdin.on('error', error => lost(`AI input connection failed: ${error.message}`));
+    proc.stdin.on('error', error => lost(`AI input connection failed: ${error.message}`, true));
     proc.on('error', error => lost(error.message));
     proc.on('exit', code => lost(`AI connection closed (${code ?? 'signal'}). Reconnect to inspect the persisted conversation.`));
     try {
@@ -341,6 +348,7 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
     connecting = (async () => {
       const previousThreadId = state.threadId;
       const wasUnused = unusedThread(state);
+      delete state.idleReleased;
       state.connection = 'connecting'; state.error = null; state.requests = []; publish();
       // After a request timeout, inspect the same live transport instead of replaying the task.
       let current;
@@ -376,42 +384,64 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
         if (target !== state) Object.assign(state, target);
         current.bootstrapping = false;
         for (const message of current.buffer.splice(0)) await onProtocol(message, current);
+        if (transport !== current) throw Error('AI connection changed during initialization');
         state.connection = 'connected'; publish(); await persist();
       } catch (error) {
         if (current) { current.bootstrapping = false; current.buffer = []; }
         state.connection = 'error'; state.error = error.message; publish();
-        if (current && !current.initialized && transport === current) { transport = null; current.proc.kill(); await current.networkProxy?.close(); rejectPending(error.message); }
+        if (current && transport === current && (!current.initialized || error.deliveryUnknown)) {
+          transport = null; current.lines.close(); current.proc.kill(); rejectPending(error.message);
+          await current.networkProxy?.close().catch(failure => logger.error('Could not close the AI proxy:', failure.message));
+        }
         throw error;
       }
     })().finally(() => { connecting = null; });
     return connecting;
   }
+  function existingDelivery(message) {
+    if (message.delivery === 'delivered') return message;
+    throw Object.assign(Error(message.deliveryError || '原消息仍在等待送达确认。请核对原会话。'), {
+      messageId: message.id, messageDelivery: message.delivery, statusCode: message.delivery === 'rejected' ? 400 : 409,
+    });
+  }
   async function submitMessage(data, { question } = {}) {
     if (closed) throw new Error('AI bridge is closed');
-    if (state.connection !== 'connected' || state.needsReconcile) throw new Error('Connect to the pipeline AI first');
-    if (changing) throw new Error('Another message is being submitted');
-    if (hasBlockingRequest(state)) throw new Error('Answer the pending AI request first');
-    if (state.remoteActive && !state.turnId) throw new Error('The existing AI turn is still active; its turn id has not been recovered');
-    const messageFields = ['text', 'stage', 'expectedTurnId', ...(batchToolAccess ? ['seenBatchPlanId'] : [])];
+    const messageFields = ['text', 'stage', 'clientMessageId', 'expectedThreadId', 'expectedTurnId', ...(batchToolAccess ? ['seenBatchPlanId'] : [])];
     if (!data || typeof data !== 'object' || Array.isArray(data) || Object.keys(data).some(key => !messageFields.includes(key))) throw new Error('Messages only accept text and supported scope metadata');
     if (typeof data?.text !== 'string' || !data.text.trim() || data.text.length > 30000) throw new Error('Message must contain 1–30000 characters');
     if (data.seenBatchPlanId !== undefined && !validBatchId(data.seenBatchPlanId)) throw Error('Invalid visible batch plan');
     // Validate legacy metadata without inserting it into the user's message.
     if (data.stage !== undefined) normalizeStage(data.stage);
-    const { expectedTurnId, text } = data;
-    const threadId = state.threadId;
-    function verifySteeringTurn() {
-      if (expectedTurnId === undefined) return;
-      if (typeof expectedTurnId !== 'string' || !expectedTurnId || state.turnId !== expectedTurnId || state.threadId !== threadId
-          || state.connection !== 'connected' || state.needsReconcile) {
-        throw new Error('当前 AI 回合已结束、切换或断开。引导消息未发送。');
+    const { clientMessageId, expectedThreadId, expectedTurnId, text } = data;
+    if ((expectedThreadId !== undefined && !scopeId(expectedThreadId))
+        || (expectedTurnId != null && !scopeId(expectedTurnId))
+        || (clientMessageId !== undefined && (!validClientMessageId(clientMessageId) || !expectedThreadId || expectedTurnId === undefined))) {
+      throw Error('Invalid message submission scope');
+    }
+    if (clientMessageId) {
+      const previous = state.messages.find(message => message.role === 'user' && message.id === clientMessageId);
+      if (previous) {
+        if (previous.text !== text || previous.threadId !== expectedThreadId || previous.expectedTurnId !== expectedTurnId
+            || previous.seenBatchPlanId !== data.seenBatchPlanId || previous.questionId !== question?.id) throw Error('该消息标识已用于另一条提交。');
+        return existingDelivery(previous);
+      }
+    }
+    if (changing) throw new Error('Another message is being submitted');
+    const threadId = expectedThreadId ?? state.threadId;
+    const turnId = expectedTurnId === undefined ? state.turnId : expectedTurnId;
+    const current = transport;
+    function verifySubmissionScope() {
+      if (state.connection !== 'connected' || state.needsReconcile || current !== transport) throw Error('Connect to the pipeline AI first');
+      if (!threadId || state.threadId !== threadId || state.turnId !== turnId || (!turnId && state.remoteActive)) {
+        throw Error(turnId ? '当前 AI 回合已结束、切换或断开。引导消息未发送。' : '会话已切换或已有回合在运行。新消息未发送。');
       }
       if (hasBlockingRequest(state)) throw new Error('Answer the pending AI request first');
     }
-    verifySteeringTurn();
+    verifySubmissionScope();
     changing = true;
     const input = [{ type: 'text', text }];
-    const userMessage = { id: randomUUID(), role: 'user', text, delivery: 'pending', at: new Date().toISOString() };
+    const userMessage = { id: clientMessageId ?? randomUUID(), role: 'user', text, threadId, expectedTurnId: turnId,
+      delivery: 'pending', at: new Date().toISOString() };
     // Bind confirmation to the rendered plan without changing the AI's input.
     if (data.seenBatchPlanId) userMessage.seenBatchPlanId = data.seenBatchPlanId;
     if (question) { userMessage.questionId = question.id; question.answerMessageId = userMessage.id; }
@@ -420,12 +450,11 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
       state.messages.push(userMessage); publish();
       // Wait for the durable journal before dispatch; never automatically resend an unknown delivery.
       await persist();
-      verifySteeringTurn();
+      verifySubmissionScope();
       sent = true;
-      const turnId = expectedTurnId ?? state.turnId;
       pendingMessageRpc = turnId
-        ? rpc('turn/steer', { threadId: state.threadId, expectedTurnId: turnId, input, clientUserMessageId: userMessage.id })
-        : rpc('turn/start', { threadId: state.threadId, input, clientUserMessageId: userMessage.id, ...turnSettings });
+        ? rpc('turn/steer', { threadId, expectedTurnId: turnId, input, clientUserMessageId: userMessage.id })
+        : rpc('turn/start', { threadId, input, clientUserMessageId: userMessage.id, ...turnSettings });
       const result = await pendingMessageRpc;
       userMessage.delivery = 'delivered';
       state.error = null;
@@ -434,7 +463,8 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
       return userMessage;
     } catch (error) {
       if (userMessage.delivery !== 'delivered') userMessage.delivery = sent && error.deliveryUnknown ? 'unknown' : 'rejected';
-      if (userMessage.delivery === 'unknown') { state.needsReconcile = true; state.connection = 'error'; }
+      if (sent && error.deliveryUnknown) { state.needsReconcile = true; state.connection = 'error'; }
+      if (userMessage.delivery === 'rejected') userMessage.deliveryError = error.message;
       state.error = error.message; publish();
       await persist().catch(persistError => logger.error('Could not persist message delivery:', persistError.message));
       error.messageId = userMessage.id; error.messageDelivery = userMessage.delivery;
@@ -442,16 +472,21 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
     } finally { pendingMessageRpc = undefined; changing = false; }
   }
   async function answerQuestion(data) {
-    const { question, answer, message } = prepareQuestionAnswer(state, data);
+    const { question, answer, message, previous } = prepareQuestionAnswer(state, data);
+    if (previous) return existingDelivery(previous);
     // Lock synchronously before the first await so concurrent clicks cannot dispatch twice.
     question.status = 'sending'; question.answer = answer; question.answerStartedAt = new Date().toISOString();
     delete question.error; delete question.answerMessageId;
     publish();
+    let receipt;
     try {
-      const receipt = await submitMessage({ text: message }, { question });
+      receipt = await submitMessage({ text: message, ...(data.clientMessageId && { clientMessageId: data.clientMessageId,
+        expectedThreadId: question.threadId, expectedTurnId: state.turnId }) }, { question });
       question.status = 'answered'; question.answerMessageId = receipt.id; question.answeredAt = new Date().toISOString();
       publish(); await persist();
+      return receipt;
     } catch (error) {
+      if (receipt) { error.messageId = receipt.id; error.messageDelivery = receipt.delivery; }
       if (error.messageDelivery === 'delivered' || question.status === 'answered') {
         question.status = 'answered'; question.answeredAt ||= new Date().toISOString();
       } else question.status = error.messageDelivery === 'unknown' || error.deliveryUnknown ? 'delivery_unknown' : 'pending';
@@ -460,13 +495,14 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
       throw error;
     }
   }
-  async function interrupt() {
-    if (state.connection !== 'connected' || !state.turnId) throw new Error('No connected active AI turn');
-    await rpc('turn/interrupt', { threadId: state.threadId, turnId: state.turnId });
+  async function interrupt({ expectedThreadId, expectedTurnId }) {
+    if (!scopeId(expectedThreadId) || !scopeId(expectedTurnId) || state.connection !== 'connected' || state.needsReconcile
+        || state.threadId !== expectedThreadId || state.turnId !== expectedTurnId) throw Error('当前 AI 回合已结束、切换或断开。停止请求未发送。');
+    await rpc('turn/interrupt', { threadId: expectedThreadId, turnId: expectedTurnId });
   }
   async function reply(data) {
     if (state.connection !== 'connected') throw new Error('AI connection is unavailable');
-    const request = state.requests.find(item => item.id === data?.requestId);
+    const request = typeof data?.replyId === 'string' && state.requests.find(item => item.replyId === data.replyId);
     if (!request || request.responded || request.replying) throw new Error('This AI request is no longer awaiting a reply');
     validateRequestScope(state, request.params, request.scope);
     const result = validateReply(request, data.result);
@@ -488,6 +524,7 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
   function json(response, code, data) { response.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); response.end(JSON.stringify(data)); }
   async function body(request) {
     if (!request.headers['content-type']?.startsWith('application/json')) throw new Error('Expected application/json');
+    request.setEncoding('utf8');
     let value = ''; for await (const chunk of request) { value += chunk; if (value.length > 200000) throw new Error('Request is too large'); }
     const data = JSON.parse(value || '{}');
     if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Expected a JSON object');
@@ -532,31 +569,56 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
       response.on('close', () => { clients.delete(response); clearInterval(heartbeat); }); return;
     }
     if (request.method !== 'POST') return json(response, 404, { error: 'Not found' });
+    let messageId;
     try {
       const data = await body(request);
-      if (path === '/api/agent/connect') await connect();
-      else if (path === '/api/agent/message') await submitMessage(data);
-      else if (path === '/api/agent/answer') await answerQuestion(data);
-      else if (path === '/api/agent/interrupt') await interrupt();
+      if (path === '/api/agent/connect') {
+        // A direct client can reconnect and submit even before it subscribes to events.
+        interactiveUntil = Date.now() + 60_000;
+        await connect();
+        interactiveUntil = Date.now() + 60_000;
+      }
+      else if (path === '/api/agent/message' || path === '/api/agent/answer') {
+        const answering = path === '/api/agent/answer';
+        if (!validClientMessageId(data.clientMessageId) || !scopeId(data.expectedThreadId)
+            || (!answering && data.expectedTurnId !== null && !scopeId(data.expectedTurnId))) throw Error('消息缺少有效的请求标识或会话范围。');
+        messageId = data.clientMessageId;
+        const receipt = answering ? await answerQuestion(data) : await submitMessage(data);
+        return json(response, 200, { ...publicState(), messageReceipt: { id: receipt.id, delivery: receipt.delivery } });
+      } else if (path === '/api/agent/interrupt') await interrupt(data);
       else if (path === '/api/agent/reply') await reply(data);
       else return json(response, 404, { error: 'Not found' });
       json(response, 200, publicState());
-    } catch (error) { json(response, 400, { error: error.message }); }
+    } catch (error) {
+      json(response, error.statusCode ?? 400, { error: error.message, ...(messageId && { messageReceipt: {
+        id: messageId, delivery: error.messageId === messageId ? error.messageDelivery : 'rejected',
+      } }) });
+    }
   }
   const server = http.createServer((request, response) => {
     if (!localRequest(request)) return json(response, 403, { error: 'Only local TinyLens requests are allowed' });
     return routeRequest(request, response);
   });
-  async function disconnectCompleted() {
-    if (closed || connecting || changing || state.connection !== 'connected' || state.status !== 'completed'
-        || state.turnId || state.remoteActive || state.needsReconcile || state.requests.length
-        || state.activities.some(activity => activity.status === 'inProgress')
-        || state.questions.some(question => ['pending', 'sending', 'delivery_unknown'].includes(question.status))) return;
+  async function disconnectIdle(canRelease = () => true) {
     const current = transport;
+    const idle = () => current && transport === current && canRelease() && !closed && !connecting && !changing
+      && clients.size === 0 && Date.now() >= interactiveUntil && pending.size === 0
+      && ['connected', 'error'].includes(state.connection) && ['idle', 'completed', 'failed', 'interrupted'].includes(state.status)
+      && !state.turnId && !state.remoteActive && !state.needsReconcile && state.requests.length === 0
+      && !state.activities.some(activity => activity.status === 'inProgress')
+      && !state.questions.some(question => question.status === 'sending');
+    if (!idle()) return;
+    // Pending science questions are durable. Native requests live on the transport.
+    await persist();
+    if (!idle()) return;
     transport = null;
-    state.connection = 'disconnected'; publish();
-    current?.proc.kill();
-    await current?.networkProxy?.close();
+    try {
+      if (current.proc.kill() === false) throw Error('The idle AI process did not accept the disconnect signal');
+    }
+    catch (error) { transport = current; throw error; }
+    current.lines.close();
+    state.connection = 'disconnected'; state.idleReleased = true; publish();
+    await current.networkProxy?.close();
     await persist();
   }
   async function close({ onlyIfIdle = false } = {}) {
@@ -571,7 +633,7 @@ export async function createAgentServer({ stateDirectory = defaultDirectory, spa
     await new Promise(resolveClose => server.close(resolveClose));
     await persist();
   }
-  return { server, state, connect, submitMessage, answerQuestion, interrupt, reply, close, persist, routeRequest, disconnectCompleted };
+  return { server, state, connect, submitMessage, answerQuestion, interrupt, reply, close, persist, routeRequest, disconnectIdle };
 }
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   // Finish evaluating this module before loading the router, which imports the

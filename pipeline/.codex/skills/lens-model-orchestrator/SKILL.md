@@ -161,7 +161,8 @@ Wait for any active expert or command for that lens to finish, then run:
 This archives only that lens as `_archive/<lens_id>_old_<N>` and creates no replacement itself. The
 normal workflow then starts a fresh current Lens Result Directory at preflight. Never delete, write,
 or resume an Archived Lens Run. Never reuse its masks, attempts, reviews, decisions, Accepted Stage
-Heads, or retry budget.
+Heads, or retry budget. If `rerun prepare` returns exit 75 with `busy`, wait for the active operation
+and recheck the run before archiving it.
 
 Treat explicit “继续” or “恢复” as Lens Resume. Reuse the current Accepted Stage Heads and never
 rerun an accepted stage. If user language does not distinguish rerun from resume while a current

@@ -555,7 +555,7 @@ def run_stage(
         raise ValueError("--preview-only is supported only for subhalo")
     # Preserve the read-only rejection of an incorrectly addressed input.
     check_stage_input(lens_dir, output_dir)
-    with attempt_lock(output_dir, stage, attempt):
+    with attempt_lock(output_dir, stage, attempt) as output_dir:
         root = attempt_dir(output_dir, stage, attempt)
         result_path = root / "stage-result.json"
         if result_path.exists():

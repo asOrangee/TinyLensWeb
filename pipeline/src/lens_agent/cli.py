@@ -30,6 +30,7 @@ from .inspector_decision import validate_inspector_decision
 from .inspector_synthesis import record_inspector_votes, record_preflight_synthesis
 from .models import StageName
 from .modeling_comment import record_modeling_comment
+from .operations import PreparationBlocked, StageBusy, operation_result
 from .rerun import prepare_full_rerun
 from .result_paths import (
     is_archive_directory,
@@ -177,8 +178,6 @@ def _cmd_inspector_synthesis(args: argparse.Namespace) -> None:
 
 
 def _cmd_stage(args: argparse.Namespace) -> None:
-    from .operations import StageBusy, PreparationBlocked, operation_result
-
     try:
         if not args.prepare_only:
             _require_gpu_stage_lease()
@@ -190,12 +189,7 @@ def _cmd_stage(args: argparse.Namespace) -> None:
             prepare_only=args.prepare_only,
             preview_only=args.preview_only,
         )
-    except (StageBusy, PreparationBlocked) as error:
-        busy = isinstance(error, StageBusy)
-        print(json.dumps(operation_result("busy" if busy else "preparation_blocked", error)),
-              file=sys.stderr)
-        raise SystemExit(75 if busy else 2) from None
-    except StageInputError as error:
+    except (PreparationBlocked, StageInputError) as error:
         print(json.dumps(operation_result("preparation_blocked", error)), file=sys.stderr)
         raise SystemExit(2) from None
     display = args.output_dir.resolve() / "attempts" / args.stage / str(args.attempt) / "display-manifest.json"
@@ -544,7 +538,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
-    args.func(args)
+    try:
+        args.func(args)
+    except StageBusy as error:
+        print(json.dumps(operation_result("busy", error)), file=sys.stderr)
+        raise SystemExit(75) from None
 
 
 if __name__ == "__main__":

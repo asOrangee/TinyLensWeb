@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter, once } from 'node:events';
+import { randomUUID } from 'node:crypto';
 import { PassThrough, Writable } from 'node:stream';
+import { setTimeout as delay } from 'node:timers/promises';
 import { mkdtemp, mkdir, rm, writeFile, readFile, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,7 +11,9 @@ import { createAgentTaskServer } from './agent-tasks.mjs';
 import { storeReportedResult } from './agent-results.mjs';
 import { WORKSPACE, initialState } from './agent-state.mjs';
 import { connectionConfig } from './connection-config.mjs';
+import { dispatchBatchTool, prepareBatchTool } from './agent-batches.mjs';
 const tick = () => new Promise(resolve => setImmediate(resolve));
+const newMessage = (text, expectedThreadId) => ({ text, clientMessageId: randomUUID(), expectedThreadId, expectedTurnId: null });
 
 function fakeProcess(threadId) {
   const proc = new EventEmitter();
@@ -33,7 +37,7 @@ function fakeProcess(threadId) {
   proc.kill = () => { proc.killed = true; proc.emit('exit', 0); proc.stdout.end(); proc.stderr.end(); };
   return proc;
 }
-async function fixture(t, { seed, configureProcess, removeRemoteRuns = async (_mode, candidates) => ({ runs: [],
+async function fixture(t, { seed, configureProcess, batchInventory, batchPollMs, removeRemoteRuns = async (_mode, candidates) => ({ runs: [],
   retained: candidates.map(item => ({ path: item.path, reason: 'missing' })) }) } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'tinylens-tasks-test-'));
   const saved = { threadId: 'legacy-thread', status: 'completed', messages: [{ id: 'old-message', role: 'assistant', text: '原结果保留', complete: true }],
@@ -44,7 +48,8 @@ async function fixture(t, { seed, configureProcess, removeRemoteRuns = async (_m
   await storeReportedResult(saved,'legacy-summary',cached,{cacheDirectory:join(directory,'result-cache')});
   await seed?.(directory);
   const processes = [];
-  const options = { stateDirectory: directory, removeRemoteRuns, rpcTimeoutMs: 1000, logger: { error() {} }, stageScopeLookup: async () => undefined, spawnProcess: () => {
+  const options = { stateDirectory: directory, removeRemoteRuns, batchInventory, batchPollMs,
+    rpcTimeoutMs: 1000, logger: { error() {} }, stageScopeLookup: async () => undefined, spawnProcess: () => {
     const proc = fakeProcess(`new-thread-${processes.length + 1}`); configureProcess?.(proc); processes.push(proc); return proc;
   } };
   let bridge = await createAgentTaskServer(options);
@@ -222,7 +227,7 @@ test('a delivered model request publishes the first task name to its own file an
   proc.deferTurnStart = true;
   const event = await f.events(own.id, { name: 'task-name', afterOpen: async () => {
     const start = nextSent(proc, packet => packet.method === 'turn/start', 'first turn');
-    const message = f.request(`message?taskId=${own.id}`, 'POST', { text: '请拟合 SDSSJ0946' });
+    const message = f.request(`message?taskId=${own.id}`, 'POST', newMessage('请拟合 SDSSJ0946', proc.threadId));
     const turn = await start;
     const naming = suggestName(proc, 101, 'SDSSJ0946');
     await tick();
@@ -268,7 +273,7 @@ test('task name suggestions require the own active turn and leave a manual defau
   // Supply a new turn ID after the first synthetic turn completed.
   proc.deferTurnStart = true;
   const start = nextSent(proc, packet => packet.method === 'turn/start', 'second turn');
-  const message = f.request(`message?taskId=${task.id}`, 'POST', { text: '请建模' });
+  const message = f.request(`message?taskId=${task.id}`, 'POST', newMessage('请建模', threadId));
   const turn = await start;
   const scope = { turnId: `${turnId}-second` };
   proc.emitMessage({ id: turn.id, result: { turn: { id: scope.turnId, status: 'inProgress' } } });
@@ -319,7 +324,7 @@ test('task messages, approvals, streams and result access stay bound to their ow
   assert.ok(f.processes[0].sent.some(message => message.method === 'thread/resume' && message.params.threadId === 'legacy-thread'));
   assert.ok(f.processes[1].sent.some(message => message.method === 'thread/start'));
   const text = '  原样消息\n第二行  ';
-  assert.equal((await f.request(`message?taskId=${id}`, 'POST', { text })).status, 200);
+  assert.equal((await f.request(`message?taskId=${id}`, 'POST', newMessage(text, 'new-thread-2'))).status, 200);
   const input = f.processes[1].sent.find(message => message.method === 'turn/start').params;
   assert.deepEqual(input.input, [{ type: 'text', text }]);
   assert.ok(!('developerInstructions' in input) && !('baseInstructions' in input));
@@ -328,9 +333,10 @@ test('task messages, approvals, streams and result access stay bound to their ow
   await tick();
   const other = (await f.request('state?taskId=default')).body;
   assert.deepEqual(other.messages, f.saved.messages); assert.deepEqual(other.requests, []);
-  assert.equal((await f.request('reply?taskId=default','POST',{requestId:17,result:{decision:'accept'}})).status, 400);
-  assert.ok(!f.processes[1].sent.some(message => message.id === 17));
   const own = (await f.request(`state?taskId=${id}`)).body;
+  const reply = { replyId: own.requests[0].replyId, result: { decision: 'accept' } };
+  assert.equal((await f.request('reply?taskId=default','POST',reply)).status, 400);
+  assert.ok(!f.processes[1].sent.some(message => message.id === 17));
   assert.equal(own.messages[0].text, text); assert.equal(own.messages[1].text, '只属于新任务'); assert.equal(own.requests.length, 1);
   assert.deepEqual((await f.events('default')).messages, f.saved.messages);
   assert.deepEqual((await f.events(id)).messages, own.messages);
@@ -347,10 +353,10 @@ test('task messages, approvals, streams and result access stay bound to their ow
     const result = await f.request(`${endpoint}?taskId=${id}&updateId=legacy-report`);
     assert.ok(result.status >= 400, `${endpoint} must not expose another task's report`);
   }
-  assert.equal((await f.request(`reply?taskId=${id}`,'POST',{requestId:17,result:{decision:'accept'}})).status, 200);
+  assert.equal((await f.request(`reply?taskId=${id}`,'POST',reply)).status, 200);
   assert.deepEqual(f.processes[1].sent.find(message => message.id === 17).result, {decision:'accept'});
   assert.ok(!f.processes[0].sent.some(message => message.id === 17));
-  assert.equal((await f.request(`interrupt?taskId=${id}`,'POST',{})).status, 200);
+  assert.equal((await f.request(`interrupt?taskId=${id}`,'POST',{ expectedThreadId: 'new-thread-2', expectedTurnId: 'turn-new-thread-2' })).status, 200);
   assert.ok(!f.processes[0].sent.some(message => message.method === 'turn/interrupt'));
   await f.restart();
   const restored = (await f.request(`state?taskId=${id}`)).body;
@@ -445,11 +451,156 @@ test('remote cleanup requires the current confirmed plan and retains a shared ru
   await assert.rejects(access(journal(taskId)), {code: 'ENOENT'});
   assert.equal((await f.request(`state?taskId=${siblingId}`)).status, 200);
 });
+
+function pausedCleanup() {
+  const entered = Promise.withResolvers();
+  const finished = Promise.withResolvers();
+  return { entered: entered.promise, release: finished.resolve, async hold(candidates) {
+    entered.resolve(candidates);
+    await finished.promise;
+  } };
+}
+
+async function beforeCleanupFinishes(operation, description) {
+  const timer = new AbortController();
+  try {
+    return await Promise.race([operation, delay(2000, undefined, { signal: timer.signal }).then(() => {
+      assert.fail(`${description} waited for remote cleanup`);
+    })]);
+  } finally { timer.abort(); }
+}
+
+const confirmedCleanup = candidates => ({ runs: candidates.map(({ path }) => ({ path, fingerprint: 'c'.repeat(64) })), retained: [] });
+
+test('slow remote preview and deletion leave unrelated task creation and batch dispatch available', async t => {
+  const preview = pausedCleanup(), deletion = pausedCleanup();
+  const started = Promise.withResolvers();
+  let seeded;
+  const f = await fixture(t, { batchPollMs: 10,
+    seed: async directory => { seeded = await seedRetryBatch(directory, [{ dispatch: 'queued' }]); },
+    configureProcess: proc => proc.on('sent', packet => { if (packet.method === 'turn/start') started.resolve(packet); }),
+    removeRemoteRuns: async (mode, candidates) => {
+      await (mode === 'preview' ? preview : deletion).hold(candidates);
+      return confirmedCleanup(candidates);
+    },
+  });
+  const batch = `batches/${seeded.batch.id}`;
+  let checking, removing;
+  try {
+    checking = f.request('tasks/default/deletion-plan');
+    await beforeCleanupFinishes(preview.entered, 'preview fixture');
+    const created = await beforeCleanupFinishes(f.request('tasks', 'POST', {}), 'creating an unrelated task');
+    assert.equal(created.status, 201);
+    preview.release();
+    const plan = await checking;
+    assert.equal(plan.status, 200);
+    assert.deepEqual(plan.body.runs, [`${WORKSPACE}/output/task-test/lens`]);
+
+    removing = f.request('tasks/default', 'DELETE', { token: plan.body.token });
+    await beforeCleanupFinishes(deletion.entered, 'deletion fixture');
+    assert.equal((await beforeCleanupFinishes(f.request('tasks/default', 'DELETE', { token: plan.body.token }), 'duplicate deletion')).status, 409);
+    assert.equal((await f.request('connect', 'POST', {})).status, 409);
+    const resumed = await beforeCleanupFinishes(f.request(`${batch}/dispatch`, 'POST', { paused: false }), 'resuming batch dispatch');
+    assert.equal(resumed.status, 200);
+    const dispatched = await beforeCleanupFinishes(started.promise, 'dispatching a queued task');
+    assert.match(dispatched.params.input[0].text, /lens-0/);
+    deletion.release();
+    assert.equal((await removing).status, 200);
+    assert.equal((await f.request(`state?taskId=${created.body.task.id}`)).status, 200);
+    assert.deepEqual(f.processes.flatMap(proc => proc.sent.filter(packet => packet.method === 'turn/start')).length, 1);
+  } finally {
+    preview.release(); deletion.release();
+    await Promise.allSettled([checking, removing]);
+  }
+});
+
+test('a deletion preview loses its token if another task reports the same run while it waits', async t => {
+  const preview = pausedCleanup();
+  const f = await fixture(t, { removeRemoteRuns: async (_mode, candidates) => {
+    await preview.hold(candidates);
+    return confirmedCleanup(candidates);
+  } });
+  const sibling = (await f.request('tasks', 'POST', {})).body.task.id;
+  await f.request(`connect?taskId=${sibling}`, 'POST', {});
+  const proc = f.processes[0];
+  await f.request(`message?taskId=${sibling}`, 'POST', newMessage('Record a synthetic result.', proc.threadId));
+  const run = `${WORKSPACE}/output/task-test/lens`;
+  const pending = f.request('tasks/default/deletion-plan');
+  try {
+    const candidates = await beforeCleanupFinishes(preview.entered, 'preview fixture');
+    assert.deepEqual(candidates.map(item => item.path), [run]);
+    const report = nextSent(proc, packet => packet.id === 111 && packet.result, 'shared artifact');
+    proc.emitMessage({ id: 111, method: 'item/tool/call', params: {
+      threadId: proc.threadId, turnId: `turn-${proc.threadId}`, callId: 'shared-artifact', tool: 'tinylens_ui_report',
+      arguments: { kind: 'artifact', stage: 'a', path: `${run}/attempts/a/0/stage-result.json`, message: 'Shared fixture' },
+    } });
+    assert.equal((await report).result.success, true);
+    preview.release();
+    assert.equal((await pending).status, 409);
+    const refreshed = await f.request('tasks/default/deletion-plan');
+    assert.deepEqual(refreshed.body.runs, []);
+    assert.deepEqual(refreshed.body.retained, [run]);
+  } finally {
+    preview.release(); await pending;
+  }
+});
+
+test('a live deletion reservation rejects a conflicting previously prepared batch at confirmation', async t => {
+  const deletion = pausedCleanup();
+  const f = await fixture(t, {
+    removeRemoteRuns: async (mode, candidates) => {
+      if (mode === 'delete') await deletion.hold(candidates);
+      return confirmedCleanup(candidates);
+    },
+    batchInventory: async ({ inputDir, outputDir }) => ({ inputDir, outputDir, python: '/usr/bin/python3',
+      targets: [{ lensId: 'lens', inputPath: `${inputDir}/lens`, runId: null }] }),
+  });
+  const planner = (await f.request('tasks', 'POST', {})).body.task.id;
+  const plannerQuery = `?taskId=${planner}`;
+  await f.request(`connect${plannerQuery}`, 'POST', {});
+  const proc = f.processes[0];
+  await f.request(`message${plannerQuery}`, 'POST', newMessage('Plan a synthetic batch.', proc.threadId));
+  async function callBatch(id, name, turnId, args) {
+    const response = nextSent(proc, packet => packet.id === id && packet.result, name);
+    proc.emitMessage({ id, method: 'item/tool/call', params: {
+      threadId: proc.threadId, turnId, callId: `fixture-${id}`, tool: name, arguments: args,
+    } });
+    return (await response).result;
+  }
+  const prepared = await callBatch(112, prepareBatchTool.name, `turn-${proc.threadId}`, {
+    inputDir: '/tmp/mock-batch-input', outputDir: `${WORKSPACE}/output/task-test`, selection: { ids: ['lens'] },
+  });
+  assert.equal(prepared.success, true);
+  const batchId = JSON.parse(prepared.contentItems[0].text).id;
+  proc.emitMessage({ method: 'turn/completed', params: { threadId: proc.threadId, turn: { id: `turn-${proc.threadId}`, status: 'completed' } } });
+  await tick();
+  proc.deferTurnStart = true;
+  const receipt = nextSent(proc, packet => packet.method === 'turn/start' && packet.params.input[0].text === '确认提交这批', 'batch confirmation');
+  const confirmation = f.request(`message${plannerQuery}`, 'POST', { ...newMessage('确认提交这批', proc.threadId), seenBatchPlanId: batchId });
+  proc.emitMessage({ id: (await receipt).id, result: { turn: { id: 'confirmation-turn', status: 'inProgress' } } });
+  assert.equal((await confirmation).status, 200);
+
+  const plan = await f.request('tasks/default/deletion-plan');
+  assert.equal(plan.status, 200);
+  const removing = f.request('tasks/default', 'DELETE', { token: plan.body.token });
+  try {
+    await beforeCleanupFinishes(deletion.entered, 'deletion fixture');
+    const rejected = await beforeCleanupFinishes(callBatch(113, dispatchBatchTool.name, 'confirmation-turn', { id: batchId }), 'conflict rejection');
+    assert.equal(rejected.success, false);
+    assert.match(rejected.contentItems[0].text, /结果目录正在清理/);
+    assert.deepEqual((await f.request('batches')).body.batches, []);
+  } finally {
+    deletion.release(); await removing;
+  }
+  assert.equal((await removing).status, 200);
+  assert.equal((await callBatch(114, dispatchBatchTool.name, 'confirmation-turn', { id: batchId })).success, true);
+});
+
 test('active turns and pending approvals block deletion until the same turn completes', async t => {
   const f=await fixture(t);
   const id=(await f.request('tasks','POST',{})).body.task.id;
   await f.request(`connect?taskId=${id}`,'POST',{});
-  await f.request(`message?taskId=${id}`,'POST',{text:'Only the fixture handles this.'});
+  await f.request(`message?taskId=${id}`,'POST',newMessage('Only the fixture handles this.', 'new-thread-1'));
   const proc=f.processes[0], turnId='turn-new-thread-1';
   assert.equal((await f.deleteTask(id)).status,409);
   assert.equal(proc.killed,false);
@@ -458,7 +609,8 @@ test('active turns and pending approvals block deletion until the same turn comp
   await tick();
   assert.equal((await f.deleteTask(id)).status,409);
   assert.ok(!proc.sent.some(message=>message.id===18));
-  await f.request(`reply?taskId=${id}`,'POST',{requestId:18,result:{decision:'cancel'}});
+  const state = (await f.request(`state?taskId=${id}`)).body;
+  assert.equal((await f.request(`reply?taskId=${id}`,'POST',{replyId:state.requests[0].replyId,result:{decision:'cancel'}})).status,200);
   proc.emitMessage({method:'turn/completed',params:{threadId:'new-thread-1',turn:{id:turnId,status:'completed'}}});
   await tick();
   assert.equal((await f.deleteTask(id)).status,200);

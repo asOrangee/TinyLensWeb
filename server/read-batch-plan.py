@@ -24,6 +24,12 @@ def current_run(result, lens):
             or record.get("lens_dir") != str(lens) or not isinstance(record.get("run_id"), str)
             or not RUN_ID.fullmatch(record["run_id"])):
         raise ValueError(f"{lens.name} 已有运行的输入或标识与本批次不一致。")
+    try:
+        from lens_agent.configuration import PIPELINE_RELEASE_ID
+    except ImportError as error:
+        raise ValueError("无法核对已有运行的 Pipeline 版本，请检查服务器 Python 环境。") from error
+    if record.get("pipeline_release_id") != PIPELINE_RELEASE_ID:
+        raise ValueError(f"{lens.name} 的已有运行与服务器当前 Pipeline 版本不兼容，无法继续。")
     return record["run_id"]
 
 
